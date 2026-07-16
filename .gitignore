@@ -60,3 +60,4 @@ frontend/*.tgz
 *~
 .DS_Store
 Thumbs.db
+/GUIA-REPOS-GIT.md
