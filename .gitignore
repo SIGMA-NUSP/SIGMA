@@ -17,6 +17,7 @@
 /*.jpg
 /*.png
 /*.pdf
+/*.sh
 /.claude/
 
 # ── Credenciais (NUNCA commitar — repo público!) ──
