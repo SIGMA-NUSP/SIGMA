@@ -2,9 +2,10 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { DebugElement } from '@angular/core';
 import { provideRouter } from '@angular/router';
-import { Observable, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { ApiService } from '../../core/services/api.service';
 import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
+import { ToastService } from '../../shared/components/toast.component';
 import { AdminOperacaoAudioComponent } from './admin-operacao-audio.component';
 
 /**
@@ -31,6 +32,11 @@ import { AdminOperacaoAudioComponent } from './admin-operacao-audio.component';
  *
  * ⚠️ O `opCtrl` aparece em DOIS pontos do template (modo agrupado × modo lista plana) — o canal foi
  * posto nos dois; ambos são exercidos abaixo.
+ *
+ * C18 (F66/F68): os acordeões drill-down (entradas da sessão, itens do checklist) ganharam erro
+ * POR LINHA sem cache sticky (no erro nada é gravado → reabrir refaz o GET), e o RDS ganhou canal:
+ * toast no download (`gerarRds`) e caixa com retry nas cargas dos selects (anos/meses). Os
+ * describes "acordeões (C18/F66)" e "RDS (C18/F68)" cobrem isso.
  *
  * Estratégia: TestBed com `ApiService` mockado por `useValue` e `getList` roteado POR ENDPOINT (é
  * o que distingue as três tabelas — e o que permite derrubar uma sem tocar nas outras). Os
@@ -76,17 +82,29 @@ const ERRO_500 = { status: 500, error: { ok: false, error: 'Erro interno do serv
 /** Texto que o admin efetivamente lê na caixa: guia da tela + detalhe do backend entre parênteses. */
 const MSG_500 = 'Não foi possível carregar a lista. (Erro interno do servidor)';
 
+// ── Endpoints do `api.get` (drill-downs e RDS) — roteados por URL, como as listagens ──
+const EP_ENTRADAS_SESSAO = '/api/admin/dashboard/operacoes/entradas-sessao';
+const EP_CHK_DETALHE = '/api/admin/checklist/detalhe';
+const EP_RDS_ANOS = '/api/admin/operacoes/rds/anos';
+const EP_RDS_MESES = '/api/admin/operacoes/rds/meses';
+
 describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b)', () => {
   let apiGetList: ReturnType<typeof vi.fn>;
   let apiGet: ReturnType<typeof vi.fn>;
   let getBlob: ReturnType<typeof vi.fn>;
   let baixarBlob: ReturnType<typeof vi.fn>;
   let downloadReport: ReturnType<typeof vi.fn>;
+  let toastError: ReturnType<typeof vi.fn>;
+  let toastSuccess: ReturnType<typeof vi.fn>;
 
   /** Resposta corrente de cada endpoint de listagem — `falhar`/`vazio` trocam UMA sem tocar nas outras. */
   let respostas: Record<string, () => Observable<any>>;
+  /** Respostas do `api.get` por URL (recebem os params — os acordeões roteiam por id da linha). */
+  let respostasGet: Record<string, (params?: any) => Observable<any>>;
 
-  const ok = (linha: unknown) => () => of({ data: [linha], meta: { ...META } });
+  // structuredClone: o SUT MUTA as linhas (acordeões gravam _exp/_entradas/_erroEntradas nelas) —
+  // entregar o objeto da fixture deixaria um teste vazar estado para o seguinte.
+  const ok = (linha: unknown) => () => of({ data: [structuredClone(linha)], meta: { ...META } });
   const vazio = () => () => of({ data: [], meta: { ...META, total: 0, pages: 0 } });
   const falha = (err: unknown = ERRO_500) => () => throwError(() => err);
 
@@ -99,12 +117,15 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
     };
     // Roteia por endpoint: é assim que o spec distingue as três tabelas (e o modo do `opCtrl`).
     apiGetList = vi.fn((endpoint: string) => respostas[endpoint]());
-    // `ngOnInit` também chama `loadRdsAnos()` (GET /rds/anos); `/rds/meses`, entradas-sessão e
-    // detalhe do checklist saem do mesmo `get` — mockar todos evita erro obscuro de método ausente.
-    apiGet = vi.fn().mockReturnValue(of({ data: [] }));
+    // O `api.get` também é roteado por URL (C18): anos/meses do RDS e os dois drill-downs.
+    respostasGet = {};
+    apiGet = vi.fn((url: string, params?: any) =>
+      (respostasGet[url] ?? (() => of({ data: [] })))(params));
     getBlob = vi.fn().mockReturnValue(of(new Blob()));
     baixarBlob = vi.fn();
     downloadReport = vi.fn();
+    toastError = vi.fn();
+    toastSuccess = vi.fn();
 
     await TestBed.configureTestingModule({
       imports: [AdminOperacaoAudioComponent],
@@ -114,6 +135,7 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
           provide: ApiService,
           useValue: { getList: apiGetList, get: apiGet, getBlob, baixarBlob, downloadReport },
         },
+        { provide: ToastService, useValue: { error: toastError, success: toastSuccess } },
       ],
     }).compileComponents();
   });
@@ -473,5 +495,282 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
     expect(fixture.debugElement.query(By.css('.check-label input'))).not.toBeNull(); // agrupar por local
     expect(fixture.debugElement.query(By.css('.btn-rds'))).not.toBeNull();           // gerar RDS
     expect(fixture.debugElement.queryAll(By.css('.btn-report')).length).toBeGreaterThan(0);
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Acordeões drill-down (C18/F66) — erro POR LINHA, sem cache sticky
+  //
+  // Os dois acordeões mentiam "vazio" num 500 (o das sessões de forma auto-contraditória: a linha
+  // só está na lista porque HÁ entradas) e o `[]` gravado no erro era truthy para o guard de
+  // refetch — reabrir NÃO refazia o GET. Agora: caixa com retry NA LINHA, nada gravado no erro
+  // (reabrir tenta de novo) e o erro de uma linha não contamina as outras.
+  // ═══════════════════════════════════════════════════════════════════
+  describe('acordeões (C18/F66)', () => {
+    /** Entradas de uma sessão de plenário numerado (o ramo NÃO-principal da sub-tabela). */
+    const ENTRADAS_OK = () => of({
+      data: [{ id: 101, ordem: 1, operador: 'Maria Souza', hora_entrada: '09:00:00',
+               hora_saida: '11:30:00', observacoes: '', anormalidade: false }],
+      is_plenario_principal: false,
+    });
+    const ITENS_OK = () => of({ data: { itens: [{ id: 201, item_nome: 'Mesa de som', status: 'Ok', tipo_widget: 'radio' }] } });
+
+    const MSG_ERRO_SESSAO = 'Não foi possível carregar as entradas desta sessão. (Erro interno do servidor)';
+    const MSG_ERRO_ITENS = 'Não foi possível carregar os itens desta verificação. (Erro interno do servidor)';
+
+    const chamadasGet = (url: string) => apiGet.mock.calls.filter(c => c[0] === url).length;
+
+    /** Clique REAL na linha da sessão (a linha inteira é o gatilho do acordeão). */
+    function clicarSessao(fixture: ComponentFixture<AdminOperacaoAudioComponent>, idx = 0): void {
+      (tabOp(fixture).queryAll(By.css('tbody tr.row-clickable'))[idx].nativeElement as HTMLElement).click();
+    }
+    /** Clique REAL na seta do checklist (aqui o gatilho é o botão, não a linha). */
+    function clicarChecklist(fixture: ComponentFixture<AdminOperacaoAudioComponent>, idx = 0): void {
+      (tabChk(fixture).queryAll(By.css('tbody .btn-toggle'))[idx].nativeElement as HTMLButtonElement).click();
+    }
+
+    describe('entradas da sessão (modo agrupado)', () => {
+      it('corrige F66 — falha do drill-down: caixa NA LINHA com a guia, SEM "Nenhuma entrada registrada nesta sessão."', async () => {
+        respostasGet[EP_ENTRADAS_SESSAO] = () => throwError(() => ERRO_500);
+        const fixture = await renderizar();
+
+        clicarSessao(fixture);
+        await estabilizar(fixture);
+
+        const box = tabOp(fixture).query(By.css('.accordion-row')).query(By.directive(ErroCargaComponent));
+        expect(box).not.toBeNull();
+        expect(box.componentInstance.mensagem()).toBe(MSG_ERRO_SESSAO);
+        expect(textoDaTabela(tabOp(fixture))).not.toContain('Nenhuma entrada registrada nesta sessão.');
+      });
+
+      it('corrige F66 — o sticky morreu: fechar e reabrir REFAZ o GET; o sucesso renderiza as entradas', async () => {
+        respostasGet[EP_ENTRADAS_SESSAO] = () => throwError(() => ERRO_500);
+        const fixture = await renderizar();
+
+        clicarSessao(fixture);                                   // abre → GET falha
+        await estabilizar(fixture);
+        expect(chamadasGet(EP_ENTRADAS_SESSAO)).toBe(1);
+
+        clicarSessao(fixture);                                   // fecha
+        await estabilizar(fixture);
+        respostasGet[EP_ENTRADAS_SESSAO] = ENTRADAS_OK;          // o backend voltou
+        clicarSessao(fixture);                                   // reabre → REFAZ (antes: cache do [])
+        await estabilizar(fixture);
+
+        expect(chamadasGet(EP_ENTRADAS_SESSAO)).toBe(2);
+        expect(tabOp(fixture).query(By.directive(ErroCargaComponent))).toBeNull();
+        expect(textoDaTabela(tabOp(fixture))).toContain('Maria Souza');
+      });
+
+      it('corrige F66 — o retry da caixa refaz o GET da linha e o sucesso renderiza as entradas', async () => {
+        respostasGet[EP_ENTRADAS_SESSAO] = () => throwError(() => ERRO_500);
+        const fixture = await renderizar();
+        clicarSessao(fixture);
+        await estabilizar(fixture);
+
+        respostasGet[EP_ENTRADAS_SESSAO] = ENTRADAS_OK;
+        clicarRetry(tabOp(fixture));                             // o retry da caixa da LINHA
+        await estabilizar(fixture);
+
+        expect(chamadasGet(EP_ENTRADAS_SESSAO)).toBe(2);
+        expect(tabOp(fixture).query(By.directive(ErroCargaComponent))).toBeNull();
+        expect(textoDaTabela(tabOp(fixture))).toContain('Maria Souza');
+        expect(chamadas(EP_OP_AGRUPADO)).toBe(1);                // a LISTAGEM não recarrega junto
+      });
+
+      it('corrige F66 — o erro de uma sessão NÃO contamina a outra (nem as tabelas vizinhas)', async () => {
+        respostas[EP_OP_AGRUPADO] = () => of({ data: [{ ...SESSAO }, { ...SESSAO, id: 2, sala_nome: 'Plenário 9' }], meta: { ...META } });
+        respostasGet[EP_ENTRADAS_SESSAO] = params =>
+          params?.registro_id === 1 ? throwError(() => ERRO_500) : ENTRADAS_OK();
+        const fixture = await renderizar();
+
+        clicarSessao(fixture, 0);                                // a que falha
+        await estabilizar(fixture);
+        clicarSessao(fixture, 1);                                // a que responde (a caixa de erro não é row-clickable)
+        await estabilizar(fixture);
+
+        expect(tabOp(fixture).queryAll(By.directive(ErroCargaComponent))).toHaveLength(1);
+        expect(textoDaTabela(tabOp(fixture))).toContain('Maria Souza');   // as entradas da sadia
+        expect(tabAnom(fixture).query(By.directive(ErroCargaComponent))).toBeNull();
+        expect(tabChk(fixture).query(By.directive(ErroCargaComponent))).toBeNull();
+      });
+
+      it('vazio LEGÍTIMO (200 com data:[]): a frase do vazio, SEM caixa', async () => {
+        respostasGet[EP_ENTRADAS_SESSAO] = () => of({ data: [], is_plenario_principal: false });
+        const fixture = await renderizar();
+
+        clicarSessao(fixture);
+        await estabilizar(fixture);
+
+        expect(textoDaTabela(tabOp(fixture))).toContain('Nenhuma entrada registrada nesta sessão.');
+        expect(tabOp(fixture).query(By.directive(ErroCargaComponent))).toBeNull();
+      });
+    });
+
+    describe('itens do checklist (Verificação de Plenários)', () => {
+      it('corrige F66 — falha do detalhe: caixa NA LINHA com a guia, SEM "Nenhum item encontrado."', async () => {
+        respostasGet[EP_CHK_DETALHE] = () => throwError(() => ERRO_500);
+        const fixture = await renderizar();
+
+        clicarChecklist(fixture);
+        await estabilizar(fixture);
+
+        const box = tabChk(fixture).query(By.css('.accordion-row')).query(By.directive(ErroCargaComponent));
+        expect(box).not.toBeNull();
+        expect(box.componentInstance.mensagem()).toBe(MSG_ERRO_ITENS);
+        expect(textoDaTabela(tabChk(fixture))).not.toContain('Nenhum item encontrado.');
+      });
+
+      it('corrige F66 — o sticky morreu: fechar e reabrir REFAZ o GET; o sucesso renderiza os itens', async () => {
+        respostasGet[EP_CHK_DETALHE] = () => throwError(() => ERRO_500);
+        const fixture = await renderizar();
+
+        clicarChecklist(fixture);
+        await estabilizar(fixture);
+        expect(chamadasGet(EP_CHK_DETALHE)).toBe(1);
+
+        clicarChecklist(fixture);                                // fecha
+        await estabilizar(fixture);
+        respostasGet[EP_CHK_DETALHE] = ITENS_OK;
+        clicarChecklist(fixture);                                // reabre → REFAZ
+        await estabilizar(fixture);
+
+        expect(chamadasGet(EP_CHK_DETALHE)).toBe(2);
+        expect(tabChk(fixture).query(By.directive(ErroCargaComponent))).toBeNull();
+        expect(textoDaTabela(tabChk(fixture))).toContain('Mesa de som');
+      });
+
+      it('corrige F66 — o retry da caixa refaz o GET da linha; o erro de um checklist não contamina o outro', async () => {
+        respostas[EP_CHK] = () => of({ data: [{ ...CHECKLIST }, { ...CHECKLIST, id: 32, operador_nome: 'Beto Reis' }], meta: { ...META } });
+        respostasGet[EP_CHK_DETALHE] = params =>
+          params?.checklist_id === 31 ? throwError(() => ERRO_500) : ITENS_OK();
+        const fixture = await renderizar();
+
+        clicarChecklist(fixture, 0);                             // a que falha
+        await estabilizar(fixture);
+        clicarChecklist(fixture, 1);                             // a que responde
+        await estabilizar(fixture);
+        expect(tabChk(fixture).queryAll(By.directive(ErroCargaComponent))).toHaveLength(1);
+        expect(textoDaTabela(tabChk(fixture))).toContain('Mesa de som');
+
+        respostasGet[EP_CHK_DETALHE] = ITENS_OK;                 // o backend voltou
+        clicarRetry(tabChk(fixture));
+        await estabilizar(fixture);
+
+        expect(chamadasGet(EP_CHK_DETALHE)).toBe(3);
+        expect(tabChk(fixture).queryAll(By.directive(ErroCargaComponent))).toHaveLength(0);
+      });
+
+      it('vazio LEGÍTIMO (200 com itens:[]): a frase do vazio, SEM caixa', async () => {
+        respostasGet[EP_CHK_DETALHE] = () => of({ data: { itens: [] } });
+        const fixture = await renderizar();
+
+        clicarChecklist(fixture);
+        await estabilizar(fixture);
+
+        expect(textoDaTabela(tabChk(fixture))).toContain('Nenhum item encontrado.');
+        expect(tabChk(fixture).query(By.directive(ErroCargaComponent))).toBeNull();
+      });
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // RDS (C18/F68) — o download e os selects deixam de falhar sem sinal
+  // ═══════════════════════════════════════════════════════════════════
+  describe('RDS (C18/F68)', () => {
+    const chamadasGet = (url: string) => apiGet.mock.calls.filter(c => c[0] === url).length;
+    const caixaRds = (f: ComponentFixture<AdminOperacaoAudioComponent>) =>
+      f.debugElement.query(By.directive(ErroCargaComponent));
+
+    it('corrige F68 — gerarRds com falha do blob: toast com a guia, e baixarBlob NÃO é chamado', async () => {
+      // Antes era um unhandled do RxJS: nada na tela, e o admin reclicava achando que não pegou.
+      getBlob.mockReturnValue(throwError(() => ERRO_500));
+      const fixture = await renderizar();
+      const comp = fixture.componentInstance;
+      comp.rdsAno = '2026';
+      comp.rdsMes = '6';
+
+      comp.gerarRds();
+
+      expect(toastError).toHaveBeenCalledWith('Não foi possível gerar o RDS. (Erro interno do servidor)');
+      expect(baixarBlob).not.toHaveBeenCalled();
+    });
+
+    it('regressão — download feliz continua baixando com o nome RDS_<ano>-<mes>.xlsx', async () => {
+      const fixture = await renderizar();
+      const comp = fixture.componentInstance;
+      comp.rdsAno = '2026';
+      comp.rdsMes = '6';
+
+      comp.gerarRds();
+
+      expect(getBlob).toHaveBeenCalledWith('/api/admin/operacoes/rds/gerar', { ano: '2026', mes: '6' });
+      expect(baixarBlob).toHaveBeenCalledWith(expect.any(Blob), 'RDS_2026-06.xlsx');
+      expect(toastError).not.toHaveBeenCalled();
+    });
+
+    it('corrige F68 — falha dos ANOS: caixa com retry que refaz loadRdsAnos(); o sucesso limpa e povoa o select', async () => {
+      respostasGet[EP_RDS_ANOS] = () => throwError(() => ERRO_500);
+      const fixture = await renderizar();
+
+      const box = caixaRds(fixture);
+      expect(box).not.toBeNull();
+      expect(box.componentInstance.mensagem()).toBe('Não foi possível carregar os anos do RDS. (Erro interno do servidor)');
+      expect(chamadasGet(EP_RDS_ANOS)).toBe(1);
+
+      respostasGet[EP_RDS_ANOS] = () => of({ data: [2025, 2026] });
+      (box.query(By.css('button')).nativeElement as HTMLButtonElement).click();
+      await estabilizar(fixture);
+
+      expect(chamadasGet(EP_RDS_ANOS)).toBe(2);
+      expect(caixaRds(fixture)).toBeNull();
+      expect(fixture.componentInstance.rdsAnos()).toEqual([2025, 2026]);
+    });
+
+    it('corrige F68 — falha dos MESES: caixa com retry que refaz o onAnoChange() (não os anos)', async () => {
+      respostasGet[EP_RDS_ANOS] = () => of({ data: [2026] });
+      respostasGet[EP_RDS_MESES] = () => throwError(() => ERRO_500);
+      const fixture = await renderizar();
+      const comp = fixture.componentInstance;
+
+      comp.rdsAno = '2026';
+      comp.onAnoChange();                                        // a troca de ano no select
+      await estabilizar(fixture);
+
+      const box = caixaRds(fixture);
+      expect(box).not.toBeNull();
+      expect(box.componentInstance.mensagem()).toBe('Não foi possível carregar os meses do RDS. (Erro interno do servidor)');
+
+      respostasGet[EP_RDS_MESES] = () => of({ data: [5, 6] });
+      (box.query(By.css('button')).nativeElement as HTMLButtonElement).click();
+      await estabilizar(fixture);
+
+      expect(chamadasGet(EP_RDS_MESES)).toBe(2);                 // o retry refez a carga CERTA
+      expect(chamadasGet(EP_RDS_ANOS)).toBe(1);                  // e não a dos anos
+      expect(caixaRds(fixture)).toBeNull();
+      expect(comp.rdsMeses()).toEqual([5, 6]);
+    });
+
+    it('corrige F68 — voltar o ano ao PLACEHOLDER invalida a carga de meses em voo (sem caixa órfã)', async () => {
+      // Achado da revisão adversarial do C18: com o bump do token depois do early-return, a
+      // resposta do ano abandonado passava no guard — no erro, pintava uma caixa sem contexto
+      // (nenhum ano selecionado) cujo retry era um no-op; no sucesso, populava meses de ano nenhum.
+      respostasGet[EP_RDS_ANOS] = () => of({ data: [2026] });
+      const emVoo = new Subject<any>();
+      respostasGet[EP_RDS_MESES] = () => emVoo;
+      const fixture = await renderizar();
+      const comp = fixture.componentInstance;
+
+      comp.rdsAno = '2026';
+      comp.onAnoChange();                                        // carga de meses em voo
+      comp.rdsAno = '';
+      comp.onAnoChange();                                        // o admin volta ao placeholder
+
+      emVoo.error(ERRO_500);                                     // a resposta do ano abandonado chega
+      await estabilizar(fixture);
+
+      expect(caixaRds(fixture)).toBeNull();                      // nenhuma caixa órfã
+      expect(comp.erroRds()).toBe('');
+      expect(comp.rdsMeses()).toEqual([]);
+    });
   });
 });

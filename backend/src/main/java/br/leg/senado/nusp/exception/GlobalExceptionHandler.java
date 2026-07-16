@@ -54,6 +54,16 @@ public class GlobalExceptionHandler {
      *
      * <p>O corpo repete o shape das demais respostas de erro ({@code ok}/{@code error}) com
      * mensagem genérica — nada do tipo interno da exceção nem stacktrace vaza para o cliente.
+     *
+     * <p><b>F64:</b> a {@code MultipartException} também é a exceção de falha de <b>parse</b> do
+     * multipart (tmpdir cheio, conexão abortada, {@code IOException} do contêiner — casos com
+     * {@code getCause()} preenchida): descartar a exceção do log apagava o diagnóstico de infra.
+     * Nesses casos o WARN carrega o throwable (stacktrace/causa encadeada); o "não é multipart"
+     * (sem causa) continua na linha enxuta. O critério é restrito à {@code MultipartException} de
+     * propósito: as DEMAIS exceções da lista carregam causa também no erro puro de cliente
+     * ({@code ?page=abc} → {@code ConversionFailedException}; JSON torto → {@code JsonParseException})
+     * e voltariam a encher o log de stacktrace — o ruído que o F36 eliminou. Status, corpo e
+     * precedência do 413 intocados.
      */
     @ExceptionHandler({
             MethodArgumentTypeMismatchException.class,
@@ -64,7 +74,11 @@ public class GlobalExceptionHandler {
             DateTimeParseException.class
     })
     public ResponseEntity<Map<String, Object>> handleBadRequest(Exception ex) {
-        log.warn("Requisição inválida ({}): {}", ex.getClass().getSimpleName(), ex.getMessage());
+        if (ex instanceof MultipartException && ex.getCause() != null) {
+            log.warn("Requisição inválida ({}): {}", ex.getClass().getSimpleName(), ex.getMessage(), ex);
+        } else {
+            log.warn("Requisição inválida ({}): {}", ex.getClass().getSimpleName(), ex.getMessage());
+        }
         return erro(HttpStatus.BAD_REQUEST, "Requisição inválida. Verifique os dados enviados.");
     }
 

@@ -7,7 +7,9 @@ import { ColumnFilterComponent, ColumnFilterDef } from '../../shared/components/
 import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
 import { getDistinct, buildReportParams, mesNome } from '../../core/helpers/table.helpers';
 import { TableStateController } from '../../core/helpers/table-state.controller';
-import { asArray, truncate, formatEvento as formatEventoDe } from '../../core/helpers/format.helpers';
+import { erroCargaMsg } from '../../core/helpers/http.helpers';
+import { ToastService } from '../../shared/components/toast.component';
+import { asArray, asString, truncate, formatEvento as formatEventoDe } from '../../core/helpers/format.helpers';
 import { duracaoHms } from '../../core/helpers/date.helpers';
 import { FmtDatePipe } from '../../shared/pipes/fmt-date.pipe';
 import { FmtDateTimePipe } from '../../shared/pipes/fmt-datetime.pipe';
@@ -57,6 +59,14 @@ import { FmtTimePipe } from '../../shared/pipes/fmt-time.pipe';
         </div>
       </div>
 
+      @if (erroRds()) {
+        <!-- Canal de erro dos selects do RDS (C18/F68): antes, a falha de anos/meses deixava os
+             selects vazios e o botão desabilitado SEM explicação. O retry refaz a carga que falhou. -->
+        <div style="margin-bottom:10px">
+          <app-erro-carga [mensagem]="erroRds()" (tentarNovamente)="retryRds()" />
+        </div>
+      }
+
       <!-- MODO AGRUPADO -->
       @if (groupBySala) {
         <div class="table-container">
@@ -75,9 +85,9 @@ import { FmtTimePipe } from '../../shared/pipes/fmt-time.pipe';
               @if (opCtrl.erro()) {
                 <!-- Canal de erro (C7/C13b): a carga que falhou NÃO pode se passar por "nenhuma
                      sessão" — cada LISTAGEM desta tela tem o seu canal (o erro de uma não contamina
-                     as outras) e o rodapé não mente (o motor limpa o meta). ⚠️ As sub-tabelas dos
-                     acordeões (entradas da sessão, itens do checklist) ainda NÃO têm canal: elas
-                     seguem virando "vazio" na falha — F66, fora do escopo do C13b. -->
+                     as outras) e o rodapé não mente (o motor limpa o meta). As sub-tabelas dos
+                     acordeões (entradas da sessão, itens do checklist) ganharam canal POR LINHA no
+                     C18 (F66). -->
                 <tr><td colspan="8">
                   <app-erro-carga [mensagem]="opCtrl.erro()" (tentarNovamente)="opCtrl.load()" />
                 </td></tr>
@@ -103,7 +113,12 @@ import { FmtTimePipe } from '../../shared/pipes/fmt-time.pipe';
                   @if (s['_exp']) {
                     <tr class="accordion-row">
                       <td colspan="8">
-                        @if (!s['_entradas']) {
+                        @if (s['_erroEntradas']) {
+                          <!-- Erro POR LINHA (C18/F66): a falha do drill-down não pode virar "Nenhuma
+                               entrada registrada nesta sessão." (a linha só está na lista porque HÁ
+                               entradas). Nada é gravado em _entradas no erro → reabrir refaz o GET. -->
+                          <app-erro-carga [mensagem]="asStr(s['_erroEntradas'])" (tentarNovamente)="carregarEntradasSessao(s)" />
+                        } @else if (!s['_entradas']) {
                           <p class="text-muted-sm">Carregando entradas...</p>
                         } @else if (asArr(s['_entradas']).length === 0) {
                           <p class="text-muted-sm">Nenhuma entrada registrada nesta sessão.</p>
@@ -360,7 +375,11 @@ import { FmtTimePipe } from '../../shared/pipes/fmt-time.pipe';
                   <tr class="accordion-row">
                     <td colspan="9">
                       <strong class="accordion-title">Detalhes da Verificação:</strong>
-                      @if (!chk['itens']) {
+                      @if (chk['_erroItens']) {
+                        <!-- Erro POR LINHA (C18/F66): mesma cura do acordeão das sessões — sem gravar
+                             o array vazio no erro, "Nenhum item encontrado." fica reservado ao vazio REAL. -->
+                        <app-erro-carga [mensagem]="asStr(chk['_erroItens'])" (tentarNovamente)="carregarItensChecklist(chk)" />
+                      } @else if (!chk['itens']) {
                         <p class="text-muted-sm">Carregando...</p>
                       } @else if (asArr(chk['itens']).length === 0) {
                         <p class="text-muted-sm">Nenhum item encontrado.</p>
@@ -404,6 +423,7 @@ import { FmtTimePipe } from '../../shared/pipes/fmt-time.pipe';
 })
 export class AdminOperacaoAudioComponent implements OnInit {
   private api = inject(ApiService);
+  private toast = inject(ToastService);
 
   // ── Column definitions ──
   sessCols: ColumnFilterDef[] = [
@@ -445,6 +465,16 @@ export class AdminOperacaoAudioComponent implements OnInit {
   rdsMeses = signal<number[]>([]);
   rdsAno = '';
   rdsMes = '';
+  /**
+   * Canal de erro das DUAS cargas dos selects do RDS (C18/F68): '' = sem erro. As cargas são
+   * mutuamente exclusivas na prática (sem anos carregados não há como pedir meses), por isso um
+   * signal único; `erroRdsOrigem` diz qual carga o retry deve refazer.
+   */
+  erroRds = signal('');
+  private erroRdsOrigem: 'anos' | 'meses' = 'anos';
+  /** Tokens de recência (C18/F68): retry reclicado / troca rápida de ano deixam cargas em voo. */
+  private seqRdsAnos = 0;
+  private seqRdsMeses = 0;
 
   // ── Anormalidades ──
   anomCtrl = new TableStateController(this.api, {
@@ -469,16 +499,30 @@ export class AdminOperacaoAudioComponent implements OnInit {
 
   toggleSessao(s: any): void {
     s['_exp'] = !s['_exp'];
-    if (s['_exp'] && !s['_entradas']) {
-      this.api.get<any>('/api/admin/dashboard/operacoes/entradas-sessao', { registro_id: s['id'] as number }).subscribe({
-        next: (res: any) => {
-          s['_entradas'] = res?.data ?? [];
-          s['_is_plenario_principal'] = res?.is_plenario_principal ?? false;
-          this.opCtrl.rows.set([...this.opCtrl.rows()]);
-        },
-        error: () => { s['_entradas'] = []; this.opCtrl.rows.set([...this.opCtrl.rows()]); },
-      });
-    }
+    // No erro nada é gravado em `_entradas` (C18/F66): reabrir o acordeão volta a tentar.
+    if (s['_exp'] && !s['_entradas']) this.carregarEntradasSessao(s);
+  }
+
+  /** GET das entradas de UMA sessão — também é o retry da caixa de erro da linha (C18/F66). */
+  carregarEntradasSessao(s: any): void {
+    // Recência POR LINHA: o retry reclicado põe duas cargas da MESMA sessão em voo — um erro velho
+    // não pode sobrescrever o sucesso mais novo. O token vive no objeto, que é a identidade da linha.
+    const seq = (s['_seqEntradas'] = (((s['_seqEntradas'] as number) || 0) + 1));
+    s['_erroEntradas'] = '';
+    this.opCtrl.rows.set([...this.opCtrl.rows()]);
+    this.api.get<any>('/api/admin/dashboard/operacoes/entradas-sessao', { registro_id: s['id'] as number }).subscribe({
+      next: (res: any) => {
+        if (seq !== s['_seqEntradas']) return;
+        s['_entradas'] = res?.data ?? [];
+        s['_is_plenario_principal'] = res?.is_plenario_principal ?? false;
+        this.opCtrl.rows.set([...this.opCtrl.rows()]);
+      },
+      error: err => {
+        if (seq !== s['_seqEntradas']) return;
+        s['_erroEntradas'] = erroCargaMsg(err, 'Não foi possível carregar as entradas desta sessão.');
+        this.opCtrl.rows.set([...this.opCtrl.rows()]);
+      },
+    });
   }
 
   openEntrada(e: any): void {
@@ -513,27 +557,60 @@ export class AdminOperacaoAudioComponent implements OnInit {
 
   // ═══ RDS ═══
 
+  /** Anos disponíveis para o RDS; também é o retry da caixa de erro quando ela veio daqui (C18/F68). */
   loadRdsAnos(): void {
+    const seq = ++this.seqRdsAnos;
+    this.erroRds.set('');
     this.api.get<any>('/api/admin/operacoes/rds/anos').subscribe({
-      next: (res: any) => { this.rdsAnos.set(res?.data || res?.anos || []); },
-      error: () => {},
+      next: (res: any) => {
+        if (seq !== this.seqRdsAnos) return;
+        this.rdsAnos.set(res?.data || res?.anos || []);
+      },
+      error: err => {
+        if (seq !== this.seqRdsAnos) return;   // um erro velho não sobrescreve o sucesso mais novo
+        this.erroRdsOrigem = 'anos';
+        this.erroRds.set(erroCargaMsg(err, 'Não foi possível carregar os anos do RDS.'));
+      },
     });
   }
 
   onAnoChange(): void {
     this.rdsMes = '';
     this.rdsMeses.set([]);
+    // O bump vem ANTES do early-return: voltar o select ao placeholder também invalida a carga
+    // de meses em voo — a resposta do ano abandonado não pode pintar caixa órfã nem popular meses.
+    const seq = ++this.seqRdsMeses;
+    // Só o erro de MESES fica obsoleto quando o ano muda; um erro de ANOS continua valendo
+    // (sem anos carregados o select nem teria opção para disparar este handler).
+    if (this.erroRdsOrigem === 'meses') this.erroRds.set('');
     if (!this.rdsAno) return;
     this.api.get<any>('/api/admin/operacoes/rds/meses', { ano: +this.rdsAno }).subscribe({
-      next: (res: any) => { this.rdsMeses.set(res?.data || res?.meses || []); },
-      error: () => {},
+      next: (res: any) => {
+        if (seq !== this.seqRdsMeses) return;   // troca rápida de ano: só a resposta mais nova vale
+        this.rdsMeses.set(res?.data || res?.meses || []);
+      },
+      error: err => {
+        if (seq !== this.seqRdsMeses) return;
+        this.erroRdsOrigem = 'meses';
+        this.erroRds.set(erroCargaMsg(err, 'Não foi possível carregar os meses do RDS.'));
+      },
     });
+  }
+
+  /** Retry da caixa do RDS: refaz a carga que FALHOU (anos ou meses do ano corrente). */
+  retryRds(): void {
+    if (this.erroRdsOrigem === 'meses') this.onAnoChange();
+    else this.loadRdsAnos();
   }
 
   gerarRds(): void {
     if (!this.rdsAno || !this.rdsMes) return;
-    this.api.getBlob('/api/admin/operacoes/rds/gerar', { ano: this.rdsAno, mes: this.rdsMes })
-      .subscribe(blob => this.api.baixarBlob(blob, `RDS_${this.rdsAno}-${String(this.rdsMes).padStart(2, '0')}.xlsx`));
+    this.api.getBlob('/api/admin/operacoes/rds/gerar', { ano: this.rdsAno, mes: this.rdsMes }).subscribe({
+      next: blob => this.api.baixarBlob(blob, `RDS_${this.rdsAno}-${String(this.rdsMes).padStart(2, '0')}.xlsx`),
+      // C18/F68 (idioma do F38/C13b): sem handler, a falha era um unhandled do RxJS — nada na tela,
+      // e o admin reclicava achando que o clique não pegou. Ação pontual → toast basta.
+      error: err => this.toast.error(erroCargaMsg(err, 'Não foi possível gerar o RDS.')),
+    });
   }
 
   // ═══ ANORMALIDADES ═══
@@ -551,16 +628,28 @@ export class AdminOperacaoAudioComponent implements OnInit {
 
   toggleAccordion(row: Record<string,unknown>): void {
     row['_expanded'] = !row['_expanded'];
-    if (row['_expanded'] && !row['itens']) {
-      this.api.get<any>('/api/admin/checklist/detalhe', { checklist_id: row['id'] as number }).subscribe({
-        next: (res: any) => {
-          const data = res?.data ?? res;
-          row['itens'] = data?.itens ?? [];
-          this.chkCtrl.rows.set([...this.chkCtrl.rows()]);
-        },
-        error: () => { row['itens'] = []; this.chkCtrl.rows.set([...this.chkCtrl.rows()]); },
-      });
-    }
+    // No erro nada é gravado em `itens` (C18/F66): reabrir o acordeão volta a tentar.
+    if (row['_expanded'] && !row['itens']) this.carregarItensChecklist(row);
+  }
+
+  /** GET dos itens de UM checklist — também é o retry da caixa de erro da linha (C18/F66). */
+  carregarItensChecklist(row: Record<string,unknown>): void {
+    const seq = (row['_seqItens'] = (((row['_seqItens'] as number) || 0) + 1));   // recência por linha
+    row['_erroItens'] = '';
+    this.chkCtrl.rows.set([...this.chkCtrl.rows()]);
+    this.api.get<any>('/api/admin/checklist/detalhe', { checklist_id: row['id'] as number }).subscribe({
+      next: (res: any) => {
+        if (seq !== row['_seqItens']) return;
+        const data = res?.data ?? res;
+        row['itens'] = data?.itens ?? [];
+        this.chkCtrl.rows.set([...this.chkCtrl.rows()]);
+      },
+      error: err => {
+        if (seq !== row['_seqItens']) return;
+        row['_erroItens'] = erroCargaMsg(err, 'Não foi possível carregar os itens desta verificação.');
+        this.chkCtrl.rows.set([...this.chkCtrl.rows()]);
+      },
+    });
   }
   openChecklistDetail(chk: Record<string,unknown>): void {
     window.open(`/admin/checklist/detalhe?checklist_id=${chk['id']}`, '_blank');
@@ -575,6 +664,7 @@ export class AdminOperacaoAudioComponent implements OnInit {
   mesNome = mesNome;
   gd = getDistinct;
   asArr = asArray;
+  asStr = asString;
   truncate = truncate;
   formatEvento = (s: Record<string, unknown>): string => formatEventoDe(s, 'ultimo_evento');
 }

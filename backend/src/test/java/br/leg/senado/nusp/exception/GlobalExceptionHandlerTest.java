@@ -196,6 +196,95 @@ class GlobalExceptionHandlerTest {
         assertThat(evento.getFormattedMessage()).contains("MultipartException");
     }
 
+    /**
+     * F64 (C18): a {@code MultipartException} da lista do 400 também é a exceção de falha de
+     * <b>parse</b> do multipart (tmpdir cheio, conexão abortada, {@code IOException} do contêiner)
+     * — e o {@code log.warn} sem o throwable apagava o diagnóstico de infra. Com causa anexada, o
+     * WARN carrega a exceção; o contrato visível (400, corpo, precedência do 413 — travada em
+     * {@link #precedenciaDoHandlerMaisEspecifico}) não muda.
+     */
+    @Test
+    @DisplayName("corrige F64 — multipart COM causa (falha de parse): mesmo 400, e o log PRESERVA a causa")
+    void multipartComCausa_logPreservaACausa() {
+        Logger logger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        ResponseEntity<Map<String, Object>> r;
+        try {
+            r = handler.handleBadRequest(new MultipartException("Falha no parse do multipart",
+                    new java.io.IOException("No space left on device")));
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);   // comportamento visível intocado
+        assertThat(r.getBody()).containsExactlyInAnyOrderEntriesOf(
+                Map.of("ok", false, "error", "Requisição inválida. Verifique os dados enviados."));
+
+        assertThat(appender.list).hasSize(1);
+        ILoggingEvent evento = appender.list.get(0);
+        assertThat(evento.getLevel()).isEqualTo(Level.WARN);               // continua WARN, não ERROR
+        assertThat(evento.getThrowableProxy()).isNotNull();                // ← a causa não some mais do log
+        assertThat(evento.getThrowableProxy().getClassName()).isEqualTo(MultipartException.class.getName());
+        assertThat(evento.getThrowableProxy().getCause().getMessage()).contains("No space left on device");
+    }
+
+    /**
+     * O critério do F64 é RESTRITO à {@code MultipartException} de propósito: as demais exceções
+     * da lista do 400 carregam causa TAMBÉM no erro puro de cliente ({@code ?page=abc} →
+     * {@code ConversionFailedException}/{@code NumberFormatException}; JSON torto →
+     * {@code JsonParseException}) — logar o throwable nelas devolveria o ruído que o F36 eliminou
+     * (verificado no MVC real pela revisão adversarial do C18).
+     */
+    @Test
+    @DisplayName("corrige F64 — tipo errado de parâmetro COM causa (erro de cliente): log continua sem stacktrace")
+    void tipoErradoComCausa_logContinuaEnxuto() throws Exception {
+        MethodParameter param = new MethodParameter(Alvo.class.getDeclaredMethod("metodo", String.class), 0);
+        Exception comCausa = new MethodArgumentTypeMismatchException("abc", Integer.class, "page", param,
+                new NumberFormatException("For input string: \"abc\""));
+
+        Logger logger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        ResponseEntity<Map<String, Object>> r;
+        try {
+            r = handler.handleBadRequest(comCausa);
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(appender.list).hasSize(1);
+        assertThat(appender.list.get(0).getLevel()).isEqualTo(Level.WARN);
+        assertThat(appender.list.get(0).getThrowableProxy()).isNull();   // o 400 comum segue enxuto
+    }
+
+    /** O outro lado do F64: sem causa é o erro puro de CLIENTE — a linha do log continua enxuta (F36). */
+    @Test
+    @DisplayName("corrige F64 — multipart SEM causa (erro de cliente): 400 idêntico e log sem stacktrace")
+    void multipartSemCausa_logContinuaEnxuto() {
+        Logger logger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        ResponseEntity<Map<String, Object>> r;
+        try {
+            r = handler.handleBadRequest(new MultipartException("Current request is not a multipart request"));
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(r.getBody()).containsExactlyInAnyOrderEntriesOf(
+                Map.of("ok", false, "error", "Requisição inválida. Verifique os dados enviados."));
+
+        assertThat(appender.list).hasSize(1);
+        assertThat(appender.list.get(0).getLevel()).isEqualTo(Level.WARN);
+        assertThat(appender.list.get(0).getThrowableProxy()).isNull();     // nada de stacktrace no 400 comum
+    }
+
     @Test
     @DisplayName("corrige F2 — acesso negado pela method security vira 403, não 500")
     void acessoNegado_403() {

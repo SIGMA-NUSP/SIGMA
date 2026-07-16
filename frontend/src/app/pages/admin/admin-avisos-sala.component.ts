@@ -9,7 +9,7 @@ import { MultiSelectDropdownComponent, MultiSelectOption } from '../../shared/co
 import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
 import { getDistinct } from '../../core/helpers/table.helpers';
 import { TableStateController } from '../../core/helpers/table-state.controller';
-import { httpErrorMsg } from '../../core/helpers/http.helpers';
+import { erroCargaMsg, httpErrorMsg } from '../../core/helpers/http.helpers';
 import { ToastService } from '../../shared/components/toast.component';
 import { FmtDatePipe } from '../../shared/pipes/fmt-date.pipe';
 
@@ -44,6 +44,15 @@ interface AvisoRow {
           placeholder="Selecione um ou mais locais..."
           (selectionChange)="selectedSalaIds = $event" />
       </div>
+
+      @if (erroSalasOcupadas()) {
+        <!-- FAIL-CLOSED (C18/F67): sem saber quais salas já têm aviso ativo, o multi-select mostraria
+             TODAS como livres — a pior direção da mentira. O erro é anunciado e o envio, bloqueado;
+             preencher pode, enviar não. -->
+        <div class="form-row">
+          <app-erro-carga [mensagem]="erroSalasOcupadas()" (tentarNovamente)="loadSalasOcupadas()" />
+        </div>
+      }
 
       @for (msg of mensagens; track $index) {
         <div class="form-row">
@@ -85,7 +94,9 @@ interface AvisoRow {
       @if (errorMsg()) { <div class="error-box">{{ errorMsg() }}</div> }
 
       <div style="display:flex; justify-content:flex-end; margin-top:12px">
-        <button class="btn-primary-custom" [disabled]="saving()" (click)="onSubmit()">
+        <!-- [disabled] também por salasOcupadasIndisponiveis (C18/F67): o gate fail-closed do lock
+             "1 aviso ativo por sala" — camada de UI; a trava real é o guard do onSubmit(). -->
+        <button class="btn-primary-custom" [disabled]="saving() || salasOcupadasIndisponiveis()" (click)="onSubmit()">
           {{ saving() ? 'Salvando...' : 'Cadastrar Aviso' }}
         </button>
       </div>
@@ -214,6 +225,20 @@ export class AdminAvisosSalaComponent implements OnInit {
   errorMsg = signal('');
   // sala_id (string) → nº do cadastro ativo que a ocupa (Fix: 1 aviso ativo por sala)
   salasOcupadas = signal<Record<string, number>>({});
+  /** Canal de erro da carga das salas-com-aviso (C18/F67): '' = sem erro. Limpo a cada disparo. */
+  erroSalasOcupadas = signal('');
+  loadingSalasOcupadas = signal(true);
+  /** Token de recência (C18/F67): o retry reclicado põe duas cargas em voo — um erro velho não
+   *  pode religar o bloqueio que o sucesso mais novo já destravou. */
+  private seqSalasOcupadas = 0;
+  /**
+   * FAIL-CLOSED (C18/F67 — decisão do Douglas): enquanto a carga das salas-com-aviso não tiver
+   * SUCEDIDO (em voo OU falhou), o lock "1 aviso ativo por sala" não é confiável e o CADASTRO fica
+   * bloqueado — a tela nunca exibe salas como livres sem saber. Um mapa vazio NÃO serve de proxy:
+   * `{}` também é o vazio legítimo (nenhuma sala ocupada).
+   */
+  salasOcupadasIndisponiveis = computed(() =>
+    this.loadingSalasOcupadas() || !!this.erroSalasOcupadas());
 
   // ── Listagem ──
   cols: ColumnFilterDef[] = [
@@ -233,12 +258,24 @@ export class AdminAvisosSalaComponent implements OnInit {
     this.ctrl.load();
   }
 
+  /** Carga do lock "1 aviso ativo por sala"; também é o retry da caixa de erro (C18/F67). */
   loadSalasOcupadas(): void {
+    const seq = ++this.seqSalasOcupadas;
+    this.erroSalasOcupadas.set('');
+    this.loadingSalasOcupadas.set(true);
     this.api.get<any>('/api/admin/avisos/salas-ocupadas').subscribe({
       next: res => {
+        if (seq !== this.seqSalasOcupadas) return;   // obsoleta: uma carga mais nova está em voo
         const map: Record<string, number> = {};
         (res?.data || []).forEach((r: any) => { map[String(r.sala_id)] = r.numero; });
         this.salasOcupadas.set(map);
+        this.loadingSalasOcupadas.set(false);
+      },
+      error: err => {
+        if (seq !== this.seqSalasOcupadas) return;   // a falha velha não religa o bloqueio destravado
+        this.loadingSalasOcupadas.set(false);
+        this.erroSalasOcupadas.set(erroCargaMsg(err,
+          'Não foi possível verificar quais locais já têm aviso ativo. O cadastro fica bloqueado até recarregar — um local ocupado apareceria como livre.'));
       },
     });
   }
@@ -268,6 +305,8 @@ export class AdminAvisosSalaComponent implements OnInit {
   gd = getDistinct;
 
   onSubmit(): void {
+    // FAIL-CLOSED (C18/F67): defesa dupla — o [disabled] do botão é só a camada de UI.
+    if (this.salasOcupadasIndisponiveis()) return;
     this.errorMsg.set('');
     if (this.selectedSalaIds.length === 0) { this.errorMsg.set('Selecione ao menos um local.'); return; }
     const msgs = this.mensagens.map(m => m.trim());

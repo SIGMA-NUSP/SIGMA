@@ -524,6 +524,16 @@ export class AdminPontoComponent implements OnInit {
   private seqPessoas = 0;
   private seqLotes = 0;
 
+  /**
+   * Referências VIVAS por id (C18/F62): a identidade do lote na tela é a referência do objeto
+   * (`_exp`, `paginas`, `emitirAviso` e os closures de publicar/onAssign/toggleLote a capturam),
+   * mas o `loadLotes` recebia objetos NOVOS do backend — a resposta de uma publicação em voo
+   * mutava um lote ÓRFÃO e o lote publicado seguia "Em revisão" na tela, com o botão destrutivo.
+   * O mapa sobrevive ao ERRO de carga (que zera a lista): o retry da caixa reconcilia contra ele
+   * e as respostas em voo continuam chegando ao objeto que volta à lista.
+   */
+  private lotesPorId = new Map<string, Lote>();
+
   /** Canais de erro das duas cargas (C7/F50): '' = sem erro. Limpos no início de cada carga. */
   erroPessoas = signal('');
   erroLotes = signal('');
@@ -579,12 +589,29 @@ export class AdminPontoComponent implements OnInit {
    */
   loadLotes(abrir?: Lote): void {
     const seq = ++this.seqLotes;   // idem: o botão de retry não trava, e o gesto natural é reclicar
+    // Snapshot das marcas de escrita POR LOTE no disparo (C18/F62 — a mesma justificativa do
+    // `carregarDetalhe`): o SELECT da listagem pode ter lido o banco ANTES do commit de uma
+    // publicação/PATCH que já chegou à tela; aplicar esses campos regrediria o lote vivo
+    // (publicado de volta a "Em revisão", com o botão destrutivo).
+    const marcas = new Map(this.seqEscrita);
     this.loadingLotes.set(true);
     this.erroLotes.set('');
     this.api.get<any>('/api/admin/ponto/lotes').subscribe({
       next: res => {
         if (seq !== this.seqLotes) return;
-        const list: Lote[] = res.data || [];
+        // Reconciliação por id (C18/F62): o lote que JÁ tem referência viva é ATUALIZADO nela
+        // (Object.assign) e é ela que volta à lista — `_exp`/`emitirAviso`/`paginas` são campos de
+        // UI, não vêm no payload da listagem e sobrevivem; os closures em voo apontam para o objeto
+        // que ESTÁ na tela. Lote que sumiu do servidor sai da lista (e do mapa: morre silencioso).
+        const list: Lote[] = (res.data || []).map((novo: Lote) => {
+          const vivo = this.lotesPorId.get(novo.id);
+          if (!vivo) return novo;
+          // Escrita aplicada DEPOIS do disparo deste GET → o snapshot é obsoleto PARA ESTE lote:
+          // mantém o vivo como está (o estado mais novo vence; a lista segue com a referência).
+          if ((this.seqEscrita.get(novo.id) ?? 0) !== (marcas.get(novo.id) ?? 0)) return vivo;
+          return Object.assign(vivo, novo);
+        });
+        this.lotesPorId = new Map(list.map(l => [l.id, l]));
         if (abrir) {
           const row = list.find(x => x.id === abrir.id);
           if (row) { Object.assign(row, abrir); row._exp = true; }

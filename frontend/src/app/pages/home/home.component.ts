@@ -9,6 +9,7 @@ import { ColumnFilterComponent, ColumnFilterDef } from '../../shared/components/
 import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
 import { getDistinct, buildReportParams } from '../../core/helpers/table.helpers';
 import { TableStateController } from '../../core/helpers/table-state.controller';
+import { erroCargaMsg } from '../../core/helpers/http.helpers';
 import { truncate, formatEvento as formatEventoDe } from '../../core/helpers/format.helpers';
 import { FmtDatePipe } from '../../shared/pipes/fmt-date.pipe';
 import { FmtTimePipe } from '../../shared/pipes/fmt-time.pipe';
@@ -62,6 +63,11 @@ const FUNCAO_LABELS = {
 
       @if (escalaLoading() && escalas().length === 0) {
         <p class="text-muted-sm">Carregando...</p>
+      } @else if (erroEscala()) {
+        <!-- Canal de erro (C18/F65): a carga que falhou NÃO pode se passar por "Nenhuma escala
+             cadastrada." — o operador concluiria que não está escalado, o oposto de "não sabemos".
+             Meta limpo no erro: a paginação não exibe um total que a tela não tem. -->
+        <app-erro-carga [mensagem]="erroEscala()" (tentarNovamente)="loadEscalas()" />
       } @else if (escalas().length === 0) {
         <p class="text-muted-sm">Nenhuma escala cadastrada.</p>
       } @else {
@@ -84,7 +90,12 @@ const FUNCAO_LABELS = {
                 @if (esc['_expanded']) {
                   <tr class="accordion-row">
                     <td colspan="3">
-                      @if (!esc['_resumoRows']) {
+                      @if (esc['_erroResumo']) {
+                        <!-- Erro POR LINHA (C18/F65): a falha do resumo não pode virar "Nenhum operador
+                             escalado." — e como nada é gravado em _resumoRows no erro, reabrir refaz o GET
+                             (morreu o vazio sticky). O retry recarrega SÓ esta escala. -->
+                        <app-erro-carga [mensagem]="esc['_erroResumo']" (tentarNovamente)="carregarResumoEscala(esc)" />
+                      } @else if (!esc['_resumoRows']) {
                         <p class="text-muted-sm">Carregando...</p>
                       } @else if (asEscalaRows(esc['_resumoRows']).length === 0) {
                         <p class="text-muted-sm">Nenhum operador escalado.</p>
@@ -349,6 +360,14 @@ export class HomeComponent implements OnInit {
   escalaMeta = signal<PaginationMeta | null>(null);
   escalaState = { page: 1, limit: 10 };
   escalaLoading = signal(true);
+  /** Canal de erro da carga da Escala (C18/F65): '' = sem erro. Limpo no início de cada carga. */
+  erroEscala = signal('');
+  /**
+   * Token de recência (C18/F65 — a faceta F61 viva fora do motor): a Escala é paginada server-side
+   * e dois cliques rápidos de página deixam duas cargas em voo — sem o token, a resposta VELHA
+   * vencia se chegasse por último. Guard no `next` E no `error`.
+   */
+  private seqEscala = 0;
 
   // ── Operações state ──
   opCtrl = new TableStateController(this.api, {
@@ -396,48 +415,70 @@ export class HomeComponent implements OnInit {
 
   // ── Escala ──
 
+  /** Carga da listagem de escalas; também é o retry da caixa de erro (C18/F65). */
   loadEscalas(): void {
+    const seq = ++this.seqEscala;
     this.escalaLoading.set(true);
+    this.erroEscala.set('');
     this.api.getList('/api/escala/list', this.escalaState).subscribe({
       next: (res: any) => {
+        if (seq !== this.seqEscala) return;   // obsoleta: uma carga mais nova está em voo
         this.escalas.set(res.data || []);
         this.escalaMeta.set(res.meta || null);
         this.escalaLoading.set(false);
       },
-      error: () => { this.escalas.set([]); this.escalaMeta.set(null); this.escalaLoading.set(false); },
+      error: err => {
+        if (seq !== this.seqEscala) return;   // a falha velha não apaga o que a carga nova trouxe
+        this.escalas.set([]);
+        this.escalaMeta.set(null);
+        this.escalaLoading.set(false);
+        this.erroEscala.set(erroCargaMsg(err,
+          'Não foi possível carregar a Escala. Você pode estar escalado mesmo sem ela aparecer aqui — tente novamente.'));
+      },
     });
   }
 
   toggleEscala(esc: Record<string, any>): void {
     esc['_expanded'] = !esc['_expanded'];
-    if (esc['_expanded'] && !esc['_resumoRows']) {
-      this.api.get<any>(`/api/escala/${esc['id']}`).subscribe({
-        next: (res: any) => {
-          const resumo: EscalaResumoItem[] = res.data?.resumo || [];
-          // Separar plenários (qualquer item que NÃO seja função) das duas funções
-          const plenarios = resumo.filter(r =>
-            r.sala_nome !== FUNCAO_LABELS.apoio && r.sala_nome !== FUNCAO_LABELS.fechamento);
-          const funcoes: EscalaFuncoes = {
-            apoio: resumo.find(r => r.sala_nome === FUNCAO_LABELS.apoio) || null,
-            fechamento: resumo.find(r => r.sala_nome === FUNCAO_LABELS.fechamento) || null,
-          };
-          // Dividir os plenários em 2 metades para layout lado a lado
-          const half = Math.ceil(plenarios.length / 2);
-          const rows: EscalaResumoRow[] = [];
-          for (let i = 0; i < half; i++) {
-            rows.push({ left: plenarios[i], right: plenarios[i + half] || null });
-          }
-          esc['_resumoRows'] = rows;
-          esc['_funcoes'] = funcoes;
-          this.escalas.set([...this.escalas()]);
-        },
-        error: () => {
-          esc['_resumoRows'] = [];
-          esc['_funcoes'] = { apoio: null, fechamento: null };
-          this.escalas.set([...this.escalas()]);
-        },
-      });
-    }
+    // No erro nada é gravado em `_resumoRows` (C18/F65): reabrir o acordeão volta a tentar.
+    if (esc['_expanded'] && !esc['_resumoRows']) this.carregarResumoEscala(esc);
+  }
+
+  /** GET do resumo de UMA escala — também é o retry da caixa de erro da linha (C18/F65). */
+  carregarResumoEscala(esc: Record<string, any>): void {
+    // Recência POR LINHA: o retry reclicado põe duas cargas da MESMA escala em voo — um erro velho
+    // não pode sobrescrever o sucesso mais novo (nem o contrário). O token vive no próprio objeto,
+    // que é a identidade da linha.
+    const seq = (esc['_seqResumo'] = (((esc['_seqResumo'] as number) || 0) + 1));
+    esc['_erroResumo'] = '';
+    this.escalas.set([...this.escalas()]);
+    this.api.get<any>(`/api/escala/${esc['id']}`).subscribe({
+      next: (res: any) => {
+        if (seq !== esc['_seqResumo']) return;
+        const resumo: EscalaResumoItem[] = res.data?.resumo || [];
+        // Separar plenários (qualquer item que NÃO seja função) das duas funções
+        const plenarios = resumo.filter(r =>
+          r.sala_nome !== FUNCAO_LABELS.apoio && r.sala_nome !== FUNCAO_LABELS.fechamento);
+        const funcoes: EscalaFuncoes = {
+          apoio: resumo.find(r => r.sala_nome === FUNCAO_LABELS.apoio) || null,
+          fechamento: resumo.find(r => r.sala_nome === FUNCAO_LABELS.fechamento) || null,
+        };
+        // Dividir os plenários em 2 metades para layout lado a lado
+        const half = Math.ceil(plenarios.length / 2);
+        const rows: EscalaResumoRow[] = [];
+        for (let i = 0; i < half; i++) {
+          rows.push({ left: plenarios[i], right: plenarios[i + half] || null });
+        }
+        esc['_resumoRows'] = rows;
+        esc['_funcoes'] = funcoes;
+        this.escalas.set([...this.escalas()]);
+      },
+      error: err => {
+        if (seq !== esc['_seqResumo']) return;
+        esc['_erroResumo'] = erroCargaMsg(err, 'Não foi possível carregar os operadores desta escala.');
+        this.escalas.set([...this.escalas()]);
+      },
+    });
   }
 
   asFuncoes(v: unknown): EscalaFuncoes | null {

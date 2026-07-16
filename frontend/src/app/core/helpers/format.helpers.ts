@@ -3,6 +3,11 @@ export function asArray(v: unknown): any[] {
   return Array.isArray(v) ? v : [];
 }
 
+/** Coerção segura de campos dinâmicos para string (retorna '' quando não for string). */
+export function asString(v: unknown): string {
+  return typeof v === 'string' ? v : '';
+}
+
 /** Saldo do banco de horas em minutos com sinal → '±HH:MM' (Q23; ex.: +53:12, -02:03, +00:00). */
 export function formatarSaldoMin(minutos: number): string {
   const abs = Math.abs(minutos);

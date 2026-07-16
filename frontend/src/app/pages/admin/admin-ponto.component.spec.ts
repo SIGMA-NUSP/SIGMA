@@ -937,6 +937,120 @@ describe('AdminPontoComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
+  // C18/F62 — loadLotes reconcilia por ID: a resposta em voo chega ao lote VIVO
+  //
+  // A identidade do lote na tela é a REFERÊNCIA do objeto (`_exp`, `paginas`, `emitirAviso` e os
+  // closures de publicar/onAssign/toggleLote a capturam), mas o `loadLotes` trocava a lista por
+  // objetos NOVOS do backend: a resposta de uma publicação em voo mutava um lote ÓRFÃO e o lote
+  // publicado seguia exibido "Em revisão" — com o botão destrutivo — até nova carga.
+  // ═══════════════════════════════════════════════════════════════════
+  describe('reconciliação por id (C18/F62)', () => {
+    it('corrige F62 — POST de publicação em voo + recarga da lista: a resposta aplica no lote DA LISTA (estado de UI preservado)', () => {
+      // O gatilho real do achado: o admin publica e, sem esperar, envia outro PDF — o `onUpload`
+      // recarrega a lista; quando o POST responde, o lote publicado não pode continuar "Em revisão".
+      const post = new Subject<any>();
+      apiPost.mockReturnValue(post);
+      const comp = criarCarregado();
+      const l: any = comp.lotes()[0];
+      comp.toggleLote(l);                                  // acordeão aberto (paginas na mão)
+      l.emitirAviso = false;                               // estado de UI que precisa sobreviver
+
+      comp.publicar(l);                                    // POST em voo
+      comp.loadLotes();                                    // a recarga troca a lista (mesmo id, objetos novos)
+
+      post.next(respostaLote(PAGINAS, { status: 'PUBLICADO', publicado_em: '2026-07-12' }));
+
+      const naLista: any = comp.lotes()[0];
+      expect(naLista.status).toBe('PUBLICADO');            // ← era o defeito: ficava "Em revisão"
+      expect(naLista.publicado_em).toBe('2026-07-12');
+      expect(naLista._exp).toBe(true);                     // o acordeão aberto sobreviveu à recarga
+      expect(naLista.emitirAviso).toBe(false);             // a escolha do checkbox também
+      expect(naLista.paginas).toHaveLength(3);             // e as páginas carregadas
+    });
+
+    it('corrige F62 — o mesmo pelo RETRY da caixa de erro: a lista zerada pelo erro não deixa a resposta órfã', () => {
+      // O error handler zera a lista (contrato do F50); as referências vivas sobrevivem por id e o
+      // retry as devolve à lista — a resposta da escrita em voo continua chegando ao objeto VIVO.
+      const post = new Subject<any>();
+      apiPost.mockReturnValue(post);
+      const comp = criarCarregado();
+      comp.publicar(comp.lotes()[0] as any);               // POST em voo
+
+      apiGet.mockImplementation((url: string) =>
+        url === '/api/admin/ponto/lotes' ? throwError(() => ({ status: 500 })) : of({ ok: true, data: [] }));
+      comp.loadLotes();                                    // a recarga FALHA → lista zera, caixa liga
+      expect(comp.lotes()).toEqual([]);
+      expect(comp.erroLotes()).not.toBe('');
+
+      apiGet.mockImplementation((url: string) =>
+        url === '/api/admin/ponto/lotes' ? of({ ok: true, data: lotesResposta() }) : of({ ok: true, data: [] }));
+      comp.loadLotes();                                    // retry da caixa
+      expect(comp.lotes()).toHaveLength(1);
+
+      post.next(respostaLote(PAGINAS, { status: 'PUBLICADO' }));
+
+      expect((comp.lotes()[0] as any).status).toBe('PUBLICADO');   // a resposta chegou ao lote na lista
+      expect(comp.publicando('lote-1')).toBe(false);
+    });
+
+    it('corrige F62 — a recarga preserva a REFERÊNCIA por id (com _exp/paginas); lote que sumiu sai, lote novo entra', () => {
+      const comp = criarCarregado();
+      const l: any = comp.lotes()[0];
+      comp.toggleLote(l);
+      expect(l._exp).toBe(true);
+      expect(l.paginas).toHaveLength(3);
+
+      lotesResposta = () => [lote({ id: 'lote-2', data_inicio: '2026-07-01', data_fim: '2026-07-31' }), lote({ pendentes: 0 })];
+      comp.loadLotes();
+
+      expect(comp.lotes().map(x => x.id)).toEqual(['lote-2', 'lote-1']);   // o novo entrou
+      const antigo: any = comp.lotes().find(x => x.id === 'lote-1');
+      expect(antigo).toBe(l);                              // a MESMA referência de antes
+      expect(antigo._exp).toBe(true);                      // com o estado de UI intacto
+      expect(antigo.paginas).toHaveLength(3);
+      expect(antigo.pendentes).toBe(0);                    // e os campos do SERVIDOR atualizados
+
+      lotesResposta = () => [lote({ id: 'lote-2' })];
+      comp.loadLotes();
+      expect(comp.lotes().map(x => x.id)).toEqual(['lote-2']);   // o lote-1 saiu (morreu silencioso)
+    });
+
+    it('regressão — o caminho `abrir` do upload segue mesclando o detalhe e expandindo o lote novo', () => {
+      // O upload recarrega a lista e abre o lote recém-enviado; a reconciliação não pode quebrar isso.
+      const comp = criarCarregado();
+      preencherUpload(comp);
+
+      comp.onUpload();
+
+      const aberto: any = comp.lotes()[0];
+      expect(aberto._exp).toBe(true);
+      expect(aberto.paginas).toHaveLength(3);
+    });
+
+    it('corrige F62 — o snapshot VELHO da lista (lido antes do commit de uma escrita) não regride o lote vivo', () => {
+      // O outro lado da mesma moeda (achado da revisão adversarial do C18): sem o guard de
+      // seqEscrita no merge, a listagem que saiu ANTES da publicação e chegou DEPOIS devolvia o
+      // lote publicado a "Em revisão" — com o botão destrutivo de volta (a mesma justificativa do
+      // descarte no carregarDetalhe, agora aplicada ao merge do loadLotes).
+      const getLotes = new Subject<any>();
+      const comp = criarCarregado();
+      const l: any = comp.lotes()[0];
+
+      apiGet.mockImplementation((url: string) =>
+        url === '/api/admin/ponto/lotes' ? getLotes : of({ ok: true, data: [] }));
+      comp.loadLotes();                                    // o GET sai (o servidor ainda vê REVISAO)
+
+      comp.publicar(l);                                    // a publicação responde primeiro
+      expect(l.status).toBe('PUBLICADO');
+
+      getLotes.next({ ok: true, data: lotesResposta() });  // o snapshot velho (REVISAO) chega depois
+
+      expect((comp.lotes()[0] as any).status).toBe('PUBLICADO');   // ← não regride
+      expect(comp.lotes()[0]).toBe(l);                             // e a referência segue viva na lista
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
   // Preview do PDF da página
   // ═══════════════════════════════════════════════════════════════════
   describe('preview', () => {
