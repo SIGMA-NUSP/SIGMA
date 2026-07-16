@@ -1,0 +1,38 @@
+# Perfil "test" — testes de integração (*IT) contra o Oracle de homolog local.
+# Schema NUSP_TEST = clone de METADADOS (sem dados) do schema NUSP, criado por
+# docker/test-db/recriar-nusp-test.sh. Cada teste semeia o que precisa e roda
+# em transação com rollback (@DataJpaTest, via @OracleIT).
+spring:
+  datasource:
+    url: jdbc:oracle:thin:@//localhost:1522/XEPDB1
+    username: NUSP_TEST
+    password: NuspTest2026        # senha fixa de teste (banco local, sem segredo real)
+  jpa:
+    hibernate:
+      ddl-auto: validate          # valida o mapeamento JPA contra o clone do schema real
+    properties:
+      hibernate:
+        # O application.yml fixa NUSP; sem este override o Hibernate qualificaria
+        # as tabelas no schema de homolog em vez do clone de teste.
+        default_schema: NUSP_TEST
+  liquibase:
+    enabled: false                # o schema vem do clone, não do changelog
+  mail:
+    # dummy: único placeholder sem default do main (${SPRING_MAIL_USERNAME});
+    # sem ele, um @SpringBootTest de contexto completo morreria no boot
+    username: teste@nusp-test.invalid
+
+# Propriedades app.* que os slices de teste consomem (T15+: @WebMvcTest importa
+# WebConfig/SecurityConfig reais). Nomes conferidos contra o application.yml real.
+app:
+  jwt:
+    secret: chave-fixa-de-teste-hs256-nusp-test-0123456789abcdef   # >= 32 bytes (HS256)
+    ttl-seconds: 5400
+  session:
+    touch-max-age-seconds: 5400
+  admin:
+    supervisor-username: supervisor.teste
+    chefe-username: chefe.teste
+    master-username: master.teste
+  files:
+    dir: ${java.io.tmpdir}/nusp-test-files

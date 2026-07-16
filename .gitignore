@@ -1,0 +1,62 @@
+# ═══════════════════════════════════════════════════════════════════
+# SIGMA (repo PÚBLICO) — somente o código do sistema.
+# Material de trabalho (docs/, prompts/, CLAUDE.md, AGENTS.md, .claude/,
+# credenciais) é versionado à parte no repo PRIVADO "SIGMA-extras",
+# que compartilha esta mesma pasta de trabalho (overlay).
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Camada privada (repo SIGMA-extras — NUNCA commitar aqui) ──
+/docs/
+/prompts/
+/CLAUDE.md
+/AGENTS.md
+/CLAUDE_global.md
+/rascunhos*.md
+/DIAGNOSTICO-*.md
+/*.jpeg
+/*.jpg
+/*.png
+/*.pdf
+/.claude/
+
+# ── Credenciais (NUNCA commitar — repo público!) ──
+docker/.env
+docker/.env.*
+!docker/.env.example
+*.env
+!*.env.example
+
+# ── Dados locais (Metabase H2) ──
+docker/metabase-data/
+
+# ── Backend (Java/Maven) ──
+backend/target/
+backend/*.jar
+backend/*.war
+backend/.mvn/
+backend/mvnw
+backend/mvnw.cmd
+backend/.settings/
+backend/.project
+backend/.classpath
+backend/.factorypath
+backend/bin/
+backend/*.iml
+backend/.idea/
+
+# ── Frontend (Angular/Node) ──
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+frontend/coverage/
+frontend/.vscode/
+frontend/*.tgz
+
+# ── Geral ──
+*.log
+*.swp
+*.swo
+*.bak
+*~
+.DS_Store
+Thumbs.db

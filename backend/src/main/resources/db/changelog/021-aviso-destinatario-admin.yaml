@@ -1,0 +1,18 @@
+databaseChangeLog:
+  # ============================================================
+  # 021 — Avisos: administrador como destinatário
+  #
+  # Adiciona ADMIN_ID em FRM_AVISO_ALVO e FRM_AVISO_CIENCIA e os tipos
+  # de alvo ADMIN / TODOS_ADMIN. Habilita o aviso PESSOAL automático da
+  # publicação de folha de ponto a atingir administradores (cargos
+  # especiais cadastrados em PES_ADMINISTRADOR — ver changelog 019).
+  # ============================================================
+  - changeSet:
+      id: 021-aviso-destinatario-admin
+      author: douglas.antunes
+      comment: "Avisos: ADMIN_ID + tipos ADMIN/TODOS_ADMIN em FRM_AVISO_ALVO e FRM_AVISO_CIENCIA"
+      changes:
+        - sqlFile:
+            path: db/changelog/021-aviso-destinatario-admin.sql
+            splitStatements: true
+            stripComments: true

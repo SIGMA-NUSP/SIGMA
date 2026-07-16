@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.4.3</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>br.leg.senado</groupId>
+    <artifactId>nusp</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <name>nusp</name>
+    <description>Senado NUSP — Sistema de Operações de Áudio e Checklists</description>
+    <packaging>jar</packaging>
+
+    <properties>
+        <java.version>17</java.version>
+        <jacoco.version>0.8.12</jacoco.version>
+        <jjwt.version>0.12.6</jjwt.version>
+        <google.sheets.version>v4-rev20240514-2.0.0</google.sheets.version>
+        <google.auth.version>1.23.0</google.auth.version>
+        <google.api.client.version>2.7.0</google.api.client.version>
+        <!-- Integração (*IT, failsafe) só sob demanda: mvn verify -DskipITs=false.
+             Property de usuário (nunca na <configuration> do plugin, senão a CLI não sobrescreve). -->
+        <skipITs>true</skipITs>
+        <!-- PONTO ÚNICO do fuso das JVMs de teste (surefire E failsafe leem a property `argLine`).
+             As JVMs de teste espelham os containers de produção/homolog, que rodam em
+             America/Sao_Paulo (BRT). O TZ passou a ser DECLARADO no runtime (docker-compose +
+             Dockerfile.backend — F7/F55/C17); antes era UTC herdado da imagem, sem declaração.
+             Por que o fuso importa aqui: a property `preferred_instant_jdbc_type: TIMESTAMP` (F14)
+             faz a ESCRITA de Instant seguir o fuso da JVM, então o pin tem de casar com os
+             containers — hoje BRT — senão os ITs gravariam wall-clock diferente do de produção e as
+             comparações contra SYSTIMESTAMP (expiração de sessão) deslocariam.
+             ⚠️ Este pin NÃO é "o interruptor do F7": a cura do F7 é o TZ dos containers (acima). O
+             pin só ESPELHA esse fuso nos testes; movê-lo sozinho faria os testes divergirem do
+             runtime. Guardas do pin: FusoDaJvmDeTesteTest (surefire) e InstantJdbcTypeIT (failsafe).
+             Perfil `coverage`: o jacoco prepare-agent PREFIXA o -javaagent a este valor (não o
+             substitui), então o pin sobrevive. -->
+        <argLine>-Duser.timezone=America/Sao_Paulo</argLine>
+    </properties>
+
+    <dependencies>
+        <!-- ===== Spring Boot Core ===== -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
+
+        <!-- ===== Oracle Driver ===== -->
+        <dependency>
+            <groupId>com.oracle.database.jdbc</groupId>
+            <artifactId>ojdbc11</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- ===== JWT ===== -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>${jjwt.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- ===== Relatórios PDF (OpenPDF — tabelas + overlay) ===== -->
+        <dependency>
+            <groupId>com.github.librepdf</groupId>
+            <artifactId>openpdf</artifactId>
+            <version>2.0.3</version>
+        </dependency>
+
+        <!-- ===== Relatórios DOCX + XLSX (Apache POI) ===== -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.3.0</version>
+        </dependency>
+
+        <!-- ===== Google Sheets API (planilha de cessões de sala) ===== -->
+        <dependency>
+            <groupId>com.google.api-client</groupId>
+            <artifactId>google-api-client</artifactId>
+            <version>${google.api.client.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.apis</groupId>
+            <artifactId>google-api-services-sheets</artifactId>
+            <version>${google.sheets.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.auth</groupId>
+            <artifactId>google-auth-library-oauth2-http</artifactId>
+            <version>${google.auth.version}</version>
+        </dependency>
+
+        <!-- ===== Documentação API (Swagger/OpenAPI) ===== -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.8.6</version>
+        </dependency>
+
+        <!-- ===== Liquibase (controle de versão do banco de dados) ===== -->
+        <dependency>
+            <groupId>org.liquibase</groupId>
+            <artifactId>liquibase-core</artifactId>
+        </dependency>
+
+        <!-- ===== Utilidades ===== -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- ===== Testes ===== -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+            <!-- Testes de integração (*IT.java) contra o Oracle de homolog local (schema NUSP_TEST).
+                 Desligados por padrão (skipITs em <properties>); mvn test/package não os executa. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <!-- O fuso da JVM (America/Sao_Paulo, como os containers) vem da property
+                         `argLine` lá em <properties> — ponto único, compartilhado com o surefire.
+                         Não redeclarar <argLine> aqui: a <configuration> vence a property e o pin
+                         viraria dois. -->
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- ===== Cobertura de código INFORMATIVA (sob demanda) =====
+             Ativação: mvn test -Pcoverage  →  gera target/site/jacoco/index.html.
+             Fora deste perfil o agente JaCoCo NÃO é ativado: `mvn test` e `mvn package`
+             (inclusive o job de CI) rodam o surefire sem overhead algum. O prepare-agent
+             escreve na propriedade padrão `argLine` PREFIXANDO o -javaagent ao valor que já
+             estiver lá (prependVMArguments), de modo que o pin -Duser.timezone=America/Sao_Paulo
+             declarado em <properties> sobrevive à cobertura — o FusoDaJvmDeTesteTest é a guarda disso.
+             SEM check/threshold: cobertura é relatório, NUNCA gate (decisão do briefing). -->
+        <profile>
+            <id>coverage</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.jacoco</groupId>
+                        <artifactId>jacoco-maven-plugin</artifactId>
+                        <version>${jacoco.version}</version>
+                        <executions>
+                            <execution>
+                                <id>jacoco-prepare-agent</id>
+                                <goals>
+                                    <goal>prepare-agent</goal>
+                                </goals>
+                            </execution>
+                            <execution>
+                                <id>jacoco-report</id>
+                                <phase>test</phase>
+                                <goals>
+                                    <goal>report</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

@@ -1,0 +1,20 @@
+databaseChangeLog:
+  # ============================================================
+  # 025 — Unique index (SALA_ID, ITEM_TIPO_ID) em FRM_CHECKLIST_SALA_CONFIG
+  #
+  # Otimização de banco (Q9): formaliza a unicidade do par sala×item de
+  # checklist que o código já assume; dá também o 1º índice de acesso por
+  # SALA_ID da tabela. Rollback = drop do índice.
+  # ============================================================
+  - changeSet:
+      id: 025-uq-checklist-sala-config
+      author: douglas.antunes
+      comment: "Q9: unique index (SALA_ID, ITEM_TIPO_ID) em FRM_CHECKLIST_SALA_CONFIG"
+      changes:
+        - sqlFile:
+            path: db/changelog/025-uq-checklist-sala-config.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: DROP INDEX UQ_FRM_SC_SALA_ITEM

@@ -1,0 +1,25 @@
+databaseChangeLog:
+  # ============================================================
+  # 004 — Coluna TURNO em PES_OPERADOR
+  #
+  # Indica o turno do operador para fins de escala semanal:
+  #   'M' = Matutino
+  #   'V' = Vespertino
+  # Default 'M' nos registros existentes; admin ajusta via UI.
+  # ============================================================
+  - changeSet:
+      id: 004-operador-turno
+      author: douglas.antunes
+      comment: "Adiciona coluna TURNO em PES_OPERADOR (M=Matutino, V=Vespertino)"
+      changes:
+        - addColumn:
+            tableName: PES_OPERADOR
+            columns:
+              - column:
+                  name: TURNO
+                  type: VARCHAR2(1)
+                  defaultValue: M
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: "ALTER TABLE PES_OPERADOR ADD CONSTRAINT CK_OPERADOR_TURNO CHECK (TURNO IN ('M', 'V'))"

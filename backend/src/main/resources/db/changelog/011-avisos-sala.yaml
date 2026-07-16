@@ -1,0 +1,18 @@
+databaseChangeLog:
+  # ============================================================
+  # 011 — FRM_AVISO_SALA e FRM_AVISO_SALA_CIENCIA
+  #
+  # Tabelas para o aviso de sala exibido ao operador antes de
+  # iniciar a Verificação de Plenários. Inclui sequence para a
+  # coluna NUMERO (identificador amigável exibido ao admin) e
+  # índice único parcial garantindo 1 aviso ATIVO por sala.
+  # ============================================================
+  - changeSet:
+      id: 011-avisos-sala
+      author: douglas.antunes
+      comment: "Cria FRM_AVISO_SALA, FRM_AVISO_SALA_CIENCIA e sequence SEQ_FRM_AVISO_SALA"
+      changes:
+        - sqlFile:
+            path: db/changelog/011-avisos-sala.sql
+            splitStatements: true
+            stripComments: true

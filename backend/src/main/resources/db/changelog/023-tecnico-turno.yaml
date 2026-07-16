@@ -1,0 +1,21 @@
+databaseChangeLog:
+  # ============================================================
+  # 023 — Coluna TURNO em PES_TECNICO (nullable)
+  #
+  # Análoga ao TURNO do operador (changelog 004), porém OPCIONAL:
+  #   'M' = Matutino, 'V' = Vespertino, NULL = não definido.
+  # O CHECK aceita NULL.
+  # ============================================================
+  - changeSet:
+      id: 023-tecnico-turno
+      author: douglas.antunes
+      comment: "Adiciona coluna TURNO (nullable) em PES_TECNICO (M=Matutino, V=Vespertino)"
+      changes:
+        - addColumn:
+            tableName: PES_TECNICO
+            columns:
+              - column:
+                  name: TURNO
+                  type: VARCHAR2(1)
+        - sql:
+            sql: "ALTER TABLE PES_TECNICO ADD CONSTRAINT CK_TECNICO_TURNO CHECK (TURNO IN ('M', 'V'))"

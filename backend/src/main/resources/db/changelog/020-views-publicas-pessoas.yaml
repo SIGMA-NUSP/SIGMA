@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # ============================================================
+  # 020 — Views públicas de pessoas (Metabase)
+  #
+  # VW_OPERADOR_PUBLICO (+EMAIL), VW_TECNICO_PUBLICO e VW_ADMIN_PUBLICO,
+  # com NOME_COMPLETO + EMAIL, + GRANT SELECT para NUSP_REPORTS.
+  # Suporta os dashboards de Gestão de Pessoas no Metabase.
+  # ============================================================
+  - changeSet:
+      id: 020-views-publicas-pessoas
+      author: douglas.antunes
+      comment: "Cria/atualiza VW_OPERADOR_PUBLICO(+EMAIL), VW_TECNICO_PUBLICO, VW_ADMIN_PUBLICO + GRANT para NUSP_REPORTS"
+      changes:
+        - sqlFile:
+            path: db/changelog/020-views-publicas-pessoas.sql
+            splitStatements: true
+            stripComments: true

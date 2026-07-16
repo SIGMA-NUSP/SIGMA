@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # ============================================================
+  # 030 — Drop de IX_OPR_REGAUDIO_DATA (Q10) — prefixo-redundante com
+  # IX_OPR_REGAUDIO_DATA_SALA. Rollback = recria o índice antigo.
+  # ============================================================
+  - changeSet:
+      id: 030-drop-ix-regaudio-data
+      author: douglas.antunes
+      comment: "Q10: drop de IX_OPR_REGAUDIO_DATA (prefixo-redundante com IX_OPR_REGAUDIO_DATA_SALA)"
+      changes:
+        - sqlFile:
+            path: db/changelog/030-drop-ix-regaudio-data.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: CREATE INDEX IX_OPR_REGAUDIO_DATA ON OPR_REGISTRO_AUDIO (DATA)

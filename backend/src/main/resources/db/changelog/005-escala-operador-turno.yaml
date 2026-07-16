@@ -1,0 +1,37 @@
+databaseChangeLog:
+  # ============================================================
+  # 005 — Coluna TURNO em OPR_ESCALA_OPERADOR
+  #
+  # Registra qual era o turno do operador no momento em que a
+  # escala foi salva. Usado pelo algoritmo de rodízio para detectar
+  # trocas de turno entre semanas (a "vaga" rotaciona, não a pessoa).
+  # 'M' = Matutino, 'V' = Vespertino.
+  # ============================================================
+  - changeSet:
+      id: 005-escala-operador-turno
+      author: douglas.antunes
+      comment: "Adiciona coluna TURNO em OPR_ESCALA_OPERADOR"
+      changes:
+        - addColumn:
+            tableName: OPR_ESCALA_OPERADOR
+            columns:
+              - column:
+                  name: TURNO
+                  type: VARCHAR2(1)
+                  defaultValue: M
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: "ALTER TABLE OPR_ESCALA_OPERADOR ADD CONSTRAINT CK_ESCALA_OP_TURNO CHECK (TURNO IN ('M', 'V'))"
+
+  # Backfill: para escalas já cadastradas, copiar TURNO atual do operador
+  - changeSet:
+      id: 005-escala-operador-turno-backfill
+      author: douglas.antunes
+      comment: "Backfill TURNO em OPR_ESCALA_OPERADOR usando o turno atual do operador"
+      changes:
+        - sql:
+            sql: |-
+              UPDATE OPR_ESCALA_OPERADOR eo
+              SET TURNO = (SELECT o.TURNO FROM PES_OPERADOR o WHERE o.ID = eo.OPERADOR_ID)
+              WHERE EXISTS (SELECT 1 FROM PES_OPERADOR o WHERE o.ID = eo.OPERADOR_ID)

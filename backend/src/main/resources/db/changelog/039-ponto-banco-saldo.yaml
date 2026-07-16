@@ -1,0 +1,19 @@
+databaseChangeLog:
+  # ============================================================
+  # 039 — Ponto e Banco de Horas: PNT_BANCO_SALDO
+  #
+  # Saldo do banco por pessoa: âncora oficial (PDF publicado mais
+  # recente) + cache do saldo corrente (handoff §3.1, Q4/Q5). [E1]
+  # ============================================================
+  - changeSet:
+      id: 039-ponto-banco-saldo
+      author: douglas.antunes
+      comment: "Cria PNT_BANCO_SALDO (âncora oficial + cache do saldo do banco de horas, 1 linha/pessoa)"
+      changes:
+        - sqlFile:
+            path: db/changelog/039-ponto-banco-saldo.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "DROP TABLE PNT_BANCO_SALDO"

@@ -1,0 +1,20 @@
+databaseChangeLog:
+  # ============================================================
+  # 040 — Ponto e Banco de Horas: PNT_REGISTRO_MANUAL
+  #
+  # Batidas manuais + fotos de comprovante, 1 linha por (pessoa,
+  # dia). Schema/entidade entram já (Q9); feature fica oculta na
+  # v1 (P3/T-2.1). Horas VARCHAR2(5) 'HH:MM' (Q8). [E1]
+  # ============================================================
+  - changeSet:
+      id: 040-ponto-registro-manual
+      author: douglas.antunes
+      comment: "Cria PNT_REGISTRO_MANUAL (batidas manuais + comprovantes, 1 linha/pessoa-dia; feature oculta na v1)"
+      changes:
+        - sqlFile:
+            path: db/changelog/040-ponto-registro-manual.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "DROP TABLE PNT_REGISTRO_MANUAL"

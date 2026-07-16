@@ -1,0 +1,70 @@
+databaseChangeLog:
+  # ============================================================
+  # 022 — CARGA_HORARIA + HORÁRIO DE TRABALHO (início/fim)
+  #
+  # Adiciona, nas três tabelas de pessoa (operador, técnico e
+  # administrador), os campos:
+  #   CARGA_HORARIA           NUMBER(3)    -> 30 ou 40 (NULL permitido)
+  #   HORARIO_TRABALHO_INICIO VARCHAR2(5)  -> 'HH:MM'  (NULL permitido)
+  #   HORARIO_TRABALHO_FIM    VARCHAR2(5)  -> 'HH:MM'  (NULL permitido)
+  # Todos opcionais. O CHECK em CARGA_HORARIA aceita NULL.
+  # ============================================================
+  - changeSet:
+      id: 022-carga-horario-operador
+      author: douglas.antunes
+      comment: "Carga horária + horário de trabalho em PES_OPERADOR"
+      changes:
+        - addColumn:
+            tableName: PES_OPERADOR
+            columns:
+              - column:
+                  name: CARGA_HORARIA
+                  type: NUMBER(3)
+              - column:
+                  name: HORARIO_TRABALHO_INICIO
+                  type: VARCHAR2(5)
+              - column:
+                  name: HORARIO_TRABALHO_FIM
+                  type: VARCHAR2(5)
+        - sql:
+            sql: "ALTER TABLE PES_OPERADOR ADD CONSTRAINT CK_OPERADOR_CARGA CHECK (CARGA_HORARIA IN (30, 40))"
+
+  - changeSet:
+      id: 022-carga-horario-tecnico
+      author: douglas.antunes
+      comment: "Carga horária + horário de trabalho em PES_TECNICO"
+      changes:
+        - addColumn:
+            tableName: PES_TECNICO
+            columns:
+              - column:
+                  name: CARGA_HORARIA
+                  type: NUMBER(3)
+              - column:
+                  name: HORARIO_TRABALHO_INICIO
+                  type: VARCHAR2(5)
+              - column:
+                  name: HORARIO_TRABALHO_FIM
+                  type: VARCHAR2(5)
+        - sql:
+            sql: "ALTER TABLE PES_TECNICO ADD CONSTRAINT CK_TECNICO_CARGA CHECK (CARGA_HORARIA IN (30, 40))"
+
+  - changeSet:
+      id: 022-carga-horario-admin
+      author: douglas.antunes
+      comment: "Carga horária + horário de trabalho em PES_ADMINISTRADOR"
+      changes:
+        - addColumn:
+            tableName: PES_ADMINISTRADOR
+            columns:
+              - column:
+                  name: CARGA_HORARIA
+                  type: NUMBER(3)
+              - column:
+                  name: HORARIO_TRABALHO_INICIO
+                  type: VARCHAR2(5)
+              - column:
+                  name: HORARIO_TRABALHO_FIM
+                  type: VARCHAR2(5)
+        - sql:
+            sql: "ALTER TABLE PES_ADMINISTRADOR ADD CONSTRAINT CK_ADMIN_CARGA CHECK (CARGA_HORARIA IN (30, 40))"

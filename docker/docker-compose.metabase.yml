@@ -1,0 +1,48 @@
+# =============================================================
+# Metabase (BI / análise de dados)
+#
+# ⚠️  ATENÇÃO: INSTÂNCIA ÚNICA COMPARTILHADA ENTRE PROD E HOMOLOG
+# Este compose NÃO deve ser subido no ambiente de homologação.
+# Há uma única instância rodando, na VPS, no diretório de produção:
+#   /srv/senado-nusp-java/docker/  (host: 72.61.32.172)
+# Os dois ambientes (sistema de prod e de homolog) consultam essa mesma
+# instância via https://bi.senado-nusp.cloud. As bases Oracle de prod e
+# homolog são cadastradas como "Databases" separadas dentro do Metabase.
+#
+# Independente do sistema NUSP — sobe/desce separadamente.
+#
+# Uso (APENAS em produção):
+#   docker compose -f docker-compose.metabase.yml -p nusp-metabase up -d
+#   docker compose -f docker-compose.metabase.yml -p nusp-metabase logs -f
+#   docker compose -f docker-compose.metabase.yml -p nusp-metabase down
+#
+# Dados persistentes:
+#   ./metabase-data/   ← banco H2 com dashboards, perguntas, usuários (bind, NÃO versionado)
+#
+# Acesso externo: https://bi.senado-nusp.cloud (Nginx host → 127.0.0.1:3000)
+# =============================================================
+
+services:
+  metabase:
+    build:
+      context: .
+      dockerfile: Dockerfile.metabase
+    image: nusp-metabase:0.57.3
+    container_name: nusp-metabase
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      MB_DB_FILE: /metabase-data/metabase.db
+      MB_SITE_URL: https://bi.senado-nusp.cloud
+      MB_JETTY_HOST: 0.0.0.0
+      MB_JETTY_PORT: "3000"
+      JAVA_TOOL_OPTIONS: "-Xmx1500m"
+    volumes:
+      - ./metabase-data:/metabase-data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s

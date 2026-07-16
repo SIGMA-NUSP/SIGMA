@@ -1,0 +1,23 @@
+databaseChangeLog:
+  # ============================================================
+  # 003 — Coluna PARTICIPA_ESCALA em PES_OPERADOR
+  #
+  # Flag boolean indicando se o operador participa da escala
+  # semanal de plenários numerados (rodízio). Quando desmarcado,
+  # o operador não aparece no cadastro/edição de escalas nem
+  # no algoritmo de geração automática.
+  # ============================================================
+  - changeSet:
+      id: 003-operador-participa-escala
+      author: douglas.antunes
+      comment: "Adiciona flag PARTICIPA_ESCALA em PES_OPERADOR"
+      changes:
+        - addColumn:
+            tableName: PES_OPERADOR
+            columns:
+              - column:
+                  name: PARTICIPA_ESCALA
+                  type: NUMBER(1)
+                  defaultValueNumeric: 1
+                  constraints:
+                    nullable: false

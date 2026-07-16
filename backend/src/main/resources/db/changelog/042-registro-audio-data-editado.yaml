@@ -1,0 +1,34 @@
+databaseChangeLog:
+  # ============================================================
+  # 042 — OPR_REGISTRO_AUDIO.DATA_EDITADO
+  #
+  # Flag "a data desta sessão foi editada" (sticky), exigida pela
+  # entidade RegistroOperacaoAudio e ausente do baseline e de
+  # todos os changelogs até o 041 — a coluna só existia porque
+  # foi criada manualmente em homolog/produção (achado F5).
+  #
+  # A precondition NOT columnExists com onFail MARK_RAN cobre os
+  # dois cenários: em homolog/produção (coluna já existe à mão) o
+  # changeset é apenas marcado como executado, sem tocar na
+  # tabela; em banco novo — montado pelo oracle-init ou só pelo
+  # Liquibase (Testcontainers) — o ALTER TABLE roda e é o que faz
+  # o ddl-auto: validate passar.
+  # ============================================================
+  - changeSet:
+      id: 042-registro-audio-data-editado
+      author: douglas.antunes
+      comment: "Adiciona OPR_REGISTRO_AUDIO.DATA_EDITADO (NUMBER(1) DEFAULT 0 NOT NULL) onde ela ainda não existir"
+      preConditions:
+        - onFail: MARK_RAN
+        - not:
+            - columnExists:
+                tableName: OPR_REGISTRO_AUDIO
+                columnName: DATA_EDITADO
+      changes:
+        - sqlFile:
+            path: db/changelog/042-registro-audio-data-editado.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "ALTER TABLE OPR_REGISTRO_AUDIO DROP COLUMN DATA_EDITADO"

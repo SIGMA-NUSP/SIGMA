@@ -1,0 +1,24 @@
+databaseChangeLog:
+  # ============================================================
+  # Baseline — Schema inicial do NUSP (19 tabelas)
+  #
+  # Este changeset registra o schema Oracle que já existia antes
+  # da adoção do Liquibase. Em bancos existentes, a precondition
+  # detecta que a tabela CAD_SALA já existe e marca como MARK_RAN
+  # (executado) sem alterar nada. Em bancos novos (fresh install),
+  # executa o DDL completo.
+  # ============================================================
+  - changeSet:
+      id: 001-baseline-schema
+      author: douglas.antunes
+      comment: "Schema inicial NUSP — 19 tabelas migradas de PostgreSQL para Oracle 21c XE"
+      preConditions:
+        - onFail: MARK_RAN
+        - not:
+            - tableExists:
+                tableName: CAD_SALA
+      changes:
+        - sqlFile:
+            path: db/changelog/001-baseline-schema.sql
+            splitStatements: true
+            stripComments: true

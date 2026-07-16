@@ -1,0 +1,122 @@
+# =============================================================
+# Senado NUSP — Homologação
+# Ambiente isolado: containers, volumes e rede próprios.
+#
+# Uso:
+#   cd /srv/senado-nusp-java-homolog/docker
+#   docker compose -f docker-compose.homolog.yml -p nusp-homolog up -d
+#   docker compose -f docker-compose.homolog.yml -p nusp-homolog build
+#   docker compose -f docker-compose.homolog.yml -p nusp-homolog down
+#
+# Diferenças em relação à produção (docker-compose.yml):
+#   - container_name: *-homolog
+#   - Oracle na porta 1522 (prod: 1521)
+#   - Frontend na porta 8081 (prod: 8080)
+#   - APP_BASE_URL: java.senado-nusp.cloud
+#   - Lê .env.homolog (CORS para java.senado-nusp.cloud)
+# =============================================================
+
+services:
+  # --- Oracle 21c XE ---
+  oracle:
+    image: gvenzl/oracle-xe:21-slim
+    container_name: nusp-oracle-homolog
+    restart: unless-stopped
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_PASSWORD}
+      APP_USER: ${ORACLE_APP_USER}
+      APP_USER_PASSWORD: ${ORACLE_APP_PASSWORD}
+      # Fuso do container em Brasília (F7/F55, C17): declara o invariante de fuso no
+      # runtime — antes era UTC herdado da imagem, sem declaração. Backend E Oracle
+      # juntos, nunca só um: SYSTIMESTAMP/SYSDATE do Oracle e o wall-clock que a JVM
+      # grava têm de andar no MESMO fuso, senão os dois relógios divergem em 3h.
+      TZ: America/Sao_Paulo
+    ports:
+      - "1522:1521"
+    volumes:
+      - oracle-xe-java-data:/opt/oracle/oradata
+      - ./oracle-init:/container-entrypoint-initdb.d
+      # Usuários de teste (admin/admin, operador/1234) SÓ em homologação/local — o
+      # compose de produção monta apenas ./oracle-init, sem esta linha (achado F22).
+      #
+      # Vai no diretório de init LEGADO da imagem, que o entrypoint executa logo
+      # depois do principal (container-entrypoint.sh:426-428) — e não como bind de
+      # ARQUIVO dentro de ./oracle-init: montar um arquivo por cima do bind da pasta
+      # faz o Docker criar o mountpoint no host, ou seja, um 99-seed-users-dev.sql
+      # vazio e com dono root DENTRO de docker/oracle-init/ — que é justamente a
+      # pasta que produção monta (e, com a pasta em :ro, o container nem sobe).
+      - ./oracle-init-dev:/docker-entrypoint-initdb.d:ro
+    # Ver docker-compose.yml: o healthcheck anterior saía 0 sem sequer conectar (o
+    # "<<<" era argumento literal do sqlplus — achado F23). Este consulta o banco de
+    # fato; usar CAD_SALA faz o healthy cobrir também o fim do oracle-init.
+    healthcheck:
+      test: ["CMD-SHELL", "printf 'SET HEADING OFF FEEDBACK OFF PAGESIZE 0;\\nSELECT COUNT(*) FROM CAD_SALA;\\n' | sqlplus -s -L ${ORACLE_APP_USER}/${ORACLE_APP_PASSWORD}@XEPDB1 | grep -qE '^[[:space:]]*[1-9][0-9]*[[:space:]]*$$'"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  # --- Backend (Spring Boot / Java 17) ---
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: nusp-backend-homolog
+    restart: unless-stopped
+    depends_on:
+      oracle:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8003"
+      # Fuso da JVM em Brasília (F7/F55, C17): a zona default da JVM decide o "hoje"/"agora"
+      # (LocalDate.now, prazo de retificação, mês corrente) E o wall-clock gravado nas 9 colunas
+      # Instant (a property preferred_instant_jdbc_type=TIMESTAMP tornou a escrita dependente do
+      # fuso — F14/F55). Tem de casar com o TZ do Oracle acima.
+      TZ: America/Sao_Paulo
+      SPRING_DATASOURCE_URL: jdbc:oracle:thin:@//oracle:1521/XEPDB1
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+      FILES_DIR: /app/files
+      FILES_URL_PREFIX: /files/
+      SPRING_MAIL_HOST: smtp.hostinger.com
+      SPRING_MAIL_PORT: "465"
+      SPRING_MAIL_USERNAME: ${SPRING_MAIL_USERNAME}
+      SPRING_MAIL_PASSWORD: ${SPRING_MAIL_PASSWORD}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET}
+      ADMIN_SUPERVISOR_USERNAME: ${ADMIN_SUPERVISOR_USERNAME}
+      ADMIN_CHEFE_USERNAME: ${ADMIN_CHEFE_USERNAME}
+      ADMIN_MASTER_USERNAME: ${ADMIN_MASTER_USERNAME}
+      APP_BASE_URL: https://java.senado-nusp.cloud
+      APP_ENV_LABEL: ${APP_ENV_LABEL:-}
+      GOOGLE_SHEETS_CREDENTIALS_PATH: /app/google-sheets-key.json
+      GOOGLE_SHEETS_SPREADSHEET_ID: ${GOOGLE_SHEETS_SPREADSHEET_ID}
+      GOOGLE_SHEETS_REFRESH_INTERVAL_SEC: ${GOOGLE_SHEETS_REFRESH_INTERVAL_SEC:-60}
+      ALERTS_SYNC_TO: ${ALERTS_SYNC_TO:-}
+      ALERTS_SHEET_STALE_MIN: ${ALERTS_SHEET_STALE_MIN:-30}
+      ALERTS_REMINDER_HOURS: ${ALERTS_REMINDER_HOURS:-24}
+      METABASE_URL: ${METABASE_URL:-https://bi.senado-nusp.cloud}
+      METABASE_EMBEDDING_SECRET_KEY: ${METABASE_EMBEDDING_SECRET_KEY:-}
+    volumes:
+      - nusp-files:/app/files
+      - /var/lib/senado_nusp_java/google-sheets-key.json:/app/google-sheets-key.json:ro
+
+  # --- Frontend (Angular + Nginx) ---
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    container_name: nusp-frontend-homolog
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      # Feature flags (runtime): lista separada por vírgula das features LIGADAS,
+      # definida no docker/.env local (homolog liga tudo). Ausente/vazia = tudo off.
+      FEATURES_ENABLED: "${FEATURES_ENABLED:-}"
+    ports:
+      - "8081:80"
+
+volumes:
+  oracle-xe-java-data:
+  nusp-files:

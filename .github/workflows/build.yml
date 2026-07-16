@@ -1,0 +1,111 @@
+# ==============================================================
+# Senado NUSP — CI Pipeline
+# Compila backend (Java 17/Maven) e frontend (Node 22/Angular)
+# Roda a cada push e pull request na branch main
+# ==============================================================
+
+name: Build & Test
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ────────────────────────────────────────────
+  # Backend: Java 17 + Maven
+  # ────────────────────────────────────────────
+  backend:
+    name: Backend (Java 17)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Java 17
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      # D8 (T25): NÃO há step `mvn test` separado — `mvn package -q` já dispara o
+      # surefire (494 testes unitários); a falha de qualquer teste quebra o job.
+      # Um step extra só duplicaria a compilação sem sinal novo. A suíte de
+      # integração (*IT/failsafe) NÃO roda aqui — ver "Política de integração" no fim.
+      - name: Compilar e rodar testes
+        run: mvn package -q
+
+  # ────────────────────────────────────────────
+  # Frontend: Node 22 + Angular
+  # ────────────────────────────────────────────
+  frontend:
+    name: Frontend (Angular)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar dependências
+        run: npm ci --quiet
+
+      # D9 (T2/T25): Vitest + jsdom — SEM `--browsers` (não requer browser no runner).
+      # Entrou junto com o 1º spec (T2), na ordem exigida (o step antes do spec
+      # quebraria o build por zero specs). Hoje: 492 testes / 29 arquivos.
+      - name: Rodar testes
+        run: npm test -- --watch=false
+
+      - name: Build de produção
+        run: npx ng build --configuration production
+
+# ==============================================================
+# POLÍTICA DE TESTES DE INTEGRAÇÃO (backend *IT / Oracle real) — T25 / D10
+# --------------------------------------------------------------
+# A suíte de integração (failsafe; classes *IT contra Oracle XE real, schema
+# NUSP_TEST) NÃO roda neste workflow — por dois bloqueios independentes hoje:
+#   (1) o runner hosted do GitHub (ubuntu-latest) não alcança o Oracle de
+#       homologação (host doméstico atrás de NAT, sem Tailscale); e
+#   (2) a alternativa Testcontainers exige montar o schema do zero, e o
+#       baseline do banco-do-zero está DEFASADO (achado F5) — o `ddl-auto:
+#       validate` falha. Enquanto isso, os ITs rodam LOCALMENTE, sob demanda.
+#
+# GATE PRÉ-DEPLOY (verificável e OBRIGATÓRIO):
+#   bash docker/test-db/recriar-nusp-test.sh && cd backend && mvn verify -DskipITs=false -q
+#   → NENHUM deploy em produção sem essa execução VERDE na MESMA DATA.
+#   Baseline local sob demanda: failsafe 150 IT (surefire 494 unitários já no CI).
+#
+# COMO HABILITAR A IT NO ACTIONS — dois gatilhos:
+#   (a) PRINCIPAL — corrigido o F5 (baseline do banco-do-zero): novo job
+#       `integration` com `schedule` semanal + `workflow_dispatch`, subindo
+#       Testcontainers `gvenzl/oracle-xe:21-slim` (pull ~2,6 GB + startup
+#       ~1–2 min por run; aceitável em cadência semanal, caro em todo push).
+#   (b) INTERMEDIÁRIO — opção documentada para decisão do Douglas, NÃO é deste
+#       estágio nem se implementa aqui: runner SELF-HOSTED do GitHub Actions
+#       instalado no próprio lenovo-arch (job `schedule` semanal +
+#       `workflow_dispatch`, label dedicada), que alcança localhost:1522 e
+#       viabiliza a IT no Actions ANTES do F5. Caveats OBRIGATÓRIOS: exige
+#       repositório PRIVADO (runner self-hosted em repo público é vetado por
+#       segurança) e consome RAM/manutenção num host que roda o Home Assistant
+#       crítico (tempo real, casa do Douglas).
+#
+# COBERTURA (informativa, SEM gate/threshold):
+#   backend  → cd backend && mvn test -Pcoverage   (JaCoCo → target/site/jacoco/index.html)
+#   frontend → npm run test:coverage                (@vitest/coverage-v8)
+# ==============================================================

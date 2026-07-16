@@ -1,0 +1,63 @@
+-- ============================================================
+-- 021 — Avisos: administrador como destinatário
+--
+-- Necessário para o aviso PESSOAL automático na publicação de folha
+-- de ponto: parte das pessoas com folha está em PES_ADMINISTRADOR
+-- (terceirizados com cargo especial — ver changelog 019). O modelo de
+-- avisos (016/017) só endereçava operador/técnico; aqui ampliamos:
+--
+--   FRM_AVISO_ALVO    + coluna ADMIN_ID + tipos ADMIN / TODOS_ADMIN
+--   FRM_AVISO_CIENCIA + coluna ADMIN_ID + ciência de administrador
+--
+-- 'TODOS' continua significando todos os operadores e técnicos (NÃO
+-- inclui administradores); o coletivo de admins é o novo 'TODOS_ADMIN'.
+-- ============================================================
+
+
+-- ── FRM_AVISO_ALVO: admin como público ──
+ALTER TABLE FRM_AVISO_ALVO ADD (ADMIN_ID VARCHAR2(36));
+
+-- Amplia o domínio de ALVO_TIPO com ADMIN e TODOS_ADMIN.
+ALTER TABLE FRM_AVISO_ALVO DROP CONSTRAINT CK_FRM_AVISO_ALVO_TIPO;
+ALTER TABLE FRM_AVISO_ALVO ADD CONSTRAINT CK_FRM_AVISO_ALVO_TIPO
+    CHECK (ALVO_TIPO IN ('SALA','OPERADOR','TECNICO','ADMIN','TODOS_OPERADORES','TODOS_TECNICOS','TODOS_ADMIN','TODOS'));
+
+-- Coerência tipo↔referência: só a FK do tipo é preenchida; coletivos sem FK.
+-- (Linhas existentes têm ADMIN_ID NULL e seguem válidas.)
+ALTER TABLE FRM_AVISO_ALVO DROP CONSTRAINT CK_FRM_AVISO_ALVO_REF;
+ALTER TABLE FRM_AVISO_ALVO ADD CONSTRAINT CK_FRM_AVISO_ALVO_REF CHECK (
+    (ALVO_TIPO = 'SALA'     AND SALA_ID     IS NOT NULL AND OPERADOR_ID IS NULL AND TECNICO_ID IS NULL AND ADMIN_ID IS NULL)
+    OR (ALVO_TIPO = 'OPERADOR' AND OPERADOR_ID IS NOT NULL AND SALA_ID IS NULL AND TECNICO_ID IS NULL AND ADMIN_ID IS NULL)
+    OR (ALVO_TIPO = 'TECNICO'  AND TECNICO_ID  IS NOT NULL AND SALA_ID IS NULL AND OPERADOR_ID IS NULL AND ADMIN_ID IS NULL)
+    OR (ALVO_TIPO = 'ADMIN'    AND ADMIN_ID    IS NOT NULL AND SALA_ID IS NULL AND OPERADOR_ID IS NULL AND TECNICO_ID IS NULL)
+    OR (ALVO_TIPO IN ('TODOS_OPERADORES','TODOS_TECNICOS','TODOS_ADMIN','TODOS') AND SALA_ID IS NULL AND OPERADOR_ID IS NULL AND TECNICO_ID IS NULL AND ADMIN_ID IS NULL)
+);
+
+ALTER TABLE FRM_AVISO_ALVO
+    ADD CONSTRAINT FK_FRM_AVISO_ALVO_ADMIN FOREIGN KEY (ADMIN_ID) REFERENCES PES_ADMINISTRADOR(ID);
+
+CREATE INDEX IDX_FRM_AVISO_ALVO_ADMIN ON FRM_AVISO_ALVO (ADMIN_ID);
+
+
+-- ── FRM_AVISO_CIENCIA: ciência de administrador ──
+ALTER TABLE FRM_AVISO_CIENCIA ADD (ADMIN_ID VARCHAR2(36));
+
+-- Exatamente UMA das três FKs de pessoa preenchida (operador OU técnico OU admin).
+ALTER TABLE FRM_AVISO_CIENCIA DROP CONSTRAINT CK_FRM_AVISO_CIE_PESSOA;
+ALTER TABLE FRM_AVISO_CIENCIA ADD CONSTRAINT CK_FRM_AVISO_CIE_PESSOA CHECK (
+    (CASE WHEN OPERADOR_ID IS NOT NULL THEN 1 ELSE 0 END
+     + CASE WHEN TECNICO_ID IS NOT NULL THEN 1 ELSE 0 END
+     + CASE WHEN ADMIN_ID   IS NOT NULL THEN 1 ELSE 0 END) = 1
+);
+
+ALTER TABLE FRM_AVISO_CIENCIA
+    ADD CONSTRAINT FK_FRM_AVISO_CIE_ADMIN FOREIGN KEY (ADMIN_ID) REFERENCES PES_ADMINISTRADOR(ID);
+
+-- "Só a 1ª ciência conta" para administrador: índice único parcial por
+-- (cadastro, sala, admin). NVL cobre tipos sem sala (ex.: PESSOAL) →
+-- recai em (cadastro, admin), espelhando UK_FRM_AVISO_CIE_OP/_TEC (017).
+CREATE UNIQUE INDEX UK_FRM_AVISO_CIE_ADMIN
+    ON FRM_AVISO_CIENCIA (CASE WHEN ADMIN_ID IS NOT NULL
+        THEN CADASTRO_ID || '|' || NVL(TO_CHAR(SALA_ID), '-') || '|' || ADMIN_ID END);
+
+CREATE INDEX IDX_FRM_AVISO_CIE_ADMIN ON FRM_AVISO_CIENCIA (ADMIN_ID);

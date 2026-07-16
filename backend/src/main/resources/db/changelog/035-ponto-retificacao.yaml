@@ -1,0 +1,19 @@
+databaseChangeLog:
+  # ============================================================
+  # 035 — Ponto e Banco de Horas: PNT_RETIFICACAO
+  #
+  # Retificação de folha de ponto: 1 linha por (pessoa, dia),
+  # vinculada à página da folha oficial publicada (Q2). [E1]
+  # ============================================================
+  - changeSet:
+      id: 035-ponto-retificacao
+      author: douglas.antunes
+      comment: "Cria PNT_RETIFICACAO (retificação de folha por pessoa-dia, vinculada à folha publicada)"
+      changes:
+        - sqlFile:
+            path: db/changelog/035-ponto-retificacao.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "DROP TABLE PNT_RETIFICACAO"

@@ -1,0 +1,19 @@
+databaseChangeLog:
+  # ============================================================
+  # 026 — Índice composto (CHECKLIST_ID, STATUS) em FRM_CHECKLIST_RESPOSTA (Q8)
+  #
+  # Criado ANTES dos drops 027/028 (criar substituto antes de dropar).
+  # Rollback = drop do composto.
+  # ============================================================
+  - changeSet:
+      id: 026-ix-resp-checklist-status
+      author: douglas.antunes
+      comment: "Q8: índice composto (CHECKLIST_ID, STATUS) em FRM_CHECKLIST_RESPOSTA"
+      changes:
+        - sqlFile:
+            path: db/changelog/026-ix-resp-checklist-status.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: DROP INDEX IX_FRM_RESP_CHECKLIST_STATUS

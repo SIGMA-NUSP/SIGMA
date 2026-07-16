@@ -1,0 +1,36 @@
+databaseChangeLog:
+  # ============================================================
+  # 024 — Perfil do ADMINISTRADOR: foto, turno (M/V/I) e
+  #       flag "servidor público"
+  #
+  # Adiciona em PES_ADMINISTRADOR:
+  #   FOTO_URL          VARCHAR2(500)  -> foto de perfil (NULL permitido)
+  #   TURNO             VARCHAR2(1)    -> 'M'/'V'/'I' (NULL permitido)
+  #                                       (admin tem 'I' = Integral, além de M/V)
+  #   SERVIDOR_PUBLICO  NUMBER(1)      -> 1=sim / 0=não, NOT NULL, default 1
+  #
+  # Quando SERVIDOR_PUBLICO=1, turno/carga/horário não se aplicam
+  # (a aplicação grava NULL nesses campos).
+  # ============================================================
+  - changeSet:
+      id: 024-admin-perfil
+      author: douglas.antunes
+      comment: "FOTO_URL, TURNO (M/V/I) e SERVIDOR_PUBLICO em PES_ADMINISTRADOR"
+      changes:
+        - addColumn:
+            tableName: PES_ADMINISTRADOR
+            columns:
+              - column:
+                  name: FOTO_URL
+                  type: VARCHAR2(500)
+              - column:
+                  name: TURNO
+                  type: VARCHAR2(1)
+              - column:
+                  name: SERVIDOR_PUBLICO
+                  type: NUMBER(1)
+                  defaultValueNumeric: 1
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: "ALTER TABLE PES_ADMINISTRADOR ADD CONSTRAINT CK_ADMIN_TURNO CHECK (TURNO IN ('M', 'V', 'I'))"

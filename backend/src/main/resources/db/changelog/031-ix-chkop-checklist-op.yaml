@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # ============================================================
+  # 031 — Composto NÃO-ÚNICO (CHECKLIST_ID, OPERADOR_ID) em FRM_CHECKLIST_OPERADOR (Q11)
+  # Criado ANTES do drop 032. Rollback = drop do composto.
+  # ============================================================
+  - changeSet:
+      id: 031-ix-chkop-checklist-op
+      author: douglas.antunes
+      comment: "Q11: composto NAO-unico (CHECKLIST_ID, OPERADOR_ID) em FRM_CHECKLIST_OPERADOR"
+      changes:
+        - sqlFile:
+            path: db/changelog/031-ix-chkop-checklist-op.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: DROP INDEX IX_CHKOP_CHECKLIST_OP

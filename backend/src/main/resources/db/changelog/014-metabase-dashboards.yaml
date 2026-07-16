@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # ============================================================
+  # 014 — INT_METABASE_DASHBOARD + DROP INT_METABASE_USER
+  #
+  # Remove o SSO caseiro (link -> bi.senado-nusp.cloud) e cria
+  # o catálogo de dashboards embutidos via static embedding,
+  # exibidos dentro do próprio sistema em /admin/analise.
+  # ============================================================
+  - changeSet:
+      id: 014-metabase-dashboards
+      author: douglas.antunes
+      comment: "Substitui SSO Metabase por catálogo de dashboards embutidos"
+      changes:
+        - sqlFile:
+            path: db/changelog/014-metabase-dashboards.sql
+            splitStatements: true
+            stripComments: true

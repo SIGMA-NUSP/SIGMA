@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # ============================================================
+  # 033 — Composto NÃO-ÚNICO (ENTRADA_ID, OPERADOR_ID) em OPR_ENTRADA_OPERADOR (Q11)
+  # Criado ANTES do drop 034. IX_ENTOP_OPERADOR mantido. Rollback = drop do composto.
+  # ============================================================
+  - changeSet:
+      id: 033-ix-entop-entrada-op
+      author: douglas.antunes
+      comment: "Q11: composto NAO-unico (ENTRADA_ID, OPERADOR_ID) em OPR_ENTRADA_OPERADOR"
+      changes:
+        - sqlFile:
+            path: db/changelog/033-ix-entop-entrada-op.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: DROP INDEX IX_ENTOP_ENTRADA_OP

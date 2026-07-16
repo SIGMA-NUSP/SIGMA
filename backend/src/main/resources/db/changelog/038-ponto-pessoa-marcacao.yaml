@@ -1,0 +1,19 @@
+databaseChangeLog:
+  # ============================================================
+  # 038 — Ponto e Banco de Horas: PNT_PESSOA_MARCACAO
+  #
+  # Marcação por pessoa-dia (A_DISPOSICAO/ATESTADO/FERIAS/RECESSO/
+  # LICENCA_MEDICA), UK (pessoa, dia) (Q7/F#4). [E1]
+  # ============================================================
+  - changeSet:
+      id: 038-ponto-pessoa-marcacao
+      author: douglas.antunes
+      comment: "Cria PNT_PESSOA_MARCACAO (marcação por pessoa-dia: à disposição/atestado/férias/recesso/lic. médica)"
+      changes:
+        - sqlFile:
+            path: db/changelog/038-ponto-pessoa-marcacao.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "DROP TABLE PNT_PESSOA_MARCACAO"

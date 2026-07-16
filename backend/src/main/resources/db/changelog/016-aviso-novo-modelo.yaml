@@ -1,0 +1,19 @@
+databaseChangeLog:
+  # ============================================================
+  # 016 — Novo sistema de avisos (genérico, padronizado)
+  #
+  # Substitui FRM_AVISO_SALA + FRM_AVISO_SALA_CIENCIA por 4 tabelas:
+  # FRM_AVISO_CADASTRO, FRM_AVISO_MENSAGEM, FRM_AVISO_ALVO e
+  # FRM_AVISO_CIENCIA. Suporta múltiplos tipos, múltiplas mensagens,
+  # múltiplos alvos (sala/operador/técnico/coletivos) e ciência por
+  # operador ou técnico. Sem migração de dados (só havia 1 teste).
+  # ============================================================
+  - changeSet:
+      id: 016-aviso-novo-modelo
+      author: douglas.antunes
+      comment: "Dropa FRM_AVISO_SALA/_CIENCIA e cria FRM_AVISO_CADASTRO, _MENSAGEM, _ALVO, _CIENCIA + SEQ_FRM_AVISO_CADASTRO"
+      changes:
+        - sqlFile:
+            path: db/changelog/016-aviso-novo-modelo.sql
+            splitStatements: true
+            stripComments: true

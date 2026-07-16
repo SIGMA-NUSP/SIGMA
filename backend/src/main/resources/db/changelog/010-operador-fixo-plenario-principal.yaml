@@ -1,0 +1,16 @@
+databaseChangeLog:
+  # ============================================================
+  # 010 — PLENARIO_PRINCIPAL_FIXO
+  #
+  # Adiciona a flag PLENARIO_PRINCIPAL_FIXO em PES_OPERADOR e
+  # marca os 7 operadores fixos do Plenário Principal.
+  # ============================================================
+  - changeSet:
+      id: 010-operador-fixo-plenario-principal
+      author: douglas.antunes
+      comment: "Adiciona PLENARIO_PRINCIPAL_FIXO em PES_OPERADOR e marca os 7 fixos"
+      changes:
+        - sqlFile:
+            path: db/changelog/010-operador-fixo-plenario-principal.sql
+            splitStatements: true
+            stripComments: true

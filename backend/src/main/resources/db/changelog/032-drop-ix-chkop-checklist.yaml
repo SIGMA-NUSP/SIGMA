@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # ============================================================
+  # 032 — Drop de IX_CHKOP_CHECKLIST (Q11) — redundante com o composto 031.
+  # Rollback = recria o índice antigo (CHECKLIST_ID), idêntico ao baseline.
+  # ============================================================
+  - changeSet:
+      id: 032-drop-ix-chkop-checklist
+      author: douglas.antunes
+      comment: "Q11: drop de IX_CHKOP_CHECKLIST (redundante com o composto 031)"
+      changes:
+        - sqlFile:
+            path: db/changelog/032-drop-ix-chkop-checklist.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: CREATE INDEX IX_CHKOP_CHECKLIST ON FRM_CHECKLIST_OPERADOR (CHECKLIST_ID)

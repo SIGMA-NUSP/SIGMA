@@ -1,0 +1,60 @@
+databaseChangeLog:
+  # ============================================================
+  # 044 — Exclusão de publicações do Ponto (F59)
+  #
+  # Dois changesets, um por objeto:
+  #
+  #   1. PNT_EXCLUSAO_LOG — trilha de auditoria (quem/quando/o quê) da
+  #      exclusão de um lote ou de uma folha.
+  #
+  #   2. FRM_AVISO_CADASTRO.ORIGEM_LOTE_ID — proveniência do aviso PESSOAL
+  #      criado pela publicação de um lote de folhas. É por ela, e SÓ por
+  #      ela, que a exclusão sabe quais avisos são "daquela publicação":
+  #      apagar por autor/tipo/texto levaria junto avisos de outra origem
+  #      (o desfecho de folga do banco de horas, por exemplo).
+  #      Nullable e SEM FK (idioma de PNT_BANCO_SALDO.ANCORA_PAGINA_ID —
+  #      a linha do lote morre na exclusão; a do aviso, não necessariamente).
+  #
+  # ⚠ O módulo de AVISOS está em PRODUÇÃO: a coluna é ADITIVA e nasce NULL
+  # para todo o legado — migração benigna, nada a preencher. Consequência
+  # assumida: aviso criado por uma publicação ANTERIOR a este changeset tem
+  # ORIGEM NULL e sobrevive a uma exclusão (o preview mostra 0 avisos,
+  # honestamente). O módulo de Ponto não está em produção; dado de dev é
+  # descartável.
+  # ============================================================
+  - changeSet:
+      id: 044-ponto-exclusao-log
+      author: douglas.antunes
+      comment: "Cria PNT_EXCLUSAO_LOG (trilha da exclusão de lote/folha de ponto pelo admin master)"
+      changes:
+        - sqlFile:
+            path: db/changelog/044-ponto-exclusao-log.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "DROP TABLE PNT_EXCLUSAO_LOG"
+
+  - changeSet:
+      id: 044-aviso-origem-lote
+      author: douglas.antunes
+      comment: "Adiciona FRM_AVISO_CADASTRO.ORIGEM_LOTE_ID (proveniência do aviso pessoal criado pela publicação de folha)"
+      changes:
+        - addColumn:
+            tableName: FRM_AVISO_CADASTRO
+            columns:
+              - column:
+                  name: ORIGEM_LOTE_ID
+                  type: VARCHAR2(36)
+        # A exclusão pergunta "quais cadastros vieram deste lote?" — é o único acesso por esta coluna.
+        - createIndex:
+            tableName: FRM_AVISO_CADASTRO
+            indexName: IDX_FRM_AVISO_CAD_ORIGEM
+            columns:
+              - column:
+                  name: ORIGEM_LOTE_ID
+      rollback:
+        - sql:
+            sql: "DROP INDEX IDX_FRM_AVISO_CAD_ORIGEM"
+        - sql:
+            sql: "ALTER TABLE FRM_AVISO_CADASTRO DROP COLUMN ORIGEM_LOTE_ID"

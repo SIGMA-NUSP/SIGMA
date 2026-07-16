@@ -1,0 +1,19 @@
+databaseChangeLog:
+  # ============================================================
+  # 007 — Sala "Demais Salas" + coluna NOME_DEMAIS_SALAS
+  #
+  # Cria sala genérica para reuniões em locais avulsos do
+  # Senado e adiciona coluna NOME_DEMAIS_SALAS em
+  # OPR_REGISTRO_AUDIO para armazenar o nome livre digitado
+  # pelo operador no ROA. A coluna é nullable porque só é
+  # preenchida quando a sessão é dessa sala específica.
+  # ============================================================
+  - changeSet:
+      id: 007-demais-salas
+      author: douglas.antunes
+      comment: "Adiciona sala 'Demais Salas' e coluna NOME_DEMAIS_SALAS em OPR_REGISTRO_AUDIO"
+      changes:
+        - sqlFile:
+            path: db/changelog/007-demais-salas.sql
+            splitStatements: true
+            stripComments: true

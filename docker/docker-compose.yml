@@ -1,0 +1,106 @@
+# =============================================================
+# Senado NUSP — Sistema Completo
+# Uso: copiar .env.example para .env, ajustar credenciais,
+#      depois: docker-compose up -d
+# =============================================================
+
+services:
+  # --- Oracle 21c XE ---
+  oracle:
+    image: gvenzl/oracle-xe:21-slim
+    container_name: nusp-oracle
+    restart: unless-stopped
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_PASSWORD}
+      APP_USER: ${ORACLE_APP_USER}
+      APP_USER_PASSWORD: ${ORACLE_APP_PASSWORD}
+      # Fuso do container em Brasília (F7/F55, C17): declara o invariante de fuso no
+      # runtime — antes era UTC herdado da imagem, sem declaração. Backend E Oracle
+      # juntos, nunca só um: SYSTIMESTAMP/SYSDATE do Oracle e o wall-clock que a JVM
+      # grava têm de andar no MESMO fuso, senão os dois relógios divergem em 3h.
+      TZ: America/Sao_Paulo
+    ports:
+      - "1521:1521"
+    volumes:
+      - oracle-xe-java-data:/opt/oracle/oradata
+      - ./oracle-init:/container-entrypoint-initdb.d
+    # O healthcheck anterior era falso-verde: em forma exec (CMD) o "<<<" virava
+    # argumento literal do sqlplus, que imprimia o help e saía 0 — passava até com
+    # senha errada ou serviço inexistente (achado F23), de modo que service_healthy
+    # não esperava banco nenhum. Este roda a query de verdade (CMD-SHELL, por stdin)
+    # e só aceita um número >= 1. Consultar CAD_SALA — e não DUAL — faz o "healthy"
+    # significar também "o oracle-init terminou o schema": as tabelas nascem antes do
+    # seed, então só há sala depois de o 01-schema rodar inteiro. É isso que impede o
+    # backend de achar o schema pela metade e marcar o baseline do Liquibase sobre ele.
+    healthcheck:
+      test: ["CMD-SHELL", "printf 'SET HEADING OFF FEEDBACK OFF PAGESIZE 0;\\nSELECT COUNT(*) FROM CAD_SALA;\\n' | sqlplus -s -L ${ORACLE_APP_USER}/${ORACLE_APP_PASSWORD}@XEPDB1 | grep -qE '^[[:space:]]*[1-9][0-9]*[[:space:]]*$$'"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  # --- Backend (Spring Boot / Java 17) ---
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: nusp-backend
+    restart: unless-stopped
+    depends_on:
+      oracle:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8003"
+      # Fuso da JVM em Brasília (F7/F55, C17): a zona default da JVM decide o "hoje"/"agora"
+      # (LocalDate.now, prazo de retificação, mês corrente) E o wall-clock gravado nas 9 colunas
+      # Instant (a property preferred_instant_jdbc_type=TIMESTAMP tornou a escrita dependente do
+      # fuso — F14/F55). Tem de casar com o TZ do Oracle acima.
+      TZ: America/Sao_Paulo
+      SPRING_DATASOURCE_URL: jdbc:oracle:thin:@//oracle:1521/XEPDB1
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+      FILES_DIR: /app/files
+      FILES_URL_PREFIX: /files/
+      SPRING_MAIL_HOST: smtp.hostinger.com
+      SPRING_MAIL_PORT: "465"
+      SPRING_MAIL_USERNAME: ${SPRING_MAIL_USERNAME}
+      SPRING_MAIL_PASSWORD: ${SPRING_MAIL_PASSWORD}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET}
+      ADMIN_SUPERVISOR_USERNAME: ${ADMIN_SUPERVISOR_USERNAME}
+      ADMIN_CHEFE_USERNAME: ${ADMIN_CHEFE_USERNAME}
+      ADMIN_MASTER_USERNAME: ${ADMIN_MASTER_USERNAME}
+      APP_BASE_URL: https://senado-nusp.cloud
+      GOOGLE_SHEETS_CREDENTIALS_PATH: /app/google-sheets-key.json
+      GOOGLE_SHEETS_SPREADSHEET_ID: ${GOOGLE_SHEETS_SPREADSHEET_ID}
+      GOOGLE_SHEETS_REFRESH_INTERVAL_SEC: ${GOOGLE_SHEETS_REFRESH_INTERVAL_SEC:-60}
+      ALERTS_SYNC_TO: ${ALERTS_SYNC_TO:-}
+      ALERTS_SHEET_STALE_MIN: ${ALERTS_SHEET_STALE_MIN:-30}
+      ALERTS_REMINDER_HOURS: ${ALERTS_REMINDER_HOURS:-24}
+      METABASE_URL: ${METABASE_URL:-https://bi.senado-nusp.cloud}
+      METABASE_EMBEDDING_SECRET_KEY: ${METABASE_EMBEDDING_SECRET_KEY:-}
+    volumes:
+      - nusp-files:/app/files
+      - /var/lib/senado_nusp_java/google-sheets-key.json:/app/google-sheets-key.json:ro
+
+  # --- Frontend (Angular + Nginx) ---
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    container_name: nusp-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      # Feature flags (runtime): lista separada por vírgula das features LIGADAS
+      # (ex.: FEATURES_ENABLED=pontoBanco,inserirAvisos), definida no docker/.env.
+      # Ausente/vazia = tudo desligado. Ligar = editar o .env + `up -d frontend`,
+      # sem rebuild da imagem. Flag nova não exige mexer neste compose.
+      FEATURES_ENABLED: "${FEATURES_ENABLED:-}"
+    ports:
+      - "8080:80"
+
+volumes:
+  oracle-xe-java-data:
+  nusp-files:

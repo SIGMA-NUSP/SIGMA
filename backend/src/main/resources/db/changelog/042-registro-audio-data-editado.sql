@@ -1,0 +1,21 @@
+-- ============================================================
+-- 042 — OPR_REGISTRO_AUDIO.DATA_EDITADO
+--
+-- A entidade RegistroOperacaoAudio declara DATA_EDITADO
+-- (@Column(nullable = false), Boolean) desde a edição de data do
+-- Plenário Principal, mas a coluna nunca entrou no baseline nem
+-- em changelog algum: foi criada à mão em homologação e em
+-- produção. Resultado: banco montado do zero pelo repositório
+-- não passava no ddl-auto: validate (achado F5).
+--
+-- Este changeset é a ÚNICA fonte da coluna no schema versionado.
+-- O baseline (001) NÃO foi alterado de propósito: seu .sql é o
+-- sqlFile de um changeset já registrado (MARK_RAN em homolog e
+-- produção, MD5SUM 9:014efd3d…); mudá-lo mudaria o checksum e o
+-- Liquibase abortaria o boot desses ambientes com
+-- ValidationFailedException.
+--
+-- DEFAULT 0 preenche as linhas existentes (Oracle aceita ADD …
+-- DEFAULT … NOT NULL em tabela com dados).
+-- ============================================================
+ALTER TABLE OPR_REGISTRO_AUDIO ADD (DATA_EDITADO NUMBER(1) DEFAULT 0 NOT NULL);

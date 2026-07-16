@@ -1,0 +1,14 @@
+databaseChangeLog:
+  # ============================================================
+  # 019 — Ponto: vínculo de página a ADMINISTRADOR
+  # (terceirizados com cargo especial estão em PES_ADMINISTRADOR)
+  # ============================================================
+  - changeSet:
+      id: 019-ponto-admin-vinculo
+      author: douglas.antunes
+      comment: "Amplia CK_PNT_PAGINA_TIPO para aceitar 'ADMINISTRADOR'"
+      changes:
+        - sqlFile:
+            path: db/changelog/019-ponto-admin-vinculo.sql
+            splitStatements: true
+            stripComments: true

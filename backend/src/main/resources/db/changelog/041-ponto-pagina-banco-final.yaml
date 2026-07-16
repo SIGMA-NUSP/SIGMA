@@ -1,0 +1,24 @@
+databaseChangeLog:
+  # ============================================================
+  # 041 — Ponto: BANCO_FINAL_MIN em PNT_LOTE_PAGINA
+  #
+  # Persiste o BANCO final impresso na folha (minutos com sinal),
+  # extraído 1× na publicação do lote (Q5) — a re-âncora do saldo
+  # vira um SELECT em vez de 1 parse de PDF por request, e o dado
+  # ganha proveniência auditável. NULL = ainda não parseado ou
+  # parse falhou (WARN, não aborta a publicação).
+  # ============================================================
+  - changeSet:
+      id: 041-ponto-pagina-banco-final
+      author: douglas.antunes
+      comment: "Adiciona PNT_LOTE_PAGINA.BANCO_FINAL_MIN (BANCO final da folha em minutos, extraído na publicação)"
+      changes:
+        - addColumn:
+            tableName: PNT_LOTE_PAGINA
+            columns:
+              - column:
+                  name: BANCO_FINAL_MIN
+                  type: NUMBER(7)
+      rollback:
+        - sql:
+            sql: "ALTER TABLE PNT_LOTE_PAGINA DROP COLUMN BANCO_FINAL_MIN"

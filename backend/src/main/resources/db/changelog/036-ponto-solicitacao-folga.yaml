@@ -1,0 +1,20 @@
+databaseChangeLog:
+  # ============================================================
+  # 036 — Ponto e Banco de Horas: PNT_SOLICITACAO_FOLGA
+  #
+  # Livro-razão dos débitos do banco de horas: 1 linha por dia
+  # solicitado, débito congelado na criação (Q3), status com
+  # CANCELADO (Q19) e FBI única de pedido vivo. [E1]
+  # ============================================================
+  - changeSet:
+      id: 036-ponto-solicitacao-folga
+      author: douglas.antunes
+      comment: "Cria PNT_SOLICITACAO_FOLGA (solicitações de folga do banco de horas + FBI de pedido vivo)"
+      changes:
+        - sqlFile:
+            path: db/changelog/036-ponto-solicitacao-folga.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "DROP TABLE PNT_SOLICITACAO_FOLGA"

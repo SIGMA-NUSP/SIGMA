@@ -1,0 +1,18 @@
+databaseChangeLog:
+  # ============================================================
+  # 028 — Drop de IX_FRM_RESP_CHECKLIST (Q8) — prefixo-redundante com o
+  # composto 026 e com UQ_FRM_RESP_CHECKLIST_ITEM.
+  # Rollback = recria o índice antigo (CHECKLIST_ID), idêntico ao baseline.
+  # ============================================================
+  - changeSet:
+      id: 028-drop-ix-resp-checklist
+      author: douglas.antunes
+      comment: "Q8: drop de IX_FRM_RESP_CHECKLIST (prefixo-redundante com 026 / UQ_FRM_RESP_CHECKLIST_ITEM)"
+      changes:
+        - sqlFile:
+            path: db/changelog/028-drop-ix-resp-checklist.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: CREATE INDEX IX_FRM_RESP_CHECKLIST ON FRM_CHECKLIST_RESPOSTA (CHECKLIST_ID)

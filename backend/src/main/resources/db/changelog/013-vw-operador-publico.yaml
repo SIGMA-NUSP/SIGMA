@@ -1,0 +1,18 @@
+databaseChangeLog:
+  # ============================================================
+  # 013 — VW_OPERADOR_PUBLICO (Metabase)
+  #
+  # View pública com ID + nomes do operador, para o usuário
+  # read-only NUSP_REPORTS poder fazer JOIN nas queries do
+  # Metabase sem precisar de SELECT em PES_OPERADOR (que tem
+  # dados sensíveis: email, username, password_hash).
+  # ============================================================
+  - changeSet:
+      id: 013-vw-operador-publico
+      author: douglas.antunes
+      comment: "Cria VW_OPERADOR_PUBLICO + GRANT para NUSP_REPORTS"
+      changes:
+        - sqlFile:
+            path: db/changelog/013-vw-operador-publico.sql
+            splitStatements: true
+            stripComments: true

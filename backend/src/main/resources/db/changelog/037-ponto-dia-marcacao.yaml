@@ -1,0 +1,19 @@
+databaseChangeLog:
+  # ============================================================
+  # 037 — Ponto e Banco de Horas: PNT_DIA_MARCACAO
+  #
+  # Marcação global de dia (FERIADO / PONTO_FACULTATIVO), UK por
+  # DATA (Q6). [E1]
+  # ============================================================
+  - changeSet:
+      id: 037-ponto-dia-marcacao
+      author: douglas.antunes
+      comment: "Cria PNT_DIA_MARCACAO (marcação global de dia: feriado/ponto facultativo)"
+      changes:
+        - sqlFile:
+            path: db/changelog/037-ponto-dia-marcacao.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "DROP TABLE PNT_DIA_MARCACAO"

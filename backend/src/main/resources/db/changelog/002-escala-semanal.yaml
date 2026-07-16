@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # ============================================================
+  # 002 — Escala Semanal de Operadores por Plenário
+  #
+  # Duas tabelas para a funcionalidade de escala semanal:
+  # - OPR_ESCALA_SEMANAL: período da escala (data_inicio, data_fim)
+  # - OPR_ESCALA_OPERADOR: vínculo operador ↔ sala naquela escala
+  # ============================================================
+  - changeSet:
+      id: 002-escala-semanal
+      author: douglas.antunes
+      comment: "Tabelas para escala semanal de operadores nos plenários numerados"
+      changes:
+        - sqlFile:
+            path: db/changelog/002-escala-semanal.sql
+            splitStatements: true
+            stripComments: true

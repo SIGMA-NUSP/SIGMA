@@ -1,0 +1,8 @@
+FROM metabase/metabase:v0.57.3
+
+# Adiciona o Oracle JDBC (ojdbc11) — necessário para que o driver Oracle (já incluso
+# na imagem oficial) consiga conectar. A Metabase não pode redistribuir o ojdbc
+# por restrições de licença, mas a Oracle disponibiliza no Maven Central.
+ADD --chmod=644 \
+  https://repo1.maven.org/maven2/com/oracle/database/jdbc/ojdbc11/23.5.0.24.07/ojdbc11-23.5.0.24.07.jar \
+  /plugins/ojdbc11.jar

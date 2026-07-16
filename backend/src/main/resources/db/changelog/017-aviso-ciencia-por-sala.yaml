@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # ============================================================
+  # 017 — Ciência de aviso por SALA
+  #
+  # Adiciona SALA_ID em FRM_AVISO_CIENCIA e troca os índices únicos
+  # parciais para (cadastro, sala, pessoa). Corrige o bug de a ciência
+  # numa sala "quitar" o aviso nas demais salas do mesmo cadastro.
+  # ============================================================
+  - changeSet:
+      id: 017-aviso-ciencia-por-sala
+      author: douglas.antunes
+      comment: "Adiciona SALA_ID em FRM_AVISO_CIENCIA + índices únicos (cadastro,sala,pessoa)"
+      changes:
+        - sqlFile:
+            path: db/changelog/017-aviso-ciencia-por-sala.sql
+            splitStatements: true
+            stripComments: true

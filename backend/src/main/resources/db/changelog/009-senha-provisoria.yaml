@@ -1,0 +1,16 @@
+databaseChangeLog:
+  # ============================================================
+  # 009 — SENHA_PROVISORIA
+  #
+  # Adiciona flag SENHA_PROVISORIA nas tabelas de usuário para
+  # forçar troca de senha no primeiro login.
+  # ============================================================
+  - changeSet:
+      id: 009-senha-provisoria
+      author: douglas.antunes
+      comment: "Adiciona flag SENHA_PROVISORIA nas tabelas PES_*"
+      changes:
+        - sqlFile:
+            path: db/changelog/009-senha-provisoria.sql
+            splitStatements: true
+            stripComments: true

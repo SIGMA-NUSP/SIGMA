@@ -1,0 +1,27 @@
+# =============================================================
+# Senado NUSP — Backend (Spring Boot / Java 17)
+# Build multistage: compila com Maven + roda com JRE slim
+# =============================================================
+
+# --- Stage 1: Build ---
+FROM maven:3.9-eclipse-temurin-17 AS build
+WORKDIR /app
+COPY backend/pom.xml .
+RUN mvn dependency:go-offline -q
+COPY backend/src ./src
+RUN mvn package -DskipTests -q
+
+# --- Stage 2: Runtime ---
+FROM eclipse-temurin:17-jre-jammy
+WORKDIR /app
+
+# Fuso da imagem em Brasília (F7/F55, C17). Cinto-e-suspensório: o TZ dos composes já
+# define o fuso do container em runtime; esta linha garante o fuso mesmo se a imagem for
+# executada fora do compose. A base jammy traz tzdata, então America/Sao_Paulo resolve.
+ENV TZ=America/Sao_Paulo
+
+COPY --from=build /app/target/nusp-*.jar app.jar
+
+EXPOSE 8003
+
+ENTRYPOINT ["java", "-jar", "app.jar"]

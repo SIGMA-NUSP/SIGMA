@@ -1,0 +1,18 @@
+databaseChangeLog:
+  # ============================================================
+  # 012 — INT_METABASE_USER (SSO Metabase)
+  #
+  # Tabela de integração para o SSO caseiro com o Metabase.
+  # Vincula cada admin do NUSP (PES_ADMINISTRADOR) ao seu
+  # usuário correspondente no Metabase, com senha aleatória
+  # gerada pelo backend.
+  # ============================================================
+  - changeSet:
+      id: 012-metabase-sso
+      author: douglas.antunes
+      comment: "Cria INT_METABASE_USER para integração SSO com Metabase"
+      changes:
+        - sqlFile:
+            path: db/changelog/012-metabase-sso.sql
+            splitStatements: true
+            stripComments: true

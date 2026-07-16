@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # ============================================================
+  # 029 — Drop de IX_FRM_CHECKLIST_DATA (Q10) — prefixo-redundante com
+  # IX_FRM_CHECKLIST_DATA_SALA. Rollback = recria o índice antigo.
+  # ============================================================
+  - changeSet:
+      id: 029-drop-ix-checklist-data
+      author: douglas.antunes
+      comment: "Q10: drop de IX_FRM_CHECKLIST_DATA (prefixo-redundante com IX_FRM_CHECKLIST_DATA_SALA)"
+      changes:
+        - sqlFile:
+            path: db/changelog/029-drop-ix-checklist-data.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: CREATE INDEX IX_FRM_CHECKLIST_DATA ON FRM_CHECKLIST (DATA_OPERACAO)

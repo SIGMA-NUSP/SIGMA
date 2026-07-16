@@ -1,0 +1,58 @@
+-- ============================================================
+-- 011 — FRM_AVISO_SALA e FRM_AVISO_SALA_CIENCIA
+--
+-- Avisos cadastrados por administradores e exibidos para o
+-- operador antes de iniciar a Verificação de Plenários para
+-- a sala correspondente. O operador precisa marcar "ciente"
+-- para prosseguir, e enquanto não marcar o aviso continua
+-- aparecendo nas próximas verificações daquela sala.
+--
+-- Regra: no máximo um aviso ATIVO por sala. Garantido por um
+-- índice único baseado em função (Oracle aceita CASE em
+-- índices únicos).
+-- ============================================================
+
+CREATE SEQUENCE SEQ_FRM_AVISO_SALA START WITH 1 INCREMENT BY 1 NOCACHE;
+
+CREATE TABLE FRM_AVISO_SALA (
+    ID             VARCHAR2(36)   PRIMARY KEY,
+    NUMERO         NUMBER(10)     NOT NULL,
+    SALA_ID        NUMBER(5)      NOT NULL,
+    MENSAGEM       CLOB           NOT NULL,
+    DURACAO_DIAS   NUMBER(3)      NOT NULL,
+    CRIADO_EM      TIMESTAMP      NOT NULL,
+    ATUALIZADO_EM  TIMESTAMP      NOT NULL,
+    EXPIRA_EM      TIMESTAMP      NOT NULL,
+    CRIADO_POR     VARCHAR2(36),
+    ATIVO          NUMBER(1)      DEFAULT 1 NOT NULL,
+    CONSTRAINT UK_FRM_AVISO_NUMERO UNIQUE (NUMERO),
+    CONSTRAINT CK_FRM_AVISO_ATIVO CHECK (ATIVO IN (0, 1)),
+    CONSTRAINT CK_FRM_AVISO_DURACAO CHECK (DURACAO_DIAS BETWEEN 1 AND 30),
+    CONSTRAINT FK_FRM_AVISO_SALA FOREIGN KEY (SALA_ID) REFERENCES CAD_SALA(ID),
+    CONSTRAINT FK_FRM_AVISO_ADMIN FOREIGN KEY (CRIADO_POR) REFERENCES PES_ADMINISTRADOR(ID)
+);
+
+CREATE INDEX IDX_FRM_AVISO_SALA ON FRM_AVISO_SALA (SALA_ID);
+CREATE INDEX IDX_FRM_AVISO_ATIVO ON FRM_AVISO_SALA (ATIVO);
+
+-- Garante no máximo um aviso ativo (ATIVO=1) por sala. Linhas com ATIVO=0
+-- recebem NULL no índice e não disputam unicidade.
+CREATE UNIQUE INDEX UK_FRM_AVISO_SALA_ATIVO
+    ON FRM_AVISO_SALA (CASE WHEN ATIVO = 1 THEN SALA_ID END);
+
+
+CREATE TABLE FRM_AVISO_SALA_CIENCIA (
+    ID              VARCHAR2(36)  PRIMARY KEY,
+    AVISO_ID        VARCHAR2(36)  NOT NULL,
+    OPERADOR_ID     VARCHAR2(36)  NOT NULL,
+    VISUALIZADO_EM  TIMESTAMP     NOT NULL,
+    CIENTE_EM       TIMESTAMP,
+    CRIADO_EM       TIMESTAMP     NOT NULL,
+    ATUALIZADO_EM   TIMESTAMP     NOT NULL,
+    CONSTRAINT UK_FRM_AVISO_CIENCIA UNIQUE (AVISO_ID, OPERADOR_ID),
+    CONSTRAINT FK_FRM_AVISO_CIE_AVISO FOREIGN KEY (AVISO_ID) REFERENCES FRM_AVISO_SALA(ID) ON DELETE CASCADE,
+    CONSTRAINT FK_FRM_AVISO_CIE_OPERADOR FOREIGN KEY (OPERADOR_ID) REFERENCES PES_OPERADOR(ID)
+);
+
+CREATE INDEX IDX_FRM_AVISO_CIE_AVISO ON FRM_AVISO_SALA_CIENCIA (AVISO_ID);
+CREATE INDEX IDX_FRM_AVISO_CIE_OPERADOR ON FRM_AVISO_SALA_CIENCIA (OPERADOR_ID);

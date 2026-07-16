@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # ============================================================
+  # 018 — Ponto e Banco de Horas (Passo 1)
+  #
+  # Cria PNT_LOTE e PNT_LOTE_PAGINA para o upload de cartões-ponto
+  # (PDF multi-página), separação por página, vínculo a operador/técnico
+  # (por nome, com revisão) e download individual da folha.
+  # ============================================================
+  - changeSet:
+      id: 018-ponto-banco
+      author: douglas.antunes
+      comment: "Cria PNT_LOTE e PNT_LOTE_PAGINA (Ponto e Banco — upload/separação/vínculo de cartões-ponto)"
+      changes:
+        - sqlFile:
+            path: db/changelog/018-ponto-banco.sql
+            splitStatements: true
+            stripComments: true

@@ -1,0 +1,107 @@
+server:
+  port: 8000
+
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:oracle:thin:@//localhost:1521/XEPDB1}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: oracle.jdbc.OracleDriver
+    hikari:
+      # F30 — a colação de ORDENAÇÃO das listagens, dita na SESSÃO em vez de herdada do locale.
+      # Sem esta linha o driver deriva o NLS_SORT do Locale default da JVM: o container roda em
+      # en_US → BINARY (ordem por code point: "Ângela" e "Álvaro" caem DEPOIS de "Z") e a máquina
+      # de dev roda em pt_BR → WEST_EUROPEAN. A mesma tela saía em ordens diferentes nos dois
+      # ambientes, e produção era a errada. BINARY_AI dá peso zero a acento e caixa: "Antônio
+      # Carlos" volta para junto de "Antonio ...", igual em dev e em produção, sem depender do
+      # locale de ninguém.
+      #
+      # ⚠️ Só NLS_SORT — NLS_COMP fica BINARY de propósito. NLS_SORT governa o ORDER BY; é o
+      # NLS_COMP que governa a IGUALDADE. Pôr NLS_COMP=LINGUISTIC aqui tornaria todo '=' e todo
+      # LIKE do sistema insensível a acento/caixa: 'douglas' passaria a casar 'DOUGLAS' no login,
+      # o DISTINCT das próprias facetas colapsaria 'Jose' com 'José' e o GROUP BY dos dashboards
+      # mudaria de contagem (medido no Oracle real, C15). A busca das listagens — a única
+      # comparação que o pedido manda afrouxar — ganha a colação POR EXPRESSÃO, no
+      # DashboardQueryHelper (COLLATE BINARY_AI no LIKE), sem contaminar o resto.
+      #
+      # O comparador Java das facetas (fetchDistinctConsolidado) reproduz esta colação; se um dia
+      # o NLS_SORT mudar aqui, aquele comparador tem de mudar junto — os DashboardQueryHelperIT
+      # de concordância consolidado↔fallback são o alarme.
+      connection-init-sql: ALTER SESSION SET NLS_SORT=BINARY_AI
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.OracleDialect
+        default_schema: NUSP
+        format_sql: true
+        type:
+          # F14 — sem isto, o dialeto Oracle mapeia Instant como TIMESTAMP_UTC e a leitura JPA pede
+          # getObject(col, OffsetDateTime.class) ao ojdbc; numa coluna TIMESTAMP *sem* fuso (8 das 9
+          # colunas Instant do schema) o driver recusa com ORA-18716 e QUALQUER em.find/derived query
+          # dessas entidades morre. Com TIMESTAMP, Instant passa por get/setTimestamp().
+          # A escrita continua idêntica desde que a JVM esteja em UTC — é o caso dos containers e,
+          # por causa disto, também das JVMs de teste (argLine do pom).
+          preferred_instant_jdbc_type: TIMESTAMP
+    show-sql: false
+  mail:
+    host: ${SPRING_MAIL_HOST:smtp.hostinger.com}
+    port: ${SPRING_MAIL_PORT:465}
+    username: ${SPRING_MAIL_USERNAME}
+    password: ${SPRING_MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          ssl:
+            enable: true
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+    default-schema: NUSP
+  jackson:
+    default-property-inclusion: non_null
+  servlet:
+    multipart:
+      max-file-size: ${MULTIPART_MAX_FILE_SIZE:25MB}      # cartão-ponto (PDF multi-página)
+      max-request-size: ${MULTIPART_MAX_REQUEST_SIZE:30MB}
+
+app:
+  env:
+    label: ${APP_ENV_LABEL:}
+  jwt:
+    secret: ${AUTH_JWT_SECRET}
+    ttl-seconds: ${AUTH_JWT_TTL_SEC:5400}
+    cookie-name: ${AUTH_JWT_COOKIE_NAME:sn_auth_jwt}
+    cookie-domain: ${AUTH_JWT_COOKIE_DOMAIN:}
+  session:
+    touch-max-age-seconds: ${SESSION_TOUCH_MAX_AGE_SECONDS:5400}
+  files:
+    dir: ${FILES_DIR}
+    url-prefix: ${FILES_URL_PREFIX:/files/}
+    operadores-dirname: operadores
+    tecnicos-dirname: tecnicos
+    administradores-dirname: administradores
+  password-reset:
+    token-ttl-minutes: ${PASSWORD_RESET_TTL_MIN:30}
+    base-url: ${APP_BASE_URL:http://localhost:4200}
+  admin:
+    supervisor-username: ${ADMIN_SUPERVISOR_USERNAME}
+    chefe-username: ${ADMIN_CHEFE_USERNAME}
+    master-username: ${ADMIN_MASTER_USERNAME}
+  sheets:
+    credentials-path: ${GOOGLE_SHEETS_CREDENTIALS_PATH:/app/google-sheets-key.json}
+    spreadsheet-id: ${GOOGLE_SHEETS_SPREADSHEET_ID:}
+    refresh-interval-sec: ${GOOGLE_SHEETS_REFRESH_INTERVAL_SEC:60}
+    cessao-colors-hex: ${GOOGLE_SHEETS_CESSAO_COLORS:FFF2CC,FCE5CD}
+  metabase:
+    url: ${METABASE_URL:https://bi.senado-nusp.cloud}
+    embedding-secret-key: ${METABASE_EMBEDDING_SECRET_KEY:}
+    embed-ttl-sec: ${METABASE_EMBED_TTL_SEC:600}
+  alerts:
+    sync-to: ${ALERTS_SYNC_TO:}                       # destino(s) dos alertas (vírgula); vazio = desligado
+    sheet-stale-minutes: ${ALERTS_SHEET_STALE_MIN:30} # falha contínua por N min antes do 1º alerta
+    reminder-hours: ${ALERTS_REMINDER_HOURS:24}       # intervalo dos lembretes enquanto seguir falhando
+
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:4200}

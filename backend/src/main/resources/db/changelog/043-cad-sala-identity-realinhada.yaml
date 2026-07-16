@@ -1,0 +1,25 @@
+databaseChangeLog:
+  # ============================================================
+  # 043 — Realinha o gerador IDENTITY de CAD_SALA (achado F21)
+  #
+  # O 007 insere a sala 'Demais Salas' com ID explícito (11) e, em
+  # Oracle, isso não avança a sequence da coluna IDENTITY: o
+  # primeiro cadastro de sala feito pela aplicação colidiria com
+  # ela (ORA-00001). Este changeset recoloca o gerador em
+  # MAX(ID) + 1 — inócuo onde a sequence já está correta
+  # (homologação e produção, onde ela vale MAX+1 desde a
+  # migração).
+  #
+  # Roda UMA vez, como qualquer changeset (nada de runAlways: um
+  # ALTER TABLE a cada boot pegaria lock exclusivo em CAD_SALA e
+  # um ORA-00054 numa janela de escrita derrubaria a aplicação).
+  # ============================================================
+  - changeSet:
+      id: 043-cad-sala-identity-realinhada
+      author: douglas.antunes
+      comment: "Recoloca a sequence de CAD_SALA.ID em MAX(ID)+1 (o 007 insere ID explícito e não avança o gerador)"
+      changes:
+        - sqlFile:
+            path: db/changelog/043-cad-sala-identity-realinhada.sql
+            splitStatements: true
+            stripComments: true

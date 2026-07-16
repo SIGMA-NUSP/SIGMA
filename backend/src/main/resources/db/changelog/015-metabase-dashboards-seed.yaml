@@ -1,0 +1,14 @@
+databaseChangeLog:
+  # ============================================================
+  # 015 — Ajustes no catálogo de dashboards
+  # Limpa descrição do Dashboard Teste e adiciona Dashboard Teste 2.
+  # ============================================================
+  - changeSet:
+      id: 015-metabase-dashboards-seed
+      author: douglas.antunes
+      comment: "Limpa descrição do dashboard 3 e adiciona dashboard 4"
+      changes:
+        - sqlFile:
+            path: db/changelog/015-metabase-dashboards-seed.sql
+            splitStatements: true
+            stripComments: true

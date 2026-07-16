@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # ============================================================
+  # 034 — Drop de IX_ENTOP_ENTRADA (Q11) — redundante com o composto 033.
+  # Rollback = recria o índice antigo (ENTRADA_ID), idêntico ao baseline.
+  # ============================================================
+  - changeSet:
+      id: 034-drop-ix-entop-entrada
+      author: douglas.antunes
+      comment: "Q11: drop de IX_ENTOP_ENTRADA (redundante com o composto 033)"
+      changes:
+        - sqlFile:
+            path: db/changelog/034-drop-ix-entop-entrada.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: CREATE INDEX IX_ENTOP_ENTRADA ON OPR_ENTRADA_OPERADOR (ENTRADA_ID)

@@ -1,0 +1,18 @@
+databaseChangeLog:
+  # ============================================================
+  # 006 — Tabela OPR_ESCALA_FUNCAO
+  #
+  # Vínculos especiais por escala: funções/papéis fora dos
+  # plenários numerados. Ex.: Apoio às Comissões, Fechamento
+  # dos Plenários. Estrutura genérica para permitir novas
+  # funções no futuro sem nova migration.
+  # ============================================================
+  - changeSet:
+      id: 006-escala-funcao
+      author: douglas.antunes
+      comment: "Cria tabela OPR_ESCALA_FUNCAO para vínculos de função na escala"
+      changes:
+        - sqlFile:
+            path: db/changelog/006-escala-funcao.sql
+            splitStatements: true
+            stripComments: true

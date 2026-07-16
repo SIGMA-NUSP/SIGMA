@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # ============================================================
+  # 027 — Drop de IX_FRM_RESP_STATUS (Q8) — redundante com o composto 026.
+  # Rollback = recria o índice antigo (STATUS), idêntico ao baseline.
+  # ============================================================
+  - changeSet:
+      id: 027-drop-ix-resp-status
+      author: douglas.antunes
+      comment: "Q8: drop de IX_FRM_RESP_STATUS (redundante com o composto 026)"
+      changes:
+        - sqlFile:
+            path: db/changelog/027-drop-ix-resp-status.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: CREATE INDEX IX_FRM_RESP_STATUS ON FRM_CHECKLIST_RESPOSTA (STATUS)

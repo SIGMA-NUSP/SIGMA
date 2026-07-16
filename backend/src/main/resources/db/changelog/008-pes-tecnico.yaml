@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # ============================================================
+  # 008 — PES_TECNICO
+  #
+  # Cria tabela do terceiro tipo de usuário (técnico). Mesmo
+  # esquema de PES_OPERADOR, sem PLENARIO_PRINCIPAL,
+  # PARTICIPA_ESCALA, TURNO e NOME_EXIBICAO.
+  # ============================================================
+  - changeSet:
+      id: 008-pes-tecnico
+      author: douglas.antunes
+      comment: "Cria tabela PES_TECNICO (terceiro tipo de usuário)"
+      changes:
+        - sqlFile:
+            path: db/changelog/008-pes-tecnico.sql
+            splitStatements: true
+            stripComments: true

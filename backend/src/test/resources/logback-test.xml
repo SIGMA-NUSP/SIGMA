@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Logging dos TESTES: este arquivo tem precedência sobre o logback-spring.xml
+     do main (convenção do Logback) e vale só no classpath de teste.
+     Sem appender de arquivo: o FILE do main grava em ${LOG_DIR:-/app/logs},
+     path do container Docker que não existe na máquina de dev — e derrubava o
+     boot de qualquer slice Spring de teste com perfil != default. -->
+<configuration>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <logger name="br.leg.senado.nusp" level="INFO" />
+    <logger name="org.springframework.security" level="WARN" />
+    <logger name="org.hibernate.SQL" level="WARN" />
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE" />
+    </root>
+
+</configuration>
