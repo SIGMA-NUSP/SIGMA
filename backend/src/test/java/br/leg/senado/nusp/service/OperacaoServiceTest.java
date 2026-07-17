@@ -106,6 +106,10 @@ class OperacaoServiceTest {
     private Query stubOrdemEntrada(int ordem) {
         Query q = mockQueryPara("SELECT ORDEM FROM");
         when(q.getResultList()).thenReturn(List.of(ordem));
+        // Com o término presente no body (invariante F73/C19), a regra 4 do
+        // validarHorarios sempre consulta o operador adjacente — sem vizinho aqui.
+        Query adjacente = mockQueryPara("JOIN PES_OPERADOR");
+        when(adjacente.getResultList()).thenReturn(List.of());
         return q;
     }
 
@@ -151,6 +155,9 @@ class OperacaoServiceTest {
         body.put("nome_evento", "Sessão Deliberativa");
         body.put("hora_inicio", "14:00");
         body.put("responsavel_evento", "Mesa Diretora");
+        // Invariante F73 (C19): o fluxo real sempre carrega um término — sem ele a
+        // edição é recusada antes de qualquer escrita.
+        body.put("hora_saida", "18:00");
         return body;
     }
 
@@ -474,9 +481,8 @@ class OperacaoServiceTest {
             stubOrdemEntrada(2);
             stubSerializacaoOk();
             stubUpdateGrande();
-            // ordem 2 exige hora_entrada (regra 5) e consulta o operador anterior (regra 3)
-            Query adjacente = mockQueryPara("JOIN PES_OPERADOR");
-            when(adjacente.getResultList()).thenReturn(List.of());
+            // ordem 2 exige hora_entrada (regra 5); as consultas de adjacente (regras 3 e 4)
+            // já são cobertas pelo stub sem vizinho de stubOrdemEntrada
 
             Map<String, Object> body = bodyEdicaoValido();
             body.put("hora_entrada", "15:00");
@@ -508,6 +514,7 @@ class OperacaoServiceTest {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("nome_evento", "Sessão Deliberativa");
             body.put("hora_inicio", "14:00");
+            body.put("hora_saida", "18:00"); // invariante F73 (C19): ≥1 término
             body.put("suspensoes", suspensoesNovas);
             service.editarEntrada(ENTRADA_ID, body, TITULAR);
         }
@@ -764,6 +771,360 @@ class OperacaoServiceTest {
             assertEquals("Sessão Especial", out.get("nome_evento"));
             assertEquals("Mesa Diretora", out.get("responsavel_evento"));
             assertEquals("Sala Anexa", out.get("nome_demais_salas"));
+        }
+    }
+
+    // ── corrige F73 (C19): régua de horário nas portas do módulo de operação ──
+
+    @Nested
+    class ReguaDeHorarioF73 {
+
+        /** Body mínimo de criação com um término válido (invariante F73). */
+        private Map<String, Object> bodyCriacaoValido() {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("data_operacao", "2026-07-16");
+            body.put("sala_id", String.valueOf(SALA_COMUM_ID));
+            body.put("nome_evento", "Audiência Pública");
+            body.put("hora_inicio", "14:00");
+            body.put("hora_saida", "18:00");
+            return body;
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.CsvSource({
+                "horario_pauta, Horário da Pauta",
+                "hora_inicio, Início do evento",
+                "hora_fim, Término do evento",
+                "hora_entrada, Início da operação",
+                "hora_saida, Término da operação",
+        })
+        @DisplayName("corrige F73 — criação: hora torta em qualquer dos 5 campos recusa 400 nomeando o rótulo, antes de tocar o banco")
+        void salvarEntrada_criacao_campoTortoRecusa(String campo, String rotulo) {
+            Map<String, Object> body = bodyCriacaoValido();
+            body.put(campo, "24:00:00");
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.salvarEntrada(body, TITULAR));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertTrue(ex.getMessage().contains("'" + rotulo + "'"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("'24:00:00'"), ex.getMessage());
+            // A recusa acontece na leitura do body (lerDadosEntrada), antes de qualquer consulta
+            verifyNoInteractions(audioRepo, entradaRepo, entityManager);
+        }
+
+        @Test
+        @DisplayName("corrige F73 — edição pela mesma porta (entrada_id presente) passa pela mesma régua")
+        void salvarEntrada_edicao_campoTortoRecusa() {
+            Map<String, Object> body = bodyCriacaoValido();
+            body.put("entrada_id", String.valueOf(ENTRADA_ID));
+            body.put("hora_saida", "12:60:00");
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.salvarEntrada(body, TITULAR));
+
+            assertTrue(ex.getMessage().contains("'Término da operação'"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("'12:60:00'"), ex.getMessage());
+            verifyNoInteractions(audioRepo, entradaRepo, entityManager);
+        }
+
+        @Test
+        @DisplayName("corrige F73 — editarEntrada (tela de detalhe): hora torta recusa 400 antes do snapshot/UPDATE")
+        void editarEntrada_campoTortoRecusa() {
+            stubGateTitular(TITULAR);
+            stubOwnershipPermitido();
+            stubSessaoMultiOp(false);
+
+            Map<String, Object> body = bodyEdicaoValido();
+            body.put("hora_fim", "12:00:60");
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.editarEntrada(ENTRADA_ID, body, TITULAR));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertTrue(ex.getMessage().contains("'Término do evento'"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("'12:00:60'"), ex.getMessage());
+            verify(entradaRepo, never()).getSnapshot(anyLong());
+        }
+
+        @Test
+        @DisplayName("corrige F73 — suspensões tortas na edição multi-operador recusam 400 nomeando o rótulo")
+        void atualizarSuspensoes_suspensaoTortaRecusa() throws Exception {
+            stubGateTitular(TITULAR);
+            stubOwnershipPermitido();
+            stubSessaoMultiOp(true);
+            stubSnapshot(null, 0);
+            stubSerializacaoOk();
+            stubUpdateGrande();
+            when(suspensaoRepo.findByEntradaIdOrderByOrdemAsc(ENTRADA_ID)).thenReturn(List.of());
+
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("nome_evento", "Sessão Deliberativa");
+            body.put("hora_inicio", "14:00");
+            body.put("hora_saida", "18:00");
+            Map<String, Object> susp = new LinkedHashMap<>();
+            susp.put("hora_suspensao", "25:00:00");
+            body.put("suspensoes", List.of(susp));
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.editarEntrada(ENTRADA_ID, body, TITULAR));
+
+            assertTrue(ex.getMessage().contains("'Suspensa em'"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("'25:00:00'"), ex.getMessage());
+            verify(suspensaoRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("corrige F73 — a recusa de FORMATO vem antes das regras de ordem (torta não vira mensagem de 'posterior a')")
+        void formatoAntesDaOrdem() {
+            // hora_fim torta E anterior ao início: sem a precedência, validarHorarios
+            // responderia "deve ser posterior ao início da operação"
+            Map<String, Object> body = bodyCriacaoValido();
+            body.put("hora_inicio", "23:00");
+            body.put("hora_fim", "xx");
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.salvarEntrada(body, TITULAR));
+
+            assertTrue(ex.getMessage().startsWith("Horário inválido em 'Término do evento'"),
+                    "a mensagem é a de formato, não a de ordem: " + ex.getMessage());
+        }
+
+        @Test
+        @DisplayName("regressão — horários válidos seguem normalizados a HH:MM:SS e gravados como antes")
+        void valoresValidosSeguemGravando() {
+            when(audioRepo.findSessaoAbertaPorSala(SALA_COMUM_ID)).thenReturn(List.of());
+            Query dup = mockQueryPara("INTERVAL '5' MINUTE");
+            when(dup.getSingleResult()).thenReturn(BigDecimal.ZERO);
+            when(audioRepo.findChecklistDoDia("2026-07-16", SALA_COMUM_ID)).thenReturn(List.of());
+            when(audioRepo.save(any())).thenAnswer(inv -> {
+                RegistroOperacaoAudio a = inv.getArgument(0);
+                a.setId(REGISTRO_ID);
+                return a;
+            });
+            Sala sala = new Sala();
+            sala.setId(SALA_COMUM_ID);
+            sala.setMultiOperador(false);
+            when(salaRepo.findById(SALA_COMUM_ID)).thenReturn(Optional.of(sala));
+            Query adjacente = mockQueryPara("JOIN PES_OPERADOR");
+            when(adjacente.getResultList()).thenReturn(List.of());
+            when(entradaRepo.save(any())).thenAnswer(inv -> {
+                RegistroOperacaoOperador e = inv.getArgument(0);
+                e.setId(ENTRADA_ID);
+                return e;
+            });
+
+            Map<String, Object> out = service.salvarEntrada(bodyCriacaoValido(), TITULAR);
+
+            assertEquals(ENTRADA_ID, out.get("entrada_id"));
+            verify(entradaRepo).save(argThat((RegistroOperacaoOperador e) ->
+                    "14:00:00".equals(e.getHorarioInicio()) && "18:00:00".equals(e.getHoraSaida())));
+        }
+    }
+
+    // ── corrige F73 (C19): invariante de presença — toda entrada tem ≥ 1 término ──
+
+    @Nested
+    class PresencaDeTerminoF73 {
+
+        private static final String MSG_PRESENCA = "Informe o 'Término do evento' ou o 'Término da operação'.";
+
+        /** Stubs do caminho de criação até a invariante (sessão nova, sem duplicidade). */
+        private void stubCriacaoAteInvariante() {
+            when(audioRepo.findSessaoAbertaPorSala(SALA_COMUM_ID)).thenReturn(List.of());
+            Query dup = mockQueryPara("INTERVAL '5' MINUTE");
+            when(dup.getSingleResult()).thenReturn(BigDecimal.ZERO);
+            when(audioRepo.findChecklistDoDia("2026-07-16", SALA_COMUM_ID)).thenReturn(List.of());
+            when(audioRepo.save(any())).thenAnswer(inv -> {
+                RegistroOperacaoAudio a = inv.getArgument(0);
+                a.setId(REGISTRO_ID);
+                return a;
+            });
+        }
+
+        private Map<String, Object> bodyCriacaoSemTerminos() {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("data_operacao", "2026-07-16");
+            body.put("sala_id", String.valueOf(SALA_COMUM_ID));
+            body.put("nome_evento", "Audiência Pública");
+            body.put("hora_inicio", "14:00");
+            return body;
+        }
+
+        @Test
+        @DisplayName("corrige F73 — criação sem NENHUM término recusa 400 nomeando os dois campos (nenhuma entrada gravada)")
+        void criacao_semNenhumTermino_recusa() {
+            stubCriacaoAteInvariante();
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.salvarEntrada(bodyCriacaoSemTerminos(), TITULAR));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertEquals(MSG_PRESENCA, ex.getMessage());
+            // A invariante roda antes até da consulta à sala (vale para multi-operador também)
+            verifyNoInteractions(salaRepo);
+            verify(entradaRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("corrige F73 — criação com SÓ o Término do evento grava e encerra a sessão")
+        void criacao_soTerminoDoEvento_grava() {
+            stubCriacaoAteInvariante();
+            Sala sala = new Sala();
+            sala.setId(SALA_COMUM_ID);
+            sala.setMultiOperador(false);
+            when(salaRepo.findById(SALA_COMUM_ID)).thenReturn(Optional.of(sala));
+            Query adjacente = mockQueryPara("JOIN PES_OPERADOR");
+            when(adjacente.getResultList()).thenReturn(List.of());
+            when(entradaRepo.save(any())).thenAnswer(inv -> {
+                RegistroOperacaoOperador e = inv.getArgument(0);
+                e.setId(ENTRADA_ID);
+                return e;
+            });
+
+            Map<String, Object> body = bodyCriacaoSemTerminos();
+            body.put("hora_fim", "18:30");
+
+            service.salvarEntrada(body, TITULAR);
+
+            verify(entradaRepo).save(argThat((RegistroOperacaoOperador e) ->
+                    "18:30:00".equals(e.getHorarioTermino()) && e.getHoraSaida() == null));
+            verify(audioRepo).finalizarSessao(REGISTRO_ID, TITULAR);
+        }
+
+        @Test
+        @DisplayName("corrige F73 — criação com SÓ o Término da operação grava e a sessão fica aberta")
+        void criacao_soTerminoDaOperacao_grava() {
+            stubCriacaoAteInvariante();
+            Sala sala = new Sala();
+            sala.setId(SALA_COMUM_ID);
+            sala.setMultiOperador(false);
+            when(salaRepo.findById(SALA_COMUM_ID)).thenReturn(Optional.of(sala));
+            Query adjacente = mockQueryPara("JOIN PES_OPERADOR");
+            when(adjacente.getResultList()).thenReturn(List.of());
+            when(entradaRepo.save(any())).thenAnswer(inv -> {
+                RegistroOperacaoOperador e = inv.getArgument(0);
+                e.setId(ENTRADA_ID);
+                return e;
+            });
+
+            service.salvarEntrada(bodyCriacaoValidoComSaida(), TITULAR);
+
+            verify(entradaRepo).save(argThat((RegistroOperacaoOperador e) ->
+                    e.getHorarioTermino() == null && "18:00:00".equals(e.getHoraSaida())));
+            verify(audioRepo, never()).finalizarSessao(anyLong(), anyString());
+        }
+
+        private Map<String, Object> bodyCriacaoValidoComSaida() {
+            Map<String, Object> body = bodyCriacaoSemTerminos();
+            body.put("hora_saida", "18:00");
+            return body;
+        }
+
+        @Test
+        @DisplayName("corrige F73 — edição pela porta salvar-entrada (entrada_id) que limpa os dois términos recusa 400")
+        void edicaoDaSessao_semNenhumTermino_recusa() {
+            // Sessão aberta com a entrada do próprio titular (o body edita a entrada 101)
+            when(audioRepo.findSessaoAbertaPorSala(SALA_COMUM_ID)).thenReturn(rowsSessaoAberta());
+            Object[] row = new Object[20];
+            row[0] = ENTRADA_ID;      // entrada_id
+            row[1] = REGISTRO_ID;     // registro_id
+            row[2] = TITULAR;         // operador_id
+            row[3] = "Operador Um";   // operador_nome
+            row[4] = 1;               // ordem
+            row[5] = 1;               // seq
+            List<Object[]> entradas = new ArrayList<>();
+            entradas.add(row);
+            when(entradaRepo.listarEntradasDaSessao(REGISTRO_ID)).thenReturn(entradas);
+
+            Map<String, Object> body = bodyCriacaoSemTerminos();
+            body.put("entrada_id", String.valueOf(ENTRADA_ID));
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.salvarEntrada(body, TITULAR));
+
+            assertEquals(MSG_PRESENCA, ex.getMessage());
+            verify(entradaRepo, never()).updateEntradaBasica(anyLong(), any(), any(), any(), any(),
+                    any(), any(), any(), any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("corrige F73 — editarEntrada que RESULTARIA em nenhum término recusa 400 antes do histórico")
+        void editarEntrada_resultanteSemTermino_recusa() {
+            stubGateTitular(TITULAR);
+            stubOwnershipPermitido();
+            stubSessaoMultiOp(false);
+            stubSnapshot(null, 0); // snapshot sem horario_termino; countEntradas = 1
+            Query ordem = mockQueryPara("SELECT ORDEM FROM");
+            when(ordem.getResultList()).thenReturn(List.of(1));
+
+            Map<String, Object> body = bodyEdicaoValido();
+            body.remove("hora_saida"); // sem hora_fim e sem hora_saida → estado resultante sem término
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.editarEntrada(ENTRADA_ID, body, TITULAR));
+
+            assertEquals(MSG_PRESENCA, ex.getMessage());
+            // Recusa antes de escrever qualquer coisa: nem histórico, nem UPDATE
+            verify(entityManager, never()).persist(any());
+        }
+
+        @Test
+        @DisplayName("corrige F73 — sessão multi-entrada: o Término do evento do SNAPSHOT conta como término do estado resultante")
+        void editarEntrada_snapshotComTermino_passa() throws Exception {
+            stubGateTitular(TITULAR);
+            stubOwnershipPermitido();
+            stubSessaoMultiOp(false);
+            // Snapshot próprio: sessão com 2 entradas e a editada foi quem encerrou o evento
+            Object[] r = new Object[14];
+            r[0] = "Evento Anterior";
+            r[1] = "Resp Anterior";
+            r[3] = "13:00:00";
+            r[4] = "17:00:00"; // horario_termino do snapshot
+            r[5] = "operacao";
+            r[10] = 0;
+            List<Object[]> rows = new ArrayList<>();
+            rows.add(r);
+            when(entradaRepo.getSnapshot(ENTRADA_ID)).thenReturn(rows);
+            when(entradaRepo.countEntradasPorSessao(ENTRADA_ID)).thenReturn(2);
+            Query ordem = mockQueryPara("SELECT ORDEM FROM");
+            when(ordem.getResultList()).thenReturn(List.of(2));
+            // ordem 2 com hora_entrada → regra 3 consulta o operador anterior (sem vizinho)
+            Query adjacente = mockQueryPara("JOIN PES_OPERADOR");
+            when(adjacente.getResultList()).thenReturn(List.of());
+            when(objectMapper.writeValueAsString(any())).thenReturn("{}");
+            Query update = stubUpdateGrande();
+
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("nome_evento", "Sessão Deliberativa");
+            body.put("hora_inicio", "14:00");
+            body.put("responsavel_evento", "Mesa Diretora");
+            body.put("hora_entrada", "15:00"); // ordem 2 exige início da operação
+            // sem hora_fim e sem hora_saida no body — o término vem do snapshot
+
+            service.editarEntrada(ENTRADA_ID, body, TITULAR);
+
+            verify(update).executeUpdate();
+        }
+
+        @Test
+        @DisplayName("corrige F73 — edição multi-operador também exige o término (a invariante não é pulada no Plenário)")
+        void editarEntrada_multiOp_semTermino_recusa() {
+            stubGateTitular(TITULAR);
+            stubOwnershipPermitido();
+            stubSessaoMultiOp(true);
+            stubSnapshot(null, 0);
+
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("nome_evento", "Sessão PP");
+            body.put("hora_inicio", "09:00");
+            // multi-op não exige responsavel_evento; sem nenhum término
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.editarEntrada(ENTRADA_ID, body, TITULAR));
+
+            assertEquals(MSG_PRESENCA, ex.getMessage());
+            verify(entityManager, never()).persist(any());
         }
     }
 

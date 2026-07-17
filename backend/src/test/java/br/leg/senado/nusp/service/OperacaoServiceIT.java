@@ -103,6 +103,9 @@ class OperacaoServiceIT {
         e.setNomeEvento(nomeEvento);
         e.setHorarioInicio(horaInicio);
         e.setResponsavelEvento(responsavel);
+        // Invariante F73 (C19): toda entrada tem ≥1 término; os bodies de edição reenviam
+        // o MESMO valor para a flag HORA_SAIDA_EDITADO não ligar (NVL(old) = NVL(new)).
+        e.setHoraSaida("18:00:00");
         e.setTipoEvento(TipoEvento.OPERACAO);
         e.setCriadoPor(dono.getId());
         e.setAtualizadoPor(dono.getId());
@@ -169,7 +172,7 @@ class OperacaoServiceIT {
 
             // hora_inicio e responsavel_evento repetem o valor atual → suas flags NÃO ligam
             service.editarEntrada(entrada.getId(),
-                    body("nome_evento", "Evento NOVO", "hora_inicio", "09:00:00", "responsavel_evento", "Resp Original"),
+                    body("nome_evento", "Evento NOVO", "hora_inicio", "09:00:00", "responsavel_evento", "Resp Original", "hora_saida", "18:00:00"),
                     dono.getId());
 
             RegistroOperacaoOperador r = relerEntrada(entrada.getId());
@@ -199,14 +202,14 @@ class OperacaoServiceIT {
 
             // 1ª edição: muda o nome → a flag liga (old != new)
             service.editarEntrada(entrada.getId(),
-                    body("nome_evento", "Evento Editado", "hora_inicio", "09:00:00", "responsavel_evento", "Resp Original"),
+                    body("nome_evento", "Evento Editado", "hora_inicio", "09:00:00", "responsavel_evento", "Resp Original", "hora_saida", "18:00:00"),
                     dono.getId());
             assertTrue(relerEntrada(entrada.getId()).getNomeEventoEditado(), "1ª edição liga a flag (0→1)");
 
             // 2ª edição: reenvia o MESMO valor (old == new) — SEM o ramo "WHEN _EDITADO=1 THEN 1" o CASE
             // daria 0. É este cenário (e não "voltar ao original") que isola o sticky.
             service.editarEntrada(entrada.getId(),
-                    body("nome_evento", "Evento Editado", "hora_inicio", "09:00:00", "responsavel_evento", "Resp Original"),
+                    body("nome_evento", "Evento Editado", "hora_inicio", "09:00:00", "responsavel_evento", "Resp Original", "hora_saida", "18:00:00"),
                     dono.getId());
             RegistroOperacaoOperador r2 = relerEntrada(entrada.getId());
             assertEquals("Evento Editado", r2.getNomeEvento());
@@ -214,7 +217,7 @@ class OperacaoServiceIT {
 
             // 3ª edição: volta ao valor ORIGINAL — o valor volta, a flag continua 1
             service.editarEntrada(entrada.getId(),
-                    body("nome_evento", "Evento Original", "hora_inicio", "09:00:00", "responsavel_evento", "Resp Original"),
+                    body("nome_evento", "Evento Original", "hora_inicio", "09:00:00", "responsavel_evento", "Resp Original", "hora_saida", "18:00:00"),
                     dono.getId());
             RegistroOperacaoOperador r3 = relerEntrada(entrada.getId());
             assertEquals("Evento Original", r3.getNomeEvento(), "o VALOR volta ao original...");
@@ -232,7 +235,7 @@ class OperacaoServiceIT {
 
             // 1ª edição: nova data → DATA muda e DATA_EDITADO liga
             service.editarEntrada(entrada.getId(),
-                    body("nome_evento", "Sessao PP", "hora_inicio", "09:00:00", "data_operacao", "2026-08-15"),
+                    body("nome_evento", "Sessao PP", "hora_inicio", "09:00:00", "data_operacao", "2026-08-15", "hora_saida", "18:00:00"),
                     dono.getId());
             Object[] apos1 = lerRegistroAudio(registro.getId());
             assertEquals("2026-08-15", apos1[0].toString().substring(0, 10));
@@ -241,7 +244,7 @@ class OperacaoServiceIT {
             // 2ª edição: reenvia a MESMA data (DATA == nova) — sem o ramo "WHEN DATA_EDITADO=1 THEN 1"
             // o CASE (DATA != :dt2) daria 0. É isto que isola o sticky de DATA_EDITADO.
             service.editarEntrada(entrada.getId(),
-                    body("nome_evento", "Sessao PP", "hora_inicio", "09:00:00", "data_operacao", "2026-08-15"),
+                    body("nome_evento", "Sessao PP", "hora_inicio", "09:00:00", "data_operacao", "2026-08-15", "hora_saida", "18:00:00"),
                     dono.getId());
             Object[] apos2 = lerRegistroAudio(registro.getId());
             assertEquals("2026-08-15", apos2[0].toString().substring(0, 10));
@@ -263,7 +266,7 @@ class OperacaoServiceIT {
 
             service.editarEntrada(entrada.getId(),
                     body("nome_evento", "Evento", "hora_inicio", "09:00:00", "responsavel_evento", "Resp",
-                            "nome_demais_salas", "Sala Improvisada IT"),
+                            "nome_demais_salas", "Sala Improvisada IT", "hora_saida", "18:00:00"),
                     dono.getId());
 
             assertEquals("Sala Improvisada IT", lerRegistroAudio(registro.getId())[2]);
@@ -280,7 +283,7 @@ class OperacaoServiceIT {
             RegistroOperacaoOperador entrada = entradaEditavel(registro, dono, 1, "Evento", "09:00:00", "Resp");
 
             service.editarEntrada(entrada.getId(),
-                    body("nome_evento", "Evento", "hora_inicio", "09:00:00", "responsavel_evento", "Resp"),
+                    body("nome_evento", "Evento", "hora_inicio", "09:00:00", "responsavel_evento", "Resp", "hora_saida", "18:00:00"),
                     dono.getId());
 
             assertNull(lerRegistroAudio(registro.getId())[2], "sala ≠ 11 força NOME_DEMAIS_SALAS a NULL");
@@ -304,7 +307,8 @@ class OperacaoServiceIT {
 
             service.editarEntrada(ordem1.getId(),
                     body("nome_evento", "Evento Propagado", "hora_inicio", "09:30:00", "responsavel_evento", "Resp Propagado",
-                            "horario_pauta", "08:00:00", "tipo_evento", "cessao", "comissao_id", String.valueOf(comissao.getId())),
+                            "horario_pauta", "08:00:00", "tipo_evento", "cessao", "comissao_id", String.valueOf(comissao.getId()),
+                            "hora_saida", "18:00:00"),
                     dono1.getId());
 
             RegistroOperacaoOperador outra = relerEntrada(ordem2.getId());
@@ -325,7 +329,7 @@ class OperacaoServiceIT {
             RegistroOperacaoOperador entrada = entradaEditavel(registro, dono, 1, "Antes", "09:00:00", "Resp");
 
             service.editarEntrada(entrada.getId(),
-                    body("nome_evento", "Depois", "hora_inicio", "09:00:00", "responsavel_evento", "Resp"),
+                    body("nome_evento", "Depois", "hora_inicio", "09:00:00", "responsavel_evento", "Resp", "hora_saida", "18:00:00"),
                     dono.getId());
 
             emReal().flush();
@@ -342,6 +346,38 @@ class OperacaoServiceIT {
             assertEquals("Antes", snapshot.get("nome_evento"),
                     "o snapshot é do estado ANTES da alteração (montado antes do UPDATE)");
             assertEquals("Resp", snapshot.get("responsavel_evento"));
+        }
+    }
+
+    @Nested
+    @DisplayName("corrige F73 (C19) — invariante de presença de término em Oracle real")
+    class PresencaDeTerminoF73 {
+
+        @Test
+        @DisplayName("editarEntrada que RESULTARIA em nenhum término recusa 400 e nada muda no banco")
+        void editarEntrada_resultanteSemTermino_recusaENadaMuda() {
+            Sala sala = CenarioFactory.novaSala(emReal());
+            Operador dono = CenarioFactory.novoOperador(emReal());
+            RegistroOperacaoAudio registro = CenarioFactory.novoRegistroAudio(emReal(), sala);
+            RegistroOperacaoOperador entrada = entradaEditavel(registro, dono, 1, "Evento", "09:00:00", "Resp");
+
+            // body sem hora_fim e sem hora_saida: a edição sobrescreveria os DOIS términos com
+            // NULL — exatamente a entrada "sem fim" que degenerava a faxina (F17)
+            br.leg.senado.nusp.exception.ServiceValidationException ex = org.junit.jupiter.api.Assertions
+                    .assertThrows(br.leg.senado.nusp.exception.ServiceValidationException.class,
+                            () -> service.editarEntrada(entrada.getId(),
+                                    body("nome_evento", "Evento", "hora_inicio", "09:00:00",
+                                            "responsavel_evento", "Resp"),
+                                    dono.getId()));
+
+            assertEquals("Informe o 'Término do evento' ou o 'Término da operação'.", ex.getMessage());
+            RegistroOperacaoOperador intacta = relerEntrada(entrada.getId());
+            assertEquals("18:00:00", intacta.getHoraSaida(), "a HORA_SAIDA original permanece");
+            assertFalse(intacta.getEditado(), "a recusa precede o UPDATE — nenhuma flag liga");
+            Number historicos = (Number) emReal().createNativeQuery(
+                    "SELECT COUNT(*) FROM OPR_REGISTRO_ENTRADA_HIST WHERE ENTRADA_ID = :id")
+                    .setParameter("id", entrada.getId()).getSingleResult();
+            assertEquals(0, historicos.intValue(), "a recusa precede também o histórico");
         }
     }
 }

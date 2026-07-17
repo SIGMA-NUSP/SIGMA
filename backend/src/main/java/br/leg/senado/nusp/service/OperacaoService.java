@@ -56,13 +56,26 @@ public class OperacaoService {
             throw new ServiceValidationException("Acesso negado.", HttpStatus.FORBIDDEN);
     }
 
-    /** Normaliza "hh:mm" → "hh:mm:ss" para manter consistência com o formato do banco. */
-    private static String normalizeTime(String s) {
-        if (s == null || s.isBlank()) return null;
-        s = s.strip();
-        // "14:30" → "14:30:00"
-        if (s.matches("\\d{2}:\\d{2}")) return s + ":00";
-        return s;
+    /**
+     * Valida e normaliza um horário do body ("hh:mm" → "hh:mm:ss", formato do banco).
+     * Desde o F73/C19 delega na régua única ({@link HoraValidator}) e RECUSA hora torta
+     * com 400 — antes, qualquer string fora de "hh:mm" passava intacta para o VARCHAR2.
+     */
+    private static String normalizeTime(String s, String rotuloDoCampo) {
+        return HoraValidator.normalizar(s, rotuloDoCampo, true);
+    }
+
+    /**
+     * Invariante F73/C19: toda entrada tem pelo menos um término — "Término do evento"
+     * (encerra a sessão) ou "Término da operação" (a sessão fica para o próximo herdar).
+     * Era a trava de submit do frontend; sem ela no servidor, uma escrita direta na API
+     * criava a entrada "sem fim" que degenerava a faxina da madrugada (F17).
+     */
+    private static void validarPresencaTermino(String horaFim, String horaSaida) {
+        if (horaFim == null && horaSaida == null) {
+            throw new ServiceValidationException(
+                    "Informe o 'Término do evento' ou o 'Término da operação'.");
+        }
     }
 
     /** Normaliza tipo_evento — equivale a _normalizar_tipo_evento() do Python. */
@@ -414,6 +427,10 @@ public class OperacaoService {
         List<Map<String, Object>> todasEntradas = (List<Map<String, Object>>) estado.get("entradas_sessao");
         int ordem = todasEntradas.size() + 1;
 
+        // Invariante F73: o estado resultante precisa de ao menos um término (vale também
+        // para o Plenário Principal — o form multi-operador exige "Término da sessão").
+        validarPresencaTermino(dados.horaFim(), dados.horaSaida());
+
         // Validação completa de horários (plenários numerados)
         Sala sala = salaRepo.findById(salaId).orElse(null);
         boolean isMultiOp = sala != null && Boolean.TRUE.equals(sala.getMultiOperador());
@@ -463,15 +480,15 @@ public class OperacaoService {
         String dataOperacao = clean(body, "data_operacao");
         String salaIdRaw = clean(body, "sala_id");
         String nomeEvento = blankToNull(clean(body, "nome_evento"));
-        String horarioPauta = normalizeTime(clean(body, "horario_pauta"));
-        String horaInicio = normalizeTime(clean(body, "hora_inicio"));
-        String horaFim = normalizeTime(clean(body, "hora_fim"));
+        String horarioPauta = normalizeTime(clean(body, "horario_pauta"), "Horário da Pauta");
+        String horaInicio = normalizeTime(clean(body, "hora_inicio"), "Início do evento");
+        String horaFim = normalizeTime(clean(body, "hora_fim"), "Término do evento");
         String observacoes = blankToNull(clean(body, "observacoes"));
         String usb01 = blankToNull(clean(body, "usb_01"));
         String usb02 = blankToNull(clean(body, "usb_02"));
         String responsavelEvento = blankToNull(clean(body, "responsavel_evento"));
-        String horaEntrada = normalizeTime(clean(body, "hora_entrada"));
-        String horaSaida = normalizeTime(clean(body, "hora_saida"));
+        String horaEntrada = normalizeTime(clean(body, "hora_entrada"), "Início da operação");
+        String horaSaida = normalizeTime(clean(body, "hora_saida"), "Término da operação");
         String nomeDemaisSalas = blankToNull(clean(body, "nome_demais_salas"));
         String tipoEventoRaw = clean(body, "tipo_evento");
         String tipoEvento = normalizarTipoEvento(tipoEventoRaw.isEmpty() ? "operacao" : tipoEventoRaw);
@@ -500,6 +517,10 @@ public class OperacaoService {
         if (!existeSessao) throw new ServiceValidationException("Não existe sessão aberta para este local.");
 
         long registroId = ((Number) estado.get("registro_id")).longValue();
+
+        // Invariante F73: a edição sobrescreve os dois términos com o body — o estado
+        // resultante é exatamente o que chegou, e precisa de ao menos um.
+        validarPresencaTermino(d.horaFim(), d.horaSaida());
 
         // Validação completa de horários (plenários numerados)
         Sala salaInline = salaRepo.findById(salaId).orElse(null);
@@ -595,8 +616,8 @@ public class OperacaoService {
         List<String> chaves = new ArrayList<>();
         int ordemSusp = 1;
         for (Map<String, Object> susp : suspensoes) {
-            String hs = normalizeTime(susp.get("hora_suspensao") != null ? susp.get("hora_suspensao").toString() : "");
-            String hr = normalizeTime(susp.get("hora_reabertura") != null ? susp.get("hora_reabertura").toString() : "");
+            String hs = normalizeTime(susp.get("hora_suspensao") != null ? susp.get("hora_suspensao").toString() : "", "Suspensa em");
+            String hr = normalizeTime(susp.get("hora_reabertura") != null ? susp.get("hora_reabertura").toString() : "", "Reaberta em");
             if (hs != null || hr != null) {
                 Suspensao s = new Suspensao();
                 s.setEntradaId(entradaId);
@@ -628,7 +649,7 @@ public class OperacaoService {
         validarPermissaoEdicaoEntrada(entradaId, userId);
 
         String nomeEvento = blankToNull(clean(body, "nome_evento"));
-        String horaInicio = normalizeTime(clean(body, "hora_inicio"));
+        String horaInicio = normalizeTime(clean(body, "hora_inicio"), "Início do evento");
         String responsavelEvento = blankToNull(clean(body, "responsavel_evento"));
 
         // Verificar se é multi-operador para relaxar validações
@@ -641,13 +662,13 @@ public class OperacaoService {
         if (!isMultiOp && responsavelEvento == null) errors.put("responsavel_evento", "Campo obrigatório.");
         if (!errors.isEmpty()) throw new ServiceValidationException("Erro de validação.");
 
-        String horarioPauta = normalizeTime(clean(body, "horario_pauta"));
-        String horarioTermino = normalizeTime(clean(body, "hora_fim"));
+        String horarioPauta = normalizeTime(clean(body, "horario_pauta"), "Horário da Pauta");
+        String horarioTermino = normalizeTime(clean(body, "hora_fim"), "Término do evento");
         String usb01 = blankToNull(clean(body, "usb_01"));
         String usb02 = blankToNull(clean(body, "usb_02"));
         String observacoes = blankToNull(clean(body, "observacoes"));
-        String horaEntrada = normalizeTime(clean(body, "hora_entrada"));
-        String horaSaida = normalizeTime(clean(body, "hora_saida"));
+        String horaEntrada = normalizeTime(clean(body, "hora_entrada"), "Início da operação");
+        String horaSaida = normalizeTime(clean(body, "hora_saida"), "Término da operação");
         String tipoEvento = normalizarTipoEvento(clean(body, "tipo_evento"));
         if (tipoEvento.isEmpty()) tipoEvento = "operacao";
         Long comissaoId = parseComissaoId(body);
@@ -689,6 +710,10 @@ public class OperacaoService {
         if (totalEntradas > 1) {
             horarioTermino = (String) snapshot.get("horario_termino");
         }
+
+        // Invariante F73: valida o estado RESULTANTE (com o horario_termino já resolvido —
+        // na sessão multi-entrada o do body é descartado e vale o do snapshot).
+        validarPresencaTermino(horarioTermino, horaSaida);
 
         // Salvar histórico
         salvarHistorico(entradaId, snapshot, userId);

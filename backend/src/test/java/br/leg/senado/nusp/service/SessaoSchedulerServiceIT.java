@@ -97,6 +97,13 @@ class SessaoSchedulerServiceIT {
                 .getSingleResult();
     }
 
+    private String lerHoraSaida(Long entradaId) {
+        return (String) emReal()
+                .createNativeQuery("SELECT HORA_SAIDA FROM OPR_REGISTRO_ENTRADA WHERE ID = :id")
+                .setParameter("id", entradaId)
+                .getSingleResult();
+    }
+
     private void executarJob() {
         service.fecharSessoesAbertas();
         emReal().clear(); // os 2 UPDATEs são nativos: sem clear, a releitura serviria entidade stale
@@ -223,6 +230,93 @@ class SessaoSchedulerServiceIT {
                 "o lote deixou de ser envenenado: a sessão saudável do mesmo run fecha");
         assertEquals(dia(1) + " 12:30:00", intacta[2], "e fecha exatamente como antes da guarda");
         assertEquals(operadorSaudavel.getId(), intacta[1]);
+    }
+
+    @Test
+    @DisplayName("corrige F73 — HORA_SAIDA = '24:00:00' fecha a sessão como 23:59:59 (fim visível): "
+            + "Query 1 copia 23:59:59 e FECHADO_EM = DATA + 23:59:59")
+    void fecharSessoesAbertas_vinteEQuatroHorasViraUmMinutoAntes() {
+        // A escrita recusa 24:00:00 na porta desde o C19; este é o lixo pré-existente que a
+        // faxina TOLERA. Antes: TO_DSINTERVAL('0 24:00:00') → ORA-01850 abortava o UPDATE.
+        RegistroOperacaoAudio ontem = sessaoAberta(1);
+        Operador operador = CenarioFactory.novoOperador(emReal());
+        RegistroOperacaoOperador e = entrada(ontem, operador, 1, "24:00:00", null);
+
+        executarJob(); // não estoura mais
+
+        assertEquals("23:59:59", lerHorarioTermino(e.getId()),
+                "Query 1 copia o valor MAPEADO (24:00:00 → 23:59:59), não o cru");
+        Object[] registro = lerRegistro(ontem.getId());
+        assertEquals(0, ((Number) registro[0]).intValue(), "a sala libera");
+        assertEquals(operador.getId(), registro[1], "o 24:00:00 mapeado ainda concorre ao FECHADO_POR");
+        assertEquals(dia(1) + " 23:59:59", registro[2], "FECHADO_EM carimbado com o valor mapeado");
+        assertEquals("24:00:00", lerHoraSaida(e.getId()), "a HORA_SAIDA torta NÃO é reescrita (sem saneamento)");
+    }
+
+    @Test
+    @DisplayName("corrige F73 — HORA_SAIDA torta ('xx:yy:zz' / '25:00:00') fecha com carimbo em branco: "
+            + "HORARIO_TERMINO fica nulo, FECHADO_EM/POR nulos, EM_ABERTO = 0, e a torta permanece intacta")
+    void fecharSessoesAbertas_horaTortaFechaComCarimboEmBranco() {
+        RegistroOperacaoAudio comLixo = sessaoAberta(1);
+        RegistroOperacaoOperador tortaTexto = entrada(comLixo, CenarioFactory.novoOperador(emReal()), 1,
+                "xx:yy:zz", null);
+        RegistroOperacaoAudio comHoraImpossivel = sessaoAberta(1);
+        RegistroOperacaoOperador tortaHora = entrada(comHoraImpossivel, CenarioFactory.novoOperador(emReal()), 1,
+                "25:00:00", null);
+
+        executarJob(); // antes: ORA-01867 ('xx') / ORA-01850 ('25:00:00') abortavam o UPDATE
+
+        for (var caso : java.util.List.of(
+                java.util.Map.entry(comLixo, tortaTexto), java.util.Map.entry(comHoraImpossivel, tortaHora))) {
+            Object[] registro = lerRegistro(caso.getKey().getId());
+            assertEquals(0, ((Number) registro[0]).intValue(), "a sala libera mesmo com lixo");
+            assertNull(registro[2], "torta não gera carimbo: FECHADO_EM nulo (caminho degenerado do C16)");
+            assertNull(registro[1], "FECHADO_POR nulo — nenhuma saída válida a apontar");
+            assertNull(lerHorarioTermino(caso.getValue().getId()),
+                    "Query 1 NÃO copia a torta → relatório mostra 'Evento não encerrado'");
+        }
+        assertEquals("xx:yy:zz", lerHoraSaida(tortaTexto.getId()), "sem saneamento: a torta fica");
+        assertEquals("25:00:00", lerHoraSaida(tortaHora.getId()));
+    }
+
+    @Test
+    @DisplayName("corrige F73 — lote misto: a sessão torta não envenena o UPDATE e a saudável fecha com carimbo normal")
+    void fecharSessoesAbertas_loteMistoTortaNaoEnvenenaASaudavel() {
+        // A prova central do C19: hoje este cenário estoura ORA-01850/01867 e NENHUMA sessão
+        // fecha (salas presas em "operação") — a prova-irmã da degenerada do C16/F17.
+        RegistroOperacaoAudio torta = sessaoAberta(1);
+        entrada(torta, CenarioFactory.novoOperador(emReal()), 1, "99:99:99", null);
+        RegistroOperacaoAudio saudavel = sessaoAberta(1);
+        Operador operadorSaudavel = CenarioFactory.novoOperador(emReal());
+        entrada(saudavel, operadorSaudavel, 1, "12:30:00", null);
+
+        executarJob();
+
+        Object[] intacta = lerRegistro(saudavel.getId());
+        assertEquals(0, ((Number) intacta[0]).intValue(), "a saudável do mesmo lote fecha");
+        assertEquals(dia(1) + " 12:30:00", intacta[2], "com o carimbo de sempre");
+        assertEquals(operadorSaudavel.getId(), intacta[1]);
+        assertEquals(0, ((Number) lerRegistro(torta.getId())[0]).intValue(), "e a torta também libera a sala");
+    }
+
+    @Test
+    @DisplayName("corrige F73 — entrada torta e entrada válida na MESMA sessão: MAX e FECHADO_POR vêm da válida")
+    void fecharSessoesAbertas_tortaNaMesmaSessaoNaoVenceOMax() {
+        // 'xx:yy:zz' é lexicograficamente maior que qualquer hora numérica: sem o filtro de
+        // validade, venceria o MAX e o ORDER BY — carimbo torto e autor errado.
+        RegistroOperacaoAudio ontem = sessaoAberta(1);
+        Operador daTorta = CenarioFactory.novoOperador(emReal());
+        Operador daValida = CenarioFactory.novoOperador(emReal());
+        entrada(ontem, daTorta, 1, "xx:yy:zz", null);
+        entrada(ontem, daValida, 2, "12:30:00", null);
+
+        executarJob();
+
+        Object[] registro = lerRegistro(ontem.getId());
+        assertEquals(0, ((Number) registro[0]).intValue());
+        assertEquals(daValida.getId(), registro[1],
+                "FECHADO_POR considera só saídas válidas — a torta não atribui o fechamento a ninguém");
+        assertEquals(dia(1) + " 12:30:00", registro[2], "MAX ignora a torta (vira NULL no CASE)");
     }
 
     @Test

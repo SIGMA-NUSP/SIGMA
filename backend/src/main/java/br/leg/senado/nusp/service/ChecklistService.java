@@ -167,8 +167,12 @@ public class ChecklistService {
             throw new ServiceValidationException("Local inválido.");
         }
 
-        String horaInicio = str(body.get("hora_inicio_testes")).strip();
-        String horaTermino = str(body.get("hora_termino_testes")).strip();
+        // Régua de horário (F73/C19): recusa hora torta com 400; completa "HH:MM" → "HH:MM:SS"
+        // (formato 100% vivo das duas colunas, medido em 16/07 — o wizard envia hhmmss()).
+        String horaInicio = HoraValidator.normalizar(
+                str(body.get("hora_inicio_testes")), "Início dos testes", true);
+        String horaTermino = HoraValidator.normalizar(
+                str(body.get("hora_termino_testes")), "Término dos testes", true);
         String observacoes = blankToNull(str(body.get("observacoes")));
         String usb01 = blankToNull(str(body.get("usb_01")));
         String usb02 = blankToNull(str(body.get("usb_02")));

@@ -203,6 +203,14 @@ public class AnormalidadeService {
         if (d.resolvidaPeloOperador() && d.procedimentosAdotados().isEmpty())
             errors.put("procedimentos_adotados", "Campo obrigatório quando a anormalidade foi resolvida pelo operador.");
 
+        // Régua de horário (F73/C19): recusa hora torta fail-fast, ANTES da coerência
+        // lexicográfica abaixo — uma torta não pode virar mensagem de ordem sem sentido.
+        // Anormalidade grava como chega (formato vivo do banco: HH:MM do <input type="time">,
+        // medido em 16/07), por isso a régua aqui só valida, sem completar segundos.
+        HoraValidator.normalizar(d.horaInicioAnormalidade(), "Horário do início da anormalidade", false);
+        HoraValidator.normalizar(d.horaAcionamentoManutencao(), "Horário do acionamento da manutenção", false);
+        HoraValidator.normalizar(d.horaSolucao(), "Hora da solução", false);
+
         // ck_datas_coerentes
         if (!d.dataSolucao().isEmpty()) {
             if (d.dataSolucao().compareTo(d.dataStr()) < 0)

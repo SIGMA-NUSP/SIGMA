@@ -260,4 +260,64 @@ class ChecklistServiceTest {
             assertEquals("radio", result.get(1).get("tipo_widget")); // default quando NULL
         }
     }
+
+    // ── corrige F73 (C19): régua de horário na porta do checklist ──
+
+    @Nested
+    class ReguaDeHorarioF73 {
+
+        @Test
+        @DisplayName("corrige F73 — hora_inicio_testes torta recusa 400 nomeando 'Início dos testes', antes de tocar o banco")
+        void registrar_horaInicioTorta_recusa() {
+            Map<String, Object> body = bodyRegistrarValido();
+            body.put("hora_inicio_testes", "24:00:00");
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.registrar(body, USER_ID));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertTrue(ex.getMessage().contains("'Início dos testes'"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("'24:00:00'"), ex.getMessage());
+            verifyNoInteractions(checklistRepo, respostaRepo, entityManager);
+        }
+
+        @Test
+        @DisplayName("corrige F73 — hora_termino_testes torta recusa 400 nomeando 'Término dos testes'")
+        void registrar_horaTerminoTorta_recusa() {
+            Map<String, Object> body = bodyRegistrarValido();
+            body.put("hora_termino_testes", "xx");
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.registrar(body, USER_ID));
+
+            assertTrue(ex.getMessage().contains("'Término dos testes'"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("'xx'"), ex.getMessage());
+            verifyNoInteractions(checklistRepo, respostaRepo, entityManager);
+        }
+
+        @Test
+        @DisplayName("regressão — HH:MM é completado para HH:MM:SS na gravação (formato 100% vivo das colunas), e HH:MM:SS com segundos vivos fica intacto")
+        void registrar_validosNormalizamComoOBanco() {
+            Query dup = mockQueryPara("INTERVAL '5' MINUTE");
+            when(dup.getSingleResult()).thenReturn(0);
+            when(itemTipoRepo.findAllOrdered()).thenReturn(List.of());
+            when(checklistRepo.save(any())).thenAnswer(inv -> {
+                Checklist c = inv.getArgument(0);
+                c.setId(CHECKLIST_ID);
+                return c;
+            });
+            when(salaRepo.findById(7)).thenReturn(Optional.of(salaComum(7)));
+
+            Map<String, Object> body = bodyRegistrarValido();
+            body.put("hora_inicio_testes", "08:00");      // HH:MM → completa :00
+            body.put("hora_termino_testes", "10:36:50");  // segundos vivos do wizard → intacto
+
+            service.registrar(body, USER_ID);
+
+            verify(checklistRepo).save(argThat((Checklist c) ->
+                    "08:00:00".equals(c.getHoraInicioTestes())
+                            && "10:36:50".equals(c.getHoraTerminoTestes())
+                            && c.getTurno() == Turno.MATUTINO)); // inferirTurno segue lendo a hora
+        }
+    }
 }

@@ -360,4 +360,107 @@ class AnormalidadeServiceTest {
             assertEquals("João Silva", result.get("responsavel_evento"));
         }
     }
+
+    // ── corrige F73 (C19): régua de horário na porta da anormalidade ──
+
+    @Nested
+    class ReguaDeHorarioF73 {
+
+        private Map<String, Object> bodyValido() {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("registro_id", "100");
+            body.put("data", "2026-03-17");
+            body.put("sala_id", "1");
+            body.put("nome_evento", "Sessão Plenária");
+            body.put("hora_inicio_anormalidade", "14:00");
+            body.put("descricao_anormalidade", "Falha no microfone");
+            body.put("responsavel_evento", "João Silva");
+            body.put("houve_prejuizo", "false");
+            body.put("houve_reclamacao", "false");
+            body.put("acionou_manutencao", "false");
+            body.put("resolvida_pelo_operador", "false");
+            return body;
+        }
+
+        @Test
+        @DisplayName("corrige F73 — hora_inicio_anormalidade torta recusa 400 nomeando o rótulo da tela")
+        void horaInicioTorta_recusa() {
+            Map<String, Object> body = bodyValido();
+            body.put("hora_inicio_anormalidade", "25:10:00");
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.registrar(body, "user-1"));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertTrue(ex.getMessage().contains("'Horário do início da anormalidade'"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("'25:10:00'"), ex.getMessage());
+            verify(anormalidadeRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("corrige F73 — hora_acionamento_manutencao torta recusa 400 nomeando o rótulo da tela")
+        void horaAcionamentoTorta_recusa() {
+            Map<String, Object> body = bodyValido();
+            body.put("acionou_manutencao", "true");
+            body.put("hora_acionamento_manutencao", "1:5");
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.registrar(body, "user-1"));
+
+            assertTrue(ex.getMessage().contains("'Horário do acionamento da manutenção'"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("'1:5'"), ex.getMessage());
+            verify(anormalidadeRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("corrige F73 — hora_solucao torta recusa 400 (porta só de API: nenhuma tela envia o campo hoje)")
+        void horaSolucaoTorta_recusa() {
+            Map<String, Object> body = bodyValido();
+            body.put("data_solucao", "2026-03-18");
+            body.put("hora_solucao", "12:00:60");
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.registrar(body, "user-1"));
+
+            assertTrue(ex.getMessage().contains("'Hora da solução'"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("'12:00:60'"), ex.getMessage());
+            verify(anormalidadeRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("corrige F73 — a recusa de FORMATO precede a coerência (torta não vira 'não pode ser anterior')")
+        void formatoPrecedeCoerencia() {
+            // hora_solucao torta E "anterior" ao início no mesmo dia: sem a precedência,
+            // ck_datas_coerentes responderia "Hora da solução não pode ser anterior..."
+            Map<String, Object> body = bodyValido();
+            body.put("data_solucao", "2026-03-17");
+            body.put("hora_solucao", "0x:99");
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.registrar(body, "user-1"));
+
+            assertTrue(ex.getMessage().startsWith("Horário inválido em 'Hora da solução'"),
+                    "a mensagem é a de formato, não a de coerência: " + ex.getMessage());
+        }
+
+        @Test
+        @DisplayName("regressão — horários válidos gravam CRUS, como chegam (formato vivo do banco: HH:MM da tela)")
+        void validosGravamComoChegam() {
+            when(anormalidadeRepo.save(any())).thenAnswer(inv -> {
+                RegistroAnormalidade a = inv.getArgument(0);
+                a.setId(55L);
+                return a;
+            });
+
+            Map<String, Object> body = bodyValido();
+            body.put("acionou_manutencao", "true");
+            body.put("hora_acionamento_manutencao", "15:30");
+
+            service.registrar(body, "user-1");
+
+            verify(anormalidadeRepo).save(argThat((RegistroAnormalidade a) ->
+                    "14:00".equals(a.getHoraInicioAnormalidade())      // HH:MM não ganha ':00'
+                            && "15:30".equals(a.getHoraAcionamentoManutencao())));
+        }
+    }
 }
