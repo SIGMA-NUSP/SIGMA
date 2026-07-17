@@ -959,58 +959,6 @@ public class OperacaoService {
         return new LinkedHashMap<>(Map.of("registro_id", registroId, "sala_id", salaId, "status", "finalizado"));
     }
 
-    // ── Registro de operação (endpoint original) ──────────────
-
-    /**
-     * POST /api/operacao/registro
-     * Equivale a registrar_operacao_audio() do Python.
-     */
-    @Transactional
-    public Map<String, Object> registrarOperacao(Map<String, Object> body, String userId) {
-        String dataOperacao = clean(body, "data_operacao");
-        String salaIdRaw = clean(body, "sala_id");
-        String nomeEvento = clean(body, "nome_evento");
-        String horaInicio = clean(body, "hora_inicio");
-
-        Map<String, String> errors = new LinkedHashMap<>();
-        if (dataOperacao.isEmpty()) errors.put("data_operacao", "Campo obrigatório.");
-        if (salaIdRaw.isEmpty()) errors.put("sala_id", "Campo obrigatório.");
-        if (nomeEvento.isEmpty()) errors.put("nome_evento", "Campo obrigatório.");
-        if (horaInicio.isEmpty()) errors.put("hora_inicio", "Campo obrigatório.");
-
-        // Defensivo (F29): "operadores" vem do payload cru. `getOrDefault` NÃO protege de um
-        // `"operadores": null` (a chave existe, o valor é null → NPE no stream), e o cast some no
-        // erasure — uma lista de números estourava ClassCastException. Ambos viravam 500 por um
-        // corpo torto do cliente; aqui, um valor de tipo errado simplesmente não vira operador e
-        // o formulário responde com o erro de validação que já existia (400).
-        List<String> operadores = OperacaoService.<Object>listFromBody(body, "operadores").stream()
-                .map(o -> o == null ? "" : o.toString().strip())
-                .filter(s -> !s.isEmpty())
-                .toList();
-        if (operadores.isEmpty()) errors.put("operador_1", "Informe pelo menos um operador.");
-
-        if (!errors.isEmpty()) throw new ServiceValidationException("Erros de validação no formulário.");
-
-        int salaId = parseSalaId(salaIdRaw);
-
-        long registroId = criarSessaoAudio(dataOperacao, salaId, userId, null).getId();
-
-        int ordem = 1;
-        for (String opId : operadores) {
-            RegistroOperacaoOperador entrada = new RegistroOperacaoOperador();
-            entrada.setRegistroId(registroId);
-            entrada.setOperadorId(opId);
-            entrada.setOrdem(ordem++);
-            entrada.setSeq(1);
-            entrada.setTipoEvento(br.leg.senado.nusp.enums.TipoEvento.OPERACAO);
-            entrada.setCriadoPor(userId);
-            entrada.setAtualizadoPor(userId);
-            entradaRepo.save(entrada);
-        }
-
-        return new LinkedHashMap<>(Map.of("registro_id", registroId));
-    }
-
     // ── Lookup registro operação (para anormalidade) ──────────
 
     /**

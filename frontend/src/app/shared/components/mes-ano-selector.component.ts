@@ -15,9 +15,11 @@ export interface MesAno { ano: number; mes: number; }
  * Política do Douglas, em ANOS: dezembro → [ano, ano+1]; janeiro → [ano-1, ano];
  * fevereiro a novembro → [ano].
  *
- * ⚠️ O range é em anos, e `podeVoltar`/`podeAvancar` só barram no 1º e no último ANO — logo,
- * nos meses de virada a navegação por setas alcança o ano vizinho INTEIRO (F70, registrado,
- * não corrigido aqui): 12 cliques em › a partir de dez/2026 chegam a dez/2027.
+ * [F70][C20] A navegação por setas fica contida na janela do componente: o ano corrente
+ * INTEIRO + só o mês vizinho da virada (dez do ano anterior em janeiro; jan do ano seguinte em
+ * dezembro) = 13 meses na virada. A política de ANOS (esta função) NÃO muda; quem limita os
+ * MESES são os guards `podeVoltar`/`podeAvancar` (antes barravam só no 1º/último ANO do range,
+ * e a navegação alcançava o ano vizinho INTEIRO — 24 meses).
  *
  * Função do relógio local do cliente (T-3.1) — nada hardcoded.
  */
@@ -29,12 +31,16 @@ export function anosNavegaveis(hoje: Date): number[] {
   return [ano];
 }
 
+/** Posição absoluta de um mês (ano·12 + mês) — ordena pares (ano, mês) como um inteiro
+ *  monotônico, para comparar a posição corrente às bordas da janela navegável (F70). */
+function ordinalMes(ano: number, mes: number): number { return ano * 12 + mes; }
+
 /**
  * Seletor de mês/ano reutilizável (‹ mês ›). O ano vem do relógio local do
  * cliente (T-3.1) — nunca hardcode. Por padrão oferta só o ano corrente; um
  * range maior pode ser passado em [anos] (ordem crescente — no módulo Ponto,
  * o de `anosNavegaveis`). Emite (mudou) a cada alteração de mês ou ano; a
- * navegação cruza o ano quando o range permite.
+ * navegação cruza o ano na virada, contida na janela de 13 meses (F70).
  */
 @Component({
   selector: 'app-mes-ano-selector',
@@ -106,11 +112,32 @@ export class MesAnoSelectorComponent implements OnInit {
   ano = signal<number>(this.hoje.getFullYear());
   mes = signal<number>(this.hoje.getMonth() + 1);
 
-  podeVoltar = computed(() => this.mes() > 1 || this.ano() > this.anos()[0]);
-  podeAvancar = computed(() => {
+  /** Ano do relógio local (T-3.1) — centro da janela navegável do F70; nunca hardcode. */
+  private anoCorrente = this.hoje.getFullYear();
+
+  /**
+   * [F70][C20] Bordas da janela navegável: o ano corrente INTEIRO + só o mês vizinho da virada
+   * (dez do ano anterior em janeiro; jan do ano seguinte em dezembro) → 13 meses na virada, 12
+   * fora dela. Antes, `podeVoltar`/`podeAvancar` barravam só no 1º/último ANO do range e a
+   * navegação alcançava o ano vizinho INTEIRO (24 meses): o banco de horas abria meses a um ano
+   * de distância e o Configurar da grade escrevia em qualquer mês navegável. As bordas leem o
+   * range (`anos`) só para saber se o vizinho é ofertado; o centro é sempre o relógio.
+   */
+  private inicioJanela = computed(() => {
     const anos = this.anos();
-    return this.mes() < 12 || this.ano() < anos[anos.length - 1];
+    return anos.length > 0 && anos[0] < this.anoCorrente
+      ? ordinalMes(this.anoCorrente - 1, 12)   // dez do ano anterior
+      : ordinalMes(this.anoCorrente, 1);        // jan do ano corrente
   });
+  private fimJanela = computed(() => {
+    const anos = this.anos();
+    return anos.length > 0 && anos[anos.length - 1] > this.anoCorrente
+      ? ordinalMes(this.anoCorrente + 1, 1)    // jan do ano seguinte
+      : ordinalMes(this.anoCorrente, 12);       // dez do ano corrente
+  });
+
+  podeVoltar = computed(() => ordinalMes(this.ano(), this.mes()) > this.inicioJanela());
+  podeAvancar = computed(() => ordinalMes(this.ano(), this.mes()) < this.fimJanela());
 
   /**
    * [F37][C14] Clampa o ano inicial ao range ofertado — SEM emitir `mudou`: o contrato
@@ -147,7 +174,21 @@ export class MesAnoSelectorComponent implements OnInit {
   }
 
   onSelectMes(ev: Event): void { this.mes.set(Number((ev.target as HTMLSelectElement).value)); this.emit(); }
-  onSelectAno(ev: Event): void { this.ano.set(Number((ev.target as HTMLSelectElement).value)); this.emit(); }
+
+  /**
+   * [F69][C20] Trocar o ano pelo `<select>` salta para o mês da virada — o único mês navegável do
+   * ano vizinho sob a janela do F70 (ano anterior → dezembro; ano seguinte → janeiro). Antes só
+   * trocava o ano e mantinha o mês: em 05/01/2027 escolher 2026 caía em jan/2026 — 12 meses antes
+   * de dezembro, a folha no prazo. Mesmo ano → mês intacto. `emit()` segue único e ao final (um
+   * evento por gesto, `MesAno` já consistente).
+   */
+  onSelectAno(ev: Event): void {
+    const novoAno = Number((ev.target as HTMLSelectElement).value);
+    if (novoAno < this.ano()) this.mes.set(12);
+    else if (novoAno > this.ano()) this.mes.set(1);
+    this.ano.set(novoAno);
+    this.emit();
+  }
 
   private emit(): void { this.mudou.emit({ ano: this.ano(), mes: this.mes() }); }
 }

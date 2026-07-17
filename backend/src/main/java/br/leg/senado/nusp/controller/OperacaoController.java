@@ -13,8 +13,12 @@ import java.util.Map;
 
 /**
  * Endpoints de Operação de Áudio — equivale a api/views/operacao.py do Python.
- * 6 endpoints: estado-sessao, salvar-entrada, finalizar-sessao, editar-entrada,
- * registro (original), lookup registro-operacao.
+ * 5 endpoints: estado-sessao, salvar-entrada, finalizar-sessao, editar-entrada,
+ * lookup registro-operacao.
+ *
+ * [F75][C20] O endpoint POST /api/operacao/registro (o "registro original", herança do
+ * registro_operacao_audio_view() do Python) foi REMOVIDO: sem tela que o chamasse, ele criava
+ * entradas sem nenhum término — violando a invariante do C19 por fora das portas blindadas.
  */
 @RestController
 @RequestMapping("/api")
@@ -112,20 +116,6 @@ public class OperacaoController {
         Map<String, Object> result = operacaoService.editarEntrada(entradaId, body, principal.getId());
         result.put("ok", true);
         return ResponseEntity.ok(result);
-    }
-
-    /**
-     * POST /api/operacao/registro
-     * Endpoint original de cadastro do formulário "Registro de Operação de Áudio".
-     * Equivale a registro_operacao_audio_view() do Python.
-     */
-    @PostMapping("/operacao/registro")
-    public ResponseEntity<?> registroOriginal(
-            @RequestBody Map<String, Object> body,
-            @AuthenticationPrincipal UserPrincipal principal) {
-        Map<String, Object> result = operacaoService.registrarOperacao(body, principal.getId());
-        result.put("ok", true);
-        return ResponseEntity.status(201).body(result);
     }
 
     /**
