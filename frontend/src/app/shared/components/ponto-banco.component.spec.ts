@@ -11,27 +11,15 @@ import { PontoBancoComponent } from './ponto-banco.component';
 import { RegistroManualPontoComponent } from './registro-manual-ponto.component';
 
 /**
- * T29 — PontoBancoComponent (shared, 100 LOC — página `/ponto`, compartilhada por operador,
- * técnico e admin com folha): wrapper que busca "minhas folhas", roteia o Voltar por papel e
- * abre os cards em acordeão (folhas / banco de horas / registro manual — este oculto por flag).
- *
- * Estratégia (manual de PAGE do T22/T23/T24 + padrões do T28): TestBed sem `detectChanges()`
- * por padrão — `ngOnInit` à mão, sem instanciar os filhos. `ApiService`/`AuthService` mockados
- * via `useValue` (o `role` é um signal writable, para variar o papel entre os testes).
- *
- * **Exceção deliberada — o `describe` "flag registroManualDisponivel" renderiza.** É o único
- * jeito de provar o que o estágio pede ("o ramo oculto não renderiza/ativa"): a ocultação vive
- * num `@if` do template. A asserção é sobre a **presença do componente filho** (feature ligada
- * ou desligada), não sobre disposição/CSS — sobrevive à reforma de layout do módulo (ressalva
- * do GATE). O `ApiService` mockado despacha por URL (decisão 2 do T28), porque o
- * `BancoHorasPessoalComponent` — que o template instancia sempre (fica em `[hidden]`, não em
- * `@if`) — dispara os seus próprios GETs.
- *
- * Relógio congelado antes de `createComponent` (regra do estágio); o SUT não lê `Date`, mas o
- * filho `BancoHorasPessoal` lê no render.
- *
- * C7 — F42 CORRIGIDO: os testes `corrige F42` exigem o canal de erro (signal `erro` + `carregarFolhas`
- * como retry), no lugar da equivalência silenciosa entre "a carga falhou" e "não há folhas".
+ * PontoBancoComponent (página `/ponto`, compartilhada por operador, técnico e admin com
+ * folha): busca de "minhas folhas" com canal de erro + retry, acordeão de cards, Voltar
+ * roteado por papel e a flag `registroManualDisponivel` — a ocultação vive num `@if` do
+ * template, então os testes de flag e de erro RENDERIZAM, assertando presença/ausência de
+ * componente, nunca layout/CSS. TestBed sem `detectChanges()` por padrão — `ngOnInit` à mão;
+ * `ApiService`/`AuthService` mockados via `useValue` (o `role` é um signal writable). O `get`
+ * mockado despacha por URL: o `BancoHorasPessoalComponent`, instanciado sempre (fica em
+ * `[hidden]`, não em `@if`), dispara os seus próprios GETs. Relógio congelado antes de
+ * `createComponent`: o SUT não lê `Date`, mas esse filho lê no render.
  */
 describe('PontoBancoComponent', () => {
   let apiGet: ReturnType<typeof vi.fn>;
@@ -110,8 +98,8 @@ describe('PontoBancoComponent', () => {
       expect(comp.loading()).toBe(false);
     });
 
-    it('corrige F42 — erro na carga NÃO é mais indistinguível de "nenhuma folha"', () => {
-      // C7 (F42): o cerne do achado era a EQUIVALÊNCIA — falha (500/timeout) e ausência real de
+    it('erro na carga NÃO é indistinguível de "nenhuma folha"', () => {
+      // O cerne do problema era a EQUIVALÊNCIA — falha (500/timeout) e ausência real de
       // folhas deixavam o componente no mesmo estado observável, então a tela dizia "Nenhuma folha
       // de ponto disponível ainda" nos dois casos, enquanto o prazo de retificação (5 dias) corria.
       // Agora o erro tem canal próprio: o template exibe a caixa com retry, não a frase do vazio.
@@ -131,7 +119,7 @@ describe('PontoBancoComponent', () => {
       expect(comErro.loading()).toBe(false);
     });
 
-    it('corrige F42 — erro sem mensagem do backend cai no fallback que cita o prazo', () => {
+    it('erro sem mensagem do backend cai no fallback que cita o prazo', () => {
       apiGet.mockReturnValue(throwError(() => ({ status: 503 })));
       const comp = criarCarregado();
       expect(comp.erro()).toBe(
@@ -139,7 +127,7 @@ describe('PontoBancoComponent', () => {
         + 'Você pode ter folhas publicadas dentro do prazo de retificação.');
     });
 
-    it('corrige F42 — o retry re-dispara a carga; o sucesso limpa o erro e exibe as folhas', () => {
+    it('o retry re-dispara a carga; o sucesso limpa o erro e exibe as folhas', () => {
       apiGet.mockReturnValue(throwError(() => ({ status: 500 })));
       const comp = criarCarregado();
       expect(comp.erro()).not.toBe('');
@@ -153,7 +141,7 @@ describe('PontoBancoComponent', () => {
       expect(comp.loading()).toBe(false);
     });
 
-    it('corrige F42 — uma nova carga limpa o erro já no disparo (a tela não mostra erro velho carregando)', () => {
+    it('uma nova carga limpa o erro já no disparo (a tela não mostra erro velho carregando)', () => {
       apiGet.mockReturnValue(throwError(() => ({ status: 500 })));
       const comp = criarCarregado();
 
@@ -276,10 +264,10 @@ describe('PontoBancoComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // O que a TELA mostra no erro (C7/F42) — exceção de render deliberada
+  // O que a TELA mostra no erro — exceção de render deliberada
   // ═══════════════════════════════════════════════════════════════════
-  describe('render do estado de erro (F42)', () => {
-    // O signal `erro` só corrige o F42 se o TEMPLATE o consumir: sem estes testes, apagar o ramo
+  describe('render do estado de erro', () => {
+    // O signal `erro` só cumpre o papel se o TEMPLATE o consumir: sem estes testes, apagar o ramo
     // `@else if (erro())` deixaria a suíte verde e o painel voltaria a dizer "Nenhuma folha de ponto
     // disponível ainda." numa falha de carga. Asserção de PRESENÇA/AUSÊNCIA de estado (mesma família
     // da exceção já autorizada acima), nunca de disposição ou CSS.

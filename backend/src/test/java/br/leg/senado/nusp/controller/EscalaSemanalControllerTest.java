@@ -39,16 +39,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contrato HTTP do {@link EscalaSemanalController} (T16).
+ * Contrato HTTP do {@link EscalaSemanalController}.
  *
  * Controller MISTO (sem @RequestMapping de classe): rotas /api/admin/escala/**
- * e rotas comuns /api/escala/** no mesmo arquivo. RBAC provado no T15 (é o
- * representativo misto de lá). Famílias do T16: paginação admin (e),
- * mapeamento ServiceValidationException→HTTP (c), binding inválido
- * respondendo 400 (d, F6 — corrigido no C4) e contrato singular — o status condicional do
- * save (201 cria / 200 atualiza), DELETE e a mistura admin/comum (f, a rota
- * comum /escala/minha combina service + repositório). Sem guard manual (a)
- * nem 404 de detalhe (b) neste controller.
+ * e rotas comuns /api/escala/** no mesmo arquivo. Cobre paginação admin,
+ * mapeamento ServiceValidationException→HTTP, binding inválido respondendo
+ * 400, o status condicional do save (201 cria / 200 atualiza), DELETE e a
+ * rota comum /escala/minha, que combina service + repositório. Regras de
+ * negócio permanecem mockadas.
  */
 @SigmaControllerTest(EscalaSemanalController.class)
 class EscalaSemanalControllerTest {
@@ -173,9 +171,9 @@ class EscalaSemanalControllerTest {
                 .andExpect(jsonPath("$.error").value("periodo_invalido"));
     }
 
-    // ══ (d) Binding inválido — corrige F6 (400) ════════════════════════════
+    // ══ (d) Binding inválido (400) ═════════════════════════════════════════
 
-    // ══ Payload do corpo (Map cru) — corrige F27 (400, não 500) ═══════════
+    // ══ Payload do corpo (Map cru) — responde 400, não 500 ════════════════
 
     /**
      * O corpo destes endpoints chega como {@code Map}, sem binding do Spring: o controller lia
@@ -183,10 +181,10 @@ class EscalaSemanalControllerTest {
      * então um corpo incompleto ou de tipo errado rebentava em NPE/ClassCastException e o cliente
      * recebia **500** por um erro que era dele. Agora cada campo é exigido e cada lista é conferida
      * (container E elementos — o cast some no erasure) antes do parse, com o nome do campo na mensagem.
-     * O handler do F6 não alcança nada disto (não é binding do Spring) — daí o F27.
+     * O handler de requisição malformada não alcança nada disto (não é binding do Spring).
      */
     @Nested
-    @DisplayName("corrige F27 — corpo incompleto/inválido responde 400 com o campo culpado")
+    @DisplayName("corpo incompleto/inválido responde 400 com o campo culpado")
     class PayloadInvalido {
 
         @Test
@@ -277,7 +275,7 @@ class EscalaSemanalControllerTest {
         }
 
         @Test
-        @DisplayName("save com data fora do ISO → 400 nomeando o campo (o F6 já dava 400; o que muda é a mensagem)")
+        @DisplayName("save com data fora do ISO → 400 nomeando o campo (o binding já dava 400; o que muda é a mensagem)")
         void save_dataForaDoIso_400() throws Exception {
             mockMvc.perform(Requests.post("/api/admin/escala/save")
                             .header("Authorization", admin)
@@ -331,11 +329,10 @@ class EscalaSemanalControllerTest {
     }
 
     @Test
-    @DisplayName("corrige F6 — binding inválido responde 400 no shape padrão de erro")
-    void bindingInvalido_corrigeF6_400() throws Exception {
+    @DisplayName("binding inválido responde 400 no shape padrão de erro")
+    void bindingInvalido_400() throws Exception {
         // page é @RequestParam int: valor não-numérico → MethodArgumentTypeMismatchException,
-        // agora tratada pelo handler de requisição malformada do GlobalExceptionHandler → 400.
-        // Achado F6 da §5 do plano — corrigido no C4.
+        // tratada pelo handler de requisição malformada do GlobalExceptionHandler → 400.
         mockMvc.perform(Requests.get("/api/admin/escala/list?page=abc").header("Authorization", admin))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.ok").value(false))

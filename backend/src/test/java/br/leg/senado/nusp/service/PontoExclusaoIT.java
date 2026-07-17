@@ -44,23 +44,18 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
 /**
- * IT da exclusão de publicações do Ponto (F59) contra Oracle real — o coração do estágio.
+ * IT da exclusão de publicações do Ponto contra Oracle real — o que nenhum mock alcança: o
+ * <b>cascade</b> do banco limpa os filhos do aviso, a <b>FK sem cascade</b> das retificações obriga
+ * a ordem certa (ORA-02292 é o preço de errá-la), a <b>re-âncora pós-flush</b> encontra a folha
+ * ANTERIOR (não a que acabou de morrer), o mês excluído reabre sozinho e a exclusão é cirúrgica —
+ * o que não é daquela publicação (retificação ancorada em outra folha, aviso do desfecho de folga)
+ * sobrevive.
  *
- * <p>Aqui se prova o que nenhum mock alcança: que o <b>cascade</b> do banco limpa os filhos do aviso,
- * que a <b>FK sem cascade</b> das retificações obriga a ordem certa (ORA-02292 é o preço de errá-la),
- * que a <b>re-âncora pós-flush</b> encontra a folha ANTERIOR (e não a que acabou de morrer), que o
- * <b>mês reabre sozinho</b> pela guarda do C6 e que a exclusão é <b>cirúrgica</b>: o que não é daquela
- * publicação — a retificação ancorada em outra folha, o aviso do desfecho de folga — sobrevive.
- *
- * <p><b>Por que {@code @SpringBootTest} e não o slice {@code @OracleIT}:</b> o {@code @DataJpaTest} não
- * instancia services e faz rollback de tudo; aqui as transações dos services precisam COMMITAR de
- * verdade (a exclusão só é honesta se o commit acontece — os arquivos, inclusive, são apagados
- * <i>afterCommit</i>). Sem rollback automático, a limpeza é manual.
- *
- * <p><b>O BANCO da folha é injetado depois de publicar</b> ({@link #darBancoAFolha}): a publicação real
- * extrai o BANCO do PDF, e neste ambiente não há PDF — o parser falha com WARN e grava NULL (por
- * desenho). Injetar o valor e re-ancorar é exatamente o que o backfill (E2) faria; sem isso a página
- * não seria elegível a âncora e metade dos cenários não existiria.
+ * <p>{@code @SpringBootTest}, não o slice {@code @OracleIT}: {@code @DataJpaTest} não instancia
+ * services e faz rollback de tudo, e aqui as transações precisam COMMITAR de verdade (os arquivos
+ * são apagados <i>afterCommit</i>); sem rollback automático, a limpeza é manual. O BANCO da folha é
+ * injetado depois de publicar ({@link #darBancoAFolha}): sem PDF neste ambiente o parser grava NULL
+ * (por desenho), e sem o valor a página não seria elegível a âncora.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @ActiveProfiles("test")
@@ -201,7 +196,7 @@ class PontoExclusaoIT {
         saldoAberturaService.reancorar(pessoa.getId(), "OPERADOR");
     }
 
-    /** Retificação real do dono, pela folha indicada (mesmo caminho do usuário — C10/C11/C12). */
+    /** Retificação real do dono, pela folha indicada (mesmo caminho do usuário). */
     private void retificar(PontoLotePagina pagina, Operador pessoa, LocalDate dia) {
         Map<String, Object> item = new LinkedHashMap<>();
         item.put("data", dia.toString());
@@ -325,7 +320,7 @@ class PontoExclusaoIT {
         }
 
         @Test
-        @DisplayName("corrige F59 — o lote publicado morre inteiro: páginas, retificações DELE, o aviso DELE, os PDFs e a âncora")
+        @DisplayName("o lote publicado morre inteiro: páginas, retificações DELE, o aviso DELE, os PDFs e a âncora")
         void exclusaoProfundaDeLotePublicado() {
             assertEquals(2, avisosDe(ana), "antes: o aviso da publicação + o do desfecho de folga");
 
@@ -381,7 +376,7 @@ class PontoExclusaoIT {
         }
 
         @Test
-        @DisplayName("corrige F59 — o preview PROMETE o que a exclusão cumpre (mesmo levantamento, contado no banco)")
+        @DisplayName("o preview PROMETE o que a exclusão cumpre (mesmo levantamento, contado no banco)")
         void previewBateComAExclusao() {
             Map<String, Object> preview = service.previewLote(alvo.getId(), MASTER);
 
@@ -409,7 +404,7 @@ class PontoExclusaoIT {
         }
 
         @Test
-        @DisplayName("corrige F59 — admin comum: 403 na cadeia real, e o lote continua lá com tudo (nada foi tocado)")
+        @DisplayName("admin comum: 403 na cadeia real, e o lote continua lá com tudo (nada foi tocado)")
         void adminComumNaoExclui() {
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                     () -> service.excluirLote(alvo.getId(), ADMIN_COMUM, admin.getId()));
@@ -449,7 +444,7 @@ class PontoExclusaoIT {
         }
 
         @Test
-        @DisplayName("corrige F59 — some a folha de Ana e só o que é dela; Bruno, o cadastro do aviso e o lote ficam intactos")
+        @DisplayName("some a folha de Ana e só o que é dela; Bruno, o cadastro do aviso e o lote ficam intactos")
         void exclusaoDeUmaFolha() {
             service.excluirPagina(lote.getId(), folhaDeAna.getId(), MASTER, admin.getId());
 
@@ -486,7 +481,7 @@ class PontoExclusaoIT {
         }
 
         @Test
-        @DisplayName("corrige F59 — excluída a ÚLTIMA folha, o lote vazio sobrevive (e o cadastro do aviso, sem ninguém, morre)")
+        @DisplayName("excluída a ÚLTIMA folha, o lote vazio sobrevive (e o cadastro do aviso, sem ninguém, morre)")
         void loteVazioSobrevive() {
             service.excluirPagina(lote.getId(), folhaDeAna.getId(), MASTER, admin.getId());
             service.excluirPagina(lote.getId(), folhaDeBruno.getId(), MASTER, admin.getId());
@@ -501,11 +496,11 @@ class PontoExclusaoIT {
 
     // ══════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("a mensal excluída REABRE o mês (nenhum mecanismo novo — a guarda do C6 pergunta ao banco)")
+    @DisplayName("a mensal excluída REABRE o mês (nenhum mecanismo novo — a guarda pergunta ao banco)")
     class MensalReabreOMes {
 
         @Test
-        @DisplayName("corrige F59 — mensal publicada por engano: a 2ª é recusada; excluída a 1ª, a 2ª PUBLICA")
+        @DisplayName("mensal publicada por engano: a 2ª é recusada; excluída a 1ª, a 2ª PUBLICA")
         void mensalExcluidaLiberaACompetencia() {
             PontoLote errada = tx.execute(status -> {
                 PontoLote l = loteEmRevisao("MENSAL", JUNHO_INI, JUNHO_FIM);
@@ -520,11 +515,11 @@ class PontoExclusaoIT {
 
             pontoService.publicar(errada.getId(), true);
 
-            // A guarda do C6 fecha o mês: a mensal CERTA não entra mais (era exatamente o beco do F59).
+            // A guarda fecha o mês: a mensal CERTA não entra mais.
             ServiceValidationException recusa = assertThrows(ServiceValidationException.class,
                     () -> pontoService.publicar(correta.getId(), true));
             assertTrue(recusa.getMessage().contains("já existe folha mensal publicada"),
-                    () -> "a recusa do C6: " + recusa.getMessage());
+                    () -> "a recusa da guarda: " + recusa.getMessage());
 
             service.excluirLote(errada.getId(), MASTER, admin.getId());
 
@@ -537,11 +532,11 @@ class PontoExclusaoIT {
 
     // ══════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("re-âncora do saldo (o flush antes dela é o gotcha do estágio)")
+    @DisplayName("re-âncora do saldo (o flush antes dela é o ponto crítico)")
     class ReancoraDoSaldo {
 
         @Test
-        @DisplayName("corrige F59 — excluída a folha MAIS RECENTE, a âncora volta para a imediatamente anterior")
+        @DisplayName("excluída a folha MAIS RECENTE, a âncora volta para a imediatamente anterior")
         void ancoraVoltaParaAAnterior() {
             PontoLotePagina maio = tx.execute(status ->
                     folhaAnteriorPublicada(ana, MAIO_INI, MAIO_FIM, BANCO_DE_MAIO));
@@ -563,7 +558,7 @@ class PontoExclusaoIT {
         }
 
         @Test
-        @DisplayName("corrige F59 — folha ÚNICA: abertura 0, âncora NULL, e o cache passa a descontar TODOS os débitos vivos")
+        @DisplayName("folha ÚNICA: abertura 0, âncora NULL, e o cache passa a descontar TODOS os débitos vivos")
         void folhaUnicaExcluidaZeraAAbertura() {
             PontoLote junho = tx.execute(status -> loteEmRevisao("MENSAL", JUNHO_INI, JUNHO_FIM));
             PontoLotePagina folha = tx.execute(status ->
@@ -590,17 +585,17 @@ class PontoExclusaoIT {
 
     // ══════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("interação com o prazo do C12 — excluir a folha LIBERTA o dia")
+    @DisplayName("interação com o prazo de retificação — excluir a folha LIBERTA o dia")
     class InteracaoComOPrazo {
 
         /**
          * A retificação é única por (pessoa, dia) — UK. Enquanto ela existe, o dia está travado em
-         * TODAS as folhas da pessoa que o cobrem (é o F32/C12). Excluir a folha que a ancorou mata a
+         * TODAS as folhas da pessoa que o cobrem. Excluir a folha que a ancorou mata a
          * retificação: o dia volta a ficar livre, e a folha que continua publicada (com a janela dela
          * aberta) volta a aceitá-lo.
          */
         @Test
-        @DisplayName("corrige F59 — morta a retificação com a folha A, o dia some da listagem de B e volta a GRAVAR por ela")
+        @DisplayName("morta a retificação com a folha A, o dia some da listagem de B e volta a GRAVAR por ela")
         void diaVoltaAFicarLivre() {
             LocalDate dia = LocalDate.of(2026, 6, 5);
             PontoLote loteA = tx.execute(status -> loteEmRevisao("SEMANAL", JUNHO_INI, LocalDate.of(2026, 6, 12)));
@@ -615,7 +610,7 @@ class PontoExclusaoIT {
             retificar(folhaA, ana, dia);   // o dia entra pela folha A (semanais cumulativas cobrem os dois)
 
             assertEquals(List.of("2026-06-05"), diasListadosNaFolha(folhaB, ana),
-                    "C12: o dia retificado por A aparece travado na folha B (a chave é pessoa+dia)");
+                    "o dia retificado por A aparece travado na folha B (a chave é pessoa+dia)");
             assertThrows(ServiceValidationException.class, () -> retificar(folhaB, ana, dia),
                     "e a UK recusa regravá-lo por B");
 
@@ -642,7 +637,7 @@ class PontoExclusaoIT {
     class LoteEmRevisao {
 
         @Test
-        @DisplayName("corrige F59 — o preview de um lote não publicado vem zerado, e a exclusão leva só os PDFs")
+        @DisplayName("o preview de um lote não publicado vem zerado, e a exclusão leva só os PDFs")
         void exclusaoDeLoteEmRevisao() {
             PontoLote lote = tx.execute(status -> loteEmRevisao("MENSAL", JUNHO_INI, JUNHO_FIM));
             PontoLotePagina folha = tx.execute(status ->

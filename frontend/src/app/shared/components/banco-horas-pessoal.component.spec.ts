@@ -9,34 +9,18 @@ import { DiaEstado } from './mini-calendario.component';
 import { ToastService } from './toast.component';
 
 /**
- * T29 — BancoHorasPessoalComponent (shared, 329 LOC — card "Banco de horas" do /ponto,
- * E7): saldo, seleção de dias no calendário, solicitar/cancelar folga.
- *
- * Estratégia (manual de PAGE do T22/T23/T24 + padrões do módulo Ponto fixados no T28):
- * TestBed cria o componente (DI + signals) SEM `detectChanges()` — `ngOnInit` é chamado à
- * mão e os filhos (`app-mini-calendario`, `app-mes-ano-selector`, tabela) nunca são
- * instanciados. `ApiService`/`ToastService` mockados via `useValue`. O spec trava LÓGICA e
- * ESTADO (signals/computeds/payloads), nunca DOM/CSS (ressalva do GATE: o layout do módulo
- * ainda pode mudar).
- *
- * Relógio congelado (`{toFake:['Date']}`) ANTES de `createComponent`: `anoMes` é lido no
- * field initializer. Sem `setTimeout` no SUT — falsificar só `Date` preserva os timers do
- * scheduler zoneless (decisão 1 do T28: drenar timer acorda a change detection e re-executa
- * o `ngOnInit`).
- *
- * **Contrato com o `mini-calendario` (o que o estágio manda travar):** o calendário em si já
- * está coberto (T20); aqui trava-se o que `estadoDia(d)` devolve por dia a partir do payload
- * (`dias_bloqueados` + saldo + seleção) — selecionável/selecionado/bloqueado/"Carregando...".
- *
- * ⚠️ Divergência do prompt do estágio (o código vence): "solicitar/cancelar … erros 400/409 →
- * toast" só vale para **cancelar**. O erro de `solicitar()` NÃO vai para o toast: é escrito no
- * signal `erroAcao` (caixa de erro dentro do card) — travado como está.
- *
- * **C8 — F43/F44/F45 CORRIGIDOS**: os três eram facetas do mesmo caminho de carga e foram
- * fechados como um redesenho único de `carregarBanco()` (token de recência + invalidação do mês
- * carregado + canais separados de erro fatal/transitório). Os `caracteriza Fn` viraram
- * `corrige Fn`, e há um bloco de **render** ao final: como no C7, travar só os signals deixaria
- * a suíte verde com o defeito de volta na tela (bastaria apagar o `@else if` do template).
+ * BancoHorasPessoalComponent (shared — card "Banco de horas" do /ponto): saldo com débito
+ * visual, seleção de dias no calendário, solicitar/cancelar folga, canais de erro SEPARADOS
+ * (fatal bloqueia o card; transitório vira caixa com retry dentro dele), recência da carga
+ * e render dos estados de erro/recarga — inclusive o seletor de mês cruzando a virada do
+ * ano. O contrato com o `app-mini-calendario` é travado pelo que `estadoDia(d)` devolve por
+ * dia (selecionável/selecionado/bloqueado/"Carregando..."). O erro de `solicitar()` vai
+ * para o signal `erroAcao` (caixa no card), NÃO para o toast — só `cancelar` usa toast.
+ * TestBed sem `detectChanges()` (ngOnInit à mão, filhos nunca instanciados; os describes de
+ * render são exceções deliberadas); `ApiService`/`ToastService` via `useValue`. Relógio
+ * congelado `{toFake:['Date']}` ANTES de `createComponent` (`anoMes` é lido no field
+ * initializer); falsificar só o `Date` preserva os timers do scheduler zoneless — drenar
+ * timer acorda a change detection e re-executa o `ngOnInit`.
  */
 
 /** Payload representativo de `GET /api/ponto/banco` (julho/2026, carga 30h → débito 360 min/dia). */
@@ -59,13 +43,13 @@ const SOLIC_PENDENTE = { id: 'sol-1', data_folga: '2026-07-15', status: 'PENDENT
 const META = { page: 1, limit: 10, total: 1, pages: 1 };
 
 // ── Erros, no shape REAL do backend: `{ok:false, error:"…"}` (GlobalExceptionHandler) ──
-/** Q17 — único erro FATAL do GET /api/ponto/banco: gate de carga horária, 409 (C8/F44). */
+/** Q17 — único erro FATAL do GET /api/ponto/banco: gate de carga horária, 409. */
 const MSG_Q17 = 'Sua carga horária não está cadastrada corretamente. Procure a Gestão de Pessoas.';
 const Q17_409 = { status: 409, error: { ok: false, error: MSG_Q17 } };
 /** 500 do backend: a mensagem do corpo é sempre genérica — por isso a guia da TELA vem na frente. */
 const ERRO_500 = { status: 500, error: { ok: false, error: 'Erro interno do servidor' } };
 
-/** Guias da tela (C8) — o texto que o usuário efetivamente lê nas caixas de erro. */
+/** Guias da tela — o texto que o usuário efetivamente lê nas caixas de erro. */
 const GUIA_CARGA =
   'Não foi possível carregar o seu banco de horas deste mês. Sem ele não dá para marcar dias — ' +
   'tente novamente ou escolha outro mês.';
@@ -156,7 +140,7 @@ describe('BancoHorasPessoalComponent', () => {
 
     it('Q17 (409 do gate de carga horária) bloqueia o card com a mensagem do backend', () => {
       // Shape REAL do backend (`GlobalExceptionHandler`: {ok:false, error:"…"}) — o `{message:…}`
-      // que os specs antigos usavam este backend não emite (lição do C7).
+      // que os specs antigos usavam este backend não emite.
       apiGet.mockReturnValue(throwError(() => Q17_409));
       const comp = criarCarregado();
       expect(comp.erroBloqueio()).toBe(MSG_Q17);
@@ -198,8 +182,8 @@ describe('BancoHorasPessoalComponent', () => {
       expect(comp.carregando()).toBe(false);
     });
 
-    it('corrige F43 — entre duas respostas do MESMO mês vence a mais NOVA, não a que chegar por último', () => {
-      // C8/F43: o guard antigo comparava apenas ano/mês do pedido com o exibido — descartava a
+    it('entre duas respostas do MESMO mês vence a mais NOVA, não a que chegar por último', () => {
+      // O guard antigo comparava apenas ano/mês do pedido com o exibido — descartava a
       // resposta de um mês abandonado, mas aceitava AS DUAS de dois pedidos do mesmo mês. Agora um
       // token de recência descarta tudo que não seja a carga mais recente: a resposta atrasada da
       // 1ª não sobrescreve mais a 2ª (que é a que reflete a mutação que o usuário acabou de fazer).
@@ -220,8 +204,8 @@ describe('BancoHorasPessoalComponent', () => {
       expect((comp as any).mesCarregado()).toEqual({ ano: 2026, mes: 7 });
     });
 
-    it('corrige F43 — duas mutações em sequência (o gatilho real): a recarga da 2ª manda', () => {
-      // O caminho pelo qual o usuário topava com o F43 sem fazer nada de estranho: `cancelando` é
+    it('duas mutações em sequência (o gatilho real): a recarga da 2ª manda', () => {
+      // O caminho pelo qual o usuário topava com o bug sem fazer nada de estranho: `cancelando` é
       // zerado no `next` do PATCH ANTES de `carregarBanco()`, então cancelar duas solicitações em
       // sequência dispara dois GETs do mesmo mês — e o 1º costuma chegar depois do 2º.
       const recargaA = new Subject<any>();
@@ -238,8 +222,8 @@ describe('BancoHorasPessoalComponent', () => {
       expect(comp.saldoVisualMin()).toBe(1620);   // o saldo exibido é o de agora, não o intermediário
     });
 
-    it('corrige F44 — falha transitória NÃO bloqueia o card: erro no canal transitório, com o fatal intacto', () => {
-      // C8/F44: `erroBloqueio` era o canal ÚNICO — todo 500/timeout matava o card inteiro (some o
+    it('falha transitória NÃO bloqueia o card: erro no canal transitório, com o fatal intacto', () => {
+      // `erroBloqueio` era o canal ÚNICO — todo 500/timeout matava o card inteiro (some o
       // `app-mes-ano-selector`, único gatilho de nova carga) e, como o pai mantém o componente em
       // `[hidden]`, nem fechar/reabrir recuperava. Agora o transporte vai para `erroCarga`, que o
       // template exibe DENTRO do card, com retry (render provado no bloco de render, abaixo).
@@ -253,7 +237,7 @@ describe('BancoHorasPessoalComponent', () => {
       expect(comp.carregando()).toBe(false);
     });
 
-    it('corrige F44 — o retry re-dispara a carga do mês exibido e o sucesso limpa o erro', () => {
+    it('o retry re-dispara a carga do mês exibido e o sucesso limpa o erro', () => {
       const comp = criarCarregado();
       apiGet.mockReturnValue(throwError(() => ERRO_500));
       comp.onMesAno({ ano: 2026, mes: 8 });
@@ -268,14 +252,14 @@ describe('BancoHorasPessoalComponent', () => {
       expect((comp as any).mesCarregado()).toEqual({ ano: 2026, mes: 8 });
     });
 
-    it('corrige F44 — erro transitório sem corpo cai na guia da tela (o backend não manda mensagem no 500)', () => {
+    it('erro transitório sem corpo cai na guia da tela (o backend não manda mensagem no 500)', () => {
       apiGet.mockReturnValue(throwError(() => ({ status: 503 })));
       const comp = criarCarregado();
       expect(comp.erroCarga()).toBe(GUIA_CARGA);
       expect(comp.erroBloqueio()).toBe('');
     });
 
-    it('corrige F44 — durante o erro do mês, o calendário não mente "Carregando..."', () => {
+    it('durante o erro do mês, o calendário não mente "Carregando..."', () => {
       const comp = criarCarregado();
       apiGet.mockReturnValue(throwError(() => ERRO_500));
       comp.onMesAno({ ano: 2026, mes: 8 });
@@ -523,8 +507,8 @@ describe('BancoHorasPessoalComponent', () => {
       expect(comp.erroAcao()).toBe('Erro ao enviar a solicitação.');
     });
 
-    it('corrige F45 — durante a recarga pós-sucesso o calendário trava: nada é clicável sobre o payload velho', () => {
-      // C8/F45: o `next` chamava `carregarBanco()` sem religar a carga nem invalidar `mesCarregado`
+    it('durante a recarga pós-sucesso o calendário trava: nada é clicável sobre o payload velho', () => {
+      // O `next` chamava `carregarBanco()` sem religar a carga nem invalidar `mesCarregado`
       // — o guard "Carregando..." do `estadoDia`, que existe justamente para impedir interação com
       // dados velhos, só disparava na troca de mês. Na janela do round-trip o dia recém-pedido
       // aparecia livre, e remarcá-lo produzia um 400 logo depois do toast de sucesso. Agora TODA
@@ -551,7 +535,7 @@ describe('BancoHorasPessoalComponent', () => {
       expect(estadoDe(comp, '2026-07-14')).toBeNull();                            // e os livres voltam a ser clicáveis
     });
 
-    it('corrige F45 — o guard também vale para a recarga pós-CANCELAMENTO', () => {
+    it('o guard também vale para a recarga pós-CANCELAMENTO', () => {
       const recarga = new Subject<any>();
       const comp = criarCarregado();
       apiGet.mockReturnValue(recarga);
@@ -686,14 +670,14 @@ describe('BancoHorasPessoalComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // O que a TELA mostra (C8) — exceção de render deliberada
+  // O que a TELA mostra — exceção de render deliberada
   //
-  // Sem estes testes, o C8 estaria "bem projetado e mal protegido" (lição do C7): apagar o ramo
+  // Sem estes testes, a correção estaria "bem projetada e mal protegida": apagar o ramo
   // `@else if (erroCarga())`, o `@if (dados())` do saldo ou o `[disabled]` que o `estadoDia`
-  // alimenta deixaria a suíte de signals INTEIRA verde — com os F43/F44/F45 de volta na forma em
+  // alimenta deixaria a suíte de signals INTEIRA verde — com os defeitos de volta na forma em
   // que o usuário os vê. Travam-se presença/ausência de estado e o clique real, nunca CSS/layout.
   // ═══════════════════════════════════════════════════════════════════
-  describe('render dos estados de erro e de recarga (F44/F45)', () => {
+  describe('render dos estados de erro e de recarga', () => {
     function renderizar(): ComponentFixture<BancoHorasPessoalComponent> {
       vi.useFakeTimers({ toFake: ['Date'] });
       vi.setSystemTime(new Date('2026-07-12T10:00:00-03:00'));
@@ -719,19 +703,19 @@ describe('BancoHorasPessoalComponent', () => {
       return botao;
     }
 
-    it('corrige F44 — erro transitório: caixa com retry DENTRO do card, e o seletor de mês continua no DOM', () => {
+    it('erro transitório: caixa com retry DENTRO do card, e o seletor de mês continua no DOM', () => {
       apiGet.mockReturnValue(throwError(() => ERRO_500));
       const fixture = renderizar();
 
       const caixa = caixaErro(fixture);
       expect(caixa).not.toBeNull();
       expect(caixa.componentInstance.mensagem()).toBe(`${GUIA_CARGA} (Erro interno do servidor)`);
-      expect(seletorMes(fixture)).not.toBeNull();          // o gatilho de nova carga NÃO some (F44)
+      expect(seletorMes(fixture)).not.toBeNull();          // o gatilho de nova carga NÃO some
       expect(textoDoCard(fixture)).toContain('Minhas Solicitações');   // nem a tabela
       expect(textoDoCard(fixture)).not.toContain('+00:00');            // e a falha não vira "saldo zero"
     });
 
-    it('corrige F44 — o clique real no "Tentar novamente" recarrega e devolve o card', () => {
+    it('o clique real no "Tentar novamente" recarrega e devolve o card', () => {
       apiGet.mockReturnValue(throwError(() => ERRO_500));
       const fixture = renderizar();
       apiGet.mockClear().mockReturnValue(of({ data: payloadBanco() }));
@@ -744,7 +728,7 @@ describe('BancoHorasPessoalComponent', () => {
       expect(textoDoCard(fixture)).toContain('+15:00');     // saldo de volta
     });
 
-    it('corrige F44 — o FATAL (Q17) preserva o comportamento antigo: o card inteiro sai', () => {
+    it('o FATAL (Q17) preserva o comportamento antigo: o card inteiro sai', () => {
       apiGet.mockReturnValue(throwError(() => Q17_409));
       const fixture = renderizar();
 
@@ -754,7 +738,7 @@ describe('BancoHorasPessoalComponent', () => {
       expect(textoDoCard(fixture)).not.toContain('Minhas Solicitações');
     });
 
-    it('corrige F45 — durante a recarga pós-solicitação os dias ficam DESABILITADOS no DOM (clique não marca)', () => {
+    it('durante a recarga pós-solicitação os dias ficam DESABILITADOS no DOM (clique não marca)', () => {
       const fixture = renderizar();
       const comp = fixture.componentInstance;
 
@@ -814,13 +798,13 @@ describe('BancoHorasPessoalComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // RENDER (C14/F37) — o funcionário alcança o mês da folha recém-publicada
+  // RENDER — o funcionário alcança o mês da folha recém-publicada
   //
   // A folha de dezembro é publicada no começo de janeiro e é ela que abre o prazo de 5 dias: em
   // janeiro, o mês que o funcionário precisa consultar é DEZEMBRO. O `[anos]` do template é a
   // correção — daí o render (apagar o binding deixaria a suíte de signals inteira verde).
   // ═══════════════════════════════════════════════════════════════════
-  describe('render — o seletor cruza a virada do ano (F37)', () => {
+  describe('render — o seletor cruza a virada do ano', () => {
     function renderizar(hoje: string): ComponentFixture<BancoHorasPessoalComponent> {
       vi.useFakeTimers({ toFake: ['Date'] });
       vi.setSystemTime(new Date(hoje));
@@ -835,7 +819,7 @@ describe('BancoHorasPessoalComponent', () => {
       f.debugElement.query(By.css(`app-mes-ano-selector button[aria-label="${aria}"]`))
         .nativeElement as HTMLButtonElement;
 
-    it('corrige F37 — em 05/01/2027 o ‹ está habilitado e o clique carrega o banco de DEZEMBRO/2026', () => {
+    it('em 05/01/2027 o ‹ está habilitado e o clique carrega o banco de DEZEMBRO/2026', () => {
       const fixture = renderizar('2027-01-05T09:00:00-03:00');
       const comp = fixture.componentInstance;
 
@@ -854,7 +838,7 @@ describe('BancoHorasPessoalComponent', () => {
       expect(comp.selecionados().size).toBe(0);    // idioma da tela: navegar limpa a seleção
     });
 
-    it('corrige F37 — em 20/12/2026 o › está habilitado e o clique carrega o banco de JANEIRO/2027 (flanco simétrico na TELA)', () => {
+    it('em 20/12/2026 o › está habilitado e o clique carrega o banco de JANEIRO/2027 (flanco simétrico na TELA)', () => {
       // Sem este caso, trocar o helper por um `[ano-1, ano]` fixo em qualquer consumidor passaria
       // verde: os demais testes de consumidor só exercitam o flanco de janeiro.
       const fixture = renderizar('2026-12-20T09:00:00-03:00');

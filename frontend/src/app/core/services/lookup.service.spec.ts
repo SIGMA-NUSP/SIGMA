@@ -4,10 +4,9 @@ import { ApiService } from './api.service';
 import { LookupService } from './lookup.service';
 
 /**
- * T21 — LookupService (§5.5/B3): 5 loaders + loadAll. Cada loader chama
- * ApiService.get num endpoint fixo e muta o SIGNAL certo com `res.data || []`.
- * ApiService mockado com `of({data:[...]})`; assertamos endpoint + signal, nunca
- * o valor do mock em si.
+ * LookupService: 5 loaders + loadAll. Cada loader chama ApiService.get num
+ * endpoint fixo e muta o SIGNAL certo com `res.data || []`. ApiService mockado
+ * com `of({data:[...]})`; assertamos endpoint + signal, nunca o valor do mock em si.
  */
 describe('LookupService', () => {
   let svc: LookupService;

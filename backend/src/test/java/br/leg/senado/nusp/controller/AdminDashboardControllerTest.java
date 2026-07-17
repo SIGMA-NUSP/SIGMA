@@ -43,20 +43,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contrato HTTP do {@link AdminDashboardController} (T16).
- *
- * Segurança real; services 100% mockados. O RBAC papel×rota já está provado
- * na matriz do T15 — aqui exercita-se, com token de admin válido, o que o
- * filtro NÃO cobre: os 3 guards MANUAIS por username (isMaster/canEditObs*,
- * família a), o contrato 404 de detalhe (b), o mapeamento
- * ServiceValidationException→HTTP do {@code GlobalExceptionHandler} (c), o
- * binding inválido respondendo 400 (d, achado F6 — corrigido no C4), o repasse de
- * paginação ao service (e) e os endpoints de contrato singular — relatório
- * com {@code format} e RDS/XLSX (f).
- *
- * Regra de dimensionamento do T16: 1–2 endpoints representativos por família,
- * nunca endpoint-a-endpoint (o controller tem ~30 endpoints homogêneos de
- * delegação — exauri-los seria testar o @RequestMapping do Spring).
+ * Contrato HTTP do {@link AdminDashboardController}. Segurança real; services 100%
+ * mockados (o RBAC papel×rota tem suíte própria). Com token de admin válido, cobre o que o
+ * filtro NÃO cobre: os guards MANUAIS por username (isMaster/canEditObs*), o contrato 404
+ * de detalhe, o mapeamento ServiceValidationException→HTTP do {@code GlobalExceptionHandler},
+ * o binding inválido respondendo 400, o repasse de paginação ao service e os contratos
+ * singulares (relatório com {@code format}, RDS/XLSX). Dimensionamento: 1–2 endpoints
+ * representativos por família — exaurir os ~30 endpoints homogêneos de delegação seria
+ * testar o {@code @RequestMapping} do Spring.
  */
 @SigmaControllerTest(AdminDashboardController.class)
 class AdminDashboardControllerTest {
@@ -257,14 +251,13 @@ class AdminDashboardControllerTest {
         }
     }
 
-    // ══ (d) Binding inválido — corrige F6 (400) ════════════════════════════
+    // ══ (d) Binding inválido (400) ═════════════════════════════════════════
 
     @Test
-    @DisplayName("corrige F6 — binding inválido responde 400 no shape padrão de erro")
-    void bindingInvalido_corrigeF6_400() throws Exception {
+    @DisplayName("binding inválido responde 400 no shape padrão de erro")
+    void bindingInvalido_400() throws Exception {
         // checklist_id é @RequestParam obrigatório: ausente → MissingServletRequestParameterException,
-        // agora tratada pelo handler de requisição malformada do GlobalExceptionHandler → 400.
-        // Achado F6 da §5 do plano (test-implementation-plan-2026-07.md) — corrigido no C4.
+        // tratada pelo handler de requisição malformada do GlobalExceptionHandler → 400.
         mockMvc.perform(Requests.get("/api/admin/checklist/detalhe").header("Authorization", admin))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.ok").value(false))

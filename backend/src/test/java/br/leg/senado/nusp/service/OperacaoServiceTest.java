@@ -42,10 +42,10 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * T6 — invariantes de OperacaoService (§4.3 da auditoria) que são
- * regra/validação/ordem de chamada. A SEMÂNTICA dos UPDATEs (sticky via
- * NVL/CASE, propagação efetiva no banco) fica no T14 (integração); aqui o
- * contrato de chamada é travado com SQL casado por fragmento (§0.5).
+ * Invariantes de {@link OperacaoService} que são regra/validação/ordem de chamada, com mocks.
+ * A SEMÂNTICA dos UPDATEs (sticky via NVL/CASE, propagação efetiva no banco) fica na suíte de
+ * integração ({@link OperacaoServiceIT}); aqui o contrato de chamada é travado com SQL casado
+ * por fragmento-chave (nunca {@code anyString()}).
  */
 @ExtendWith(MockitoExtension.class)
 class OperacaoServiceTest {
@@ -68,7 +68,7 @@ class OperacaoServiceTest {
     private static final long REGISTRO_ID = 70L;
     private static final int SALA_COMUM_ID = 3;
 
-    // ── Helpers de stub (disciplina §0.5: SQL casado por fragmento-chave, nunca anyString()) ──
+    // ── Helpers de stub (SQL casado por fragmento-chave, nunca anyString()) ──
 
     /**
      * Mock de Query devolvido só quando o SQL contém o fragmento-chave.
@@ -106,7 +106,7 @@ class OperacaoServiceTest {
     private Query stubOrdemEntrada(int ordem) {
         Query q = mockQueryPara("SELECT ORDEM FROM");
         when(q.getResultList()).thenReturn(List.of(ordem));
-        // Com o término presente no body (invariante F73/C19), a regra 4 do
+        // Com o término presente no body (invariante: ≥1 término), a regra 4 do
         // validarHorarios sempre consulta o operador adjacente — sem vizinho aqui.
         Query adjacente = mockQueryPara("JOIN PES_OPERADOR");
         when(adjacente.getResultList()).thenReturn(List.of());
@@ -155,7 +155,7 @@ class OperacaoServiceTest {
         body.put("nome_evento", "Sessão Deliberativa");
         body.put("hora_inicio", "14:00");
         body.put("responsavel_evento", "Mesa Diretora");
-        // Invariante F73 (C19): o fluxo real sempre carrega um término — sem ele a
+        // Invariante do sistema: o fluxo real sempre carrega um término — sem ele a
         // edição é recusada antes de qualquer escrita.
         body.put("hora_saida", "18:00");
         return body;
@@ -208,7 +208,7 @@ class OperacaoServiceTest {
             assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
             assertEquals("forbidden", ex.getMessage());
             // A decisão é só ownership: PES_OPERADOR nunca é consultado (fixo do
-            // Plenário lê via dashboard — T14 —, mas não escreve aqui, §4.3).
+            // Plenário lê via dashboard, mas não escreve aqui).
             verifyNoInteractions(operadorRepo);
             verifyNoInteractions(entityManager);
             verify(entradaRepo, never()).getSnapshot(anyLong());
@@ -216,12 +216,12 @@ class OperacaoServiceTest {
 
         @Test
         @DisplayName("caracteriza comportamento atual — operador ADICIONAL (junction) também recebe 403: "
-                + "o gate do titular precede isDonoOuAdicional (diverge da §4.3 da auditoria; NÃO corrigir aqui)")
+                + "o gate do titular precede isDonoOuAdicional (divergência conhecida; NÃO corrigir aqui)")
         void editarEntrada_adicionalDaJunction() {
-            // Desde c1adec6 (refatoração C-11), o 1º passo do editarEntrada compara
-            // userId com OPERADOR_ID da entrada. Um operador adicional (presente em
-            // OPR_ENTRADA_OPERADOR, mas não titular) é barrado ANTES da checagem de
-            // junction: isDonoOuAdicional nunca chega a ser executado.
+            // O 1º passo do editarEntrada compara userId com OPERADOR_ID da entrada.
+            // Um operador adicional (presente em OPR_ENTRADA_OPERADOR, mas não titular)
+            // é barrado ANTES da checagem de junction: isDonoOuAdicional nunca chega
+            // a ser executado.
             stubGateTitular(TITULAR);
 
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
@@ -514,7 +514,7 @@ class OperacaoServiceTest {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("nome_evento", "Sessão Deliberativa");
             body.put("hora_inicio", "14:00");
-            body.put("hora_saida", "18:00"); // invariante F73 (C19): ≥1 término
+            body.put("hora_saida", "18:00"); // invariante: ≥1 término
             body.put("suspensoes", suspensoesNovas);
             service.editarEntrada(ENTRADA_ID, body, TITULAR);
         }
@@ -656,12 +656,12 @@ class OperacaoServiceTest {
         }
     }
 
-    // ── corrige F73 (C19): régua de horário nas portas do módulo de operação ──
+    // ── régua de horário nas portas do módulo de operação ──
 
     @Nested
-    class ReguaDeHorarioF73 {
+    class ReguaDeHorario {
 
-        /** Body mínimo de criação com um término válido (invariante F73). */
+        /** Body mínimo de criação com um término válido (invariante: ≥1 término). */
         private Map<String, Object> bodyCriacaoValido() {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("data_operacao", "2026-07-16");
@@ -680,7 +680,7 @@ class OperacaoServiceTest {
                 "hora_entrada, Início da operação",
                 "hora_saida, Término da operação",
         })
-        @DisplayName("corrige F73 — criação: hora torta em qualquer dos 5 campos recusa 400 nomeando o rótulo, antes de tocar o banco")
+        @DisplayName("criação: hora torta em qualquer dos 5 campos recusa 400 nomeando o rótulo, antes de tocar o banco")
         void salvarEntrada_criacao_campoTortoRecusa(String campo, String rotulo) {
             Map<String, Object> body = bodyCriacaoValido();
             body.put(campo, "24:00:00");
@@ -696,7 +696,7 @@ class OperacaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — edição pela mesma porta (entrada_id presente) passa pela mesma régua")
+        @DisplayName("edição pela mesma porta (entrada_id presente) passa pela mesma régua")
         void salvarEntrada_edicao_campoTortoRecusa() {
             Map<String, Object> body = bodyCriacaoValido();
             body.put("entrada_id", String.valueOf(ENTRADA_ID));
@@ -711,7 +711,7 @@ class OperacaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — editarEntrada (tela de detalhe): hora torta recusa 400 antes do snapshot/UPDATE")
+        @DisplayName("editarEntrada (tela de detalhe): hora torta recusa 400 antes do snapshot/UPDATE")
         void editarEntrada_campoTortoRecusa() {
             stubGateTitular(TITULAR);
             stubOwnershipPermitido();
@@ -730,7 +730,7 @@ class OperacaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — suspensões tortas na edição multi-operador recusam 400 nomeando o rótulo")
+        @DisplayName("suspensões tortas na edição multi-operador recusam 400 nomeando o rótulo")
         void atualizarSuspensoes_suspensaoTortaRecusa() throws Exception {
             stubGateTitular(TITULAR);
             stubOwnershipPermitido();
@@ -757,7 +757,7 @@ class OperacaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — a recusa de FORMATO vem antes das regras de ordem (torta não vira mensagem de 'posterior a')")
+        @DisplayName("a recusa de FORMATO vem antes das regras de ordem (torta não vira mensagem de 'posterior a')")
         void formatoAntesDaOrdem() {
             // hora_fim torta E anterior ao início: sem a precedência, validarHorarios
             // responderia "deve ser posterior ao início da operação"
@@ -804,10 +804,10 @@ class OperacaoServiceTest {
         }
     }
 
-    // ── corrige F73 (C19): invariante de presença — toda entrada tem ≥ 1 término ──
+    // ── invariante de presença — toda entrada tem ≥ 1 término ──
 
     @Nested
-    class PresencaDeTerminoF73 {
+    class PresencaDeTermino {
 
         private static final String MSG_PRESENCA = "Informe o 'Término do evento' ou o 'Término da operação'.";
 
@@ -834,7 +834,7 @@ class OperacaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — criação sem NENHUM término recusa 400 nomeando os dois campos (nenhuma entrada gravada)")
+        @DisplayName("criação sem NENHUM término recusa 400 nomeando os dois campos (nenhuma entrada gravada)")
         void criacao_semNenhumTermino_recusa() {
             stubCriacaoAteInvariante();
 
@@ -849,7 +849,7 @@ class OperacaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — criação com SÓ o Término do evento grava e encerra a sessão")
+        @DisplayName("criação com SÓ o Término do evento grava e encerra a sessão")
         void criacao_soTerminoDoEvento_grava() {
             stubCriacaoAteInvariante();
             Sala sala = new Sala();
@@ -875,7 +875,7 @@ class OperacaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — criação com SÓ o Término da operação grava e a sessão fica aberta")
+        @DisplayName("criação com SÓ o Término da operação grava e a sessão fica aberta")
         void criacao_soTerminoDaOperacao_grava() {
             stubCriacaoAteInvariante();
             Sala sala = new Sala();
@@ -904,7 +904,7 @@ class OperacaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — edição pela porta salvar-entrada (entrada_id) que limpa os dois términos recusa 400")
+        @DisplayName("edição pela porta salvar-entrada (entrada_id) que limpa os dois términos recusa 400")
         void edicaoDaSessao_semNenhumTermino_recusa() {
             // Sessão aberta com a entrada do próprio titular (o body edita a entrada 101)
             when(audioRepo.findSessaoAbertaPorSala(SALA_COMUM_ID)).thenReturn(rowsSessaoAberta());
@@ -931,7 +931,7 @@ class OperacaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — editarEntrada que RESULTARIA em nenhum término recusa 400 antes do histórico")
+        @DisplayName("editarEntrada que RESULTARIA em nenhum término recusa 400 antes do histórico")
         void editarEntrada_resultanteSemTermino_recusa() {
             stubGateTitular(TITULAR);
             stubOwnershipPermitido();
@@ -952,7 +952,7 @@ class OperacaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — sessão multi-entrada: o Término do evento do SNAPSHOT conta como término do estado resultante")
+        @DisplayName("sessão multi-entrada: o Término do evento do SNAPSHOT conta como término do estado resultante")
         void editarEntrada_snapshotComTermino_passa() throws Exception {
             stubGateTitular(TITULAR);
             stubOwnershipPermitido();
@@ -990,7 +990,7 @@ class OperacaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — edição multi-operador também exige o término (a invariante não é pulada no Plenário)")
+        @DisplayName("edição multi-operador também exige o término (a invariante não é pulada no Plenário)")
         void editarEntrada_multiOp_semTermino_recusa() {
             stubGateTitular(TITULAR);
             stubOwnershipPermitido();
@@ -1010,10 +1010,10 @@ class OperacaoServiceTest {
         }
     }
 
-    // ── Confirmação por ausência (§4.3) ───────────────────────
+    // ── Confirmação por ausência ───────────────────────
 
     @Test
-    @DisplayName("OperacaoService não colabora com AnormalidadeService — syncHouveAnormalidade é inalcançável daqui (§4.3)")
+    @DisplayName("OperacaoService não colabora com AnormalidadeService — syncHouveAnormalidade é inalcançável daqui")
     void operacaoService_naoDependeDeAnormalidadeService() {
         List<String> tiposInjetados = Arrays.stream(OperacaoService.class.getDeclaredFields())
                 .map(Field::getType)

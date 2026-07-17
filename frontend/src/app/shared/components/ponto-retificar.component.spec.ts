@@ -6,40 +6,19 @@ import { ApiService } from '../../core/services/api.service';
 import { PontoRetificarComponent } from './ponto-retificar.component';
 
 /**
- * T28 — PontoRetificarComponent (shared — retificação de ponto do Bloco B-1).
- *
- * Estratégia (manual de PAGE do T22/T23/T24): TestBed cria o componente (DI + signals) SEM
- * `detectChanges()`; a lógica é exercitada por chamada direta; `ApiService`/`Router`/
- * `ActivatedRoute` mockados via `useValue` (o `RouterLink` do template resolve os mesmos mocks
- * na criação — o construtor da diretiva só guarda as referências).
- *
- * Fake timers COMPLETOS (não só `Date`): o `salvar()` feliz agenda `setTimeout(…, 1400)` antes
- * de navegar. Instalados APÓS `compileComponents()` (que exige timers reais);
- * `vi.useRealTimers()` no `afterEach`.
- *
- * ⚠️ **Timers × change detection zoneless (padrão novo — medido aqui, vale para o T29):** o
- * `TestBed.createComponent` do Angular 21 deixa 2 timers pendentes (auto-detect zoneless — e
- * `fixture.autoDetectChanges(false)` é PROIBIDO em zoneless). Drenar timers
- * (`runAllTimers`/`advanceTimersByTime`) ACORDA a CD, que roda o `ngOnInit` do SUT — ou seja,
- * a premissa "sem `detectChanges()` → ngOnInit não roda" **cai** assim que se drena timer. Logo:
- * drenar SÓ onde o efeito do timer é o objeto do teste (a navegação pós-salvar), e nunca assertar
- * contagem de chamadas à API depois de drenar (elas dobram com o ngOnInit extra).
- *
- * ⚠️ Divergência do prompt do estágio (o código vence): **o prazo de 5 dias NÃO é calculado no
- * front**. O componente é passivo — lê `limite_fmt`/`prazo_expirado` de
- * `GET /api/ponto/folha/{id}/retificacoes` (o cálculo é do `RetificacaoService`, coberto no
- * backend). Os dois casos exigidos pelo plano ("dentro" e "fora" do prazo, com datas congeladas
- * distintas) estão em `describe('prazo de retificação')`: o relógio é congelado em D+2 e D+7 da
- * publicação e a resposta do backend é coerente com cada instante — nenhuma asserção varia com o
- * dia real da máquina.
- *
- * **C10 (F39/F40):** a gravação virou UM POST de LOTE (`POST …/retificacoes`, corpo `{dias:[…]}`),
- * transacional no backend — os testes de submit assertam o corpo único, a trava de duplo clique
- * (guard + `[disabled]`, este no DOM) e a limpeza do timer de saída no destroy.
- *
- * **C11 (F31/F33):** a retificação exige ao menos UM par completo — o dia aberto e intocado sai do
- * lote em silêncio, mas o dia com observação e nenhum horário BLOQUEIA o envio (nomeando o dia); e a
- * observação tem teto de 300 caracteres (`maxlength` no textarea + guarda no service).
+ * PontoRetificarComponent: carga da folha e dos dias já retificados (fail-closed com retry),
+ * prazo calculado no BACKEND (o front só lê `limite_fmt`/`prazo_expirado` de
+ * `GET /api/ponto/folha/{id}/retificacoes`), validação de pares Ent./Saí., teto de 300
+ * caracteres na observação e gravação em UM POST de LOTE (`{dias:[…]}`, transacional), com
+ * trava de duplo clique e timer de navegação cancelado no destroy. TestBed sem
+ * `detectChanges()`; `ApiService`/`Router`/`ActivatedRoute` mockados via `useValue` (o
+ * `RouterLink` do template resolve os mesmos mocks na criação). Fake timers COMPLETOS (não só
+ * `Date`) — o `salvar()` feliz agenda `setTimeout(…, 1400)` — instalados APÓS
+ * `compileComponents()`, que exige timers reais. ⚠️ Zoneless: `TestBed.createComponent` deixa
+ * timers pendentes (`fixture.autoDetectChanges(false)` é PROIBIDO) e drenar timers
+ * (`runAllTimers`/`advanceTimersByTime`) ACORDA a change detection, que roda o `ngOnInit` do
+ * SUT — drenar SÓ onde o efeito do timer é o objeto do teste, e nunca assertar contagem de
+ * chamadas à API depois de drenar.
  */
 describe('PontoRetificarComponent', () => {
   let apiGet: ReturnType<typeof vi.fn>;
@@ -60,7 +39,7 @@ describe('PontoRetificarComponent', () => {
     ],
   };
 
-  /** URL única de gravação desde o C10: um POST de lote com todos os dias. */
+  /** URL única de gravação: um POST de lote com todos os dias. */
   const URL_LOTE = '/api/ponto/folha/pag-1/retificacoes';
 
   beforeEach(async () => {
@@ -99,7 +78,7 @@ describe('PontoRetificarComponent', () => {
     return TestBed.createComponent(PontoRetificarComponent).componentInstance;
   }
 
-  /** Componente com a folha já carregada (ngOnInit chamado à mão, como no T22). */
+  /** Componente com a folha já carregada (ngOnInit chamado à mão). */
   function criarCarregado(): PontoRetificarComponent {
     const comp = criar();
     comp.ngOnInit();
@@ -113,7 +92,7 @@ describe('PontoRetificarComponent', () => {
     );
   }
 
-  /** A folha carrega, mas a LISTAGEM das retificações falha (C13b/F63 — fail-closed). */
+  /** A folha carrega, mas a LISTAGEM das retificações falha (fail-closed). */
   function retificacoesFalham(erro: unknown = { status: 500, error: { ok: false, error: 'Erro interno do servidor' } }) {
     apiGet.mockImplementation((url: string) =>
       url.endsWith('/dados') ? of({ data: structuredClone(FOLHA) }) : throwError(() => erro),
@@ -212,11 +191,11 @@ describe('PontoRetificarComponent', () => {
       expect(comp.limiteFmt()).toBeNull();
     });
 
-    it('corrige F63 — a falha NÃO é mais silenciosa: caixa de erro própria e envio BLOQUEADO (fail-closed)', () => {
+    it('a falha NÃO é mais silenciosa: caixa de erro própria e envio BLOQUEADO (fail-closed)', () => {
       // Antes: o `error` era um bloco vazio. Num 500/timeout a folha ficava na tela com todos os dias
       // livres e sem prazo (fail-open); o usuário abria um dia que JÁ retificara, enviava, e levava o
-      // 400 "O dia … já foi retificado" sem ver retificação nenhuma — e, como o lote é tudo-ou-nada
-      // (C10), o dia novo enviado junto TAMBÉM não gravava. É o sintoma que o C12 curou, por outra porta.
+      // 400 "O dia … já foi retificado" sem ver retificação nenhuma — e, como o lote é tudo-ou-nada,
+      // o dia novo enviado junto TAMBÉM não gravava.
       retificacoesFalham();
       const comp = criarCarregado();
 
@@ -232,7 +211,7 @@ describe('PontoRetificarComponent', () => {
       expect(comp.erro()).toContain('recarregue antes de enviar');
     });
 
-    it('corrige F63 — o retry recarrega, aplica marcação/prazo e DESTRAVA o envio', () => {
+    it('o retry recarrega, aplica marcação/prazo e DESTRAVA o envio', () => {
       retificacoesFalham();
       const comp = criarCarregado();
       expect(comp.retificacoesCarregadas()).toBe(false);
@@ -250,7 +229,7 @@ describe('PontoRetificarComponent', () => {
       expect(apiPost).toHaveBeenCalledTimes(1);           // o envio voltou a funcionar
     });
 
-    it('corrige F63 — o re-sync que falha depois de um lote recusado BLOQUEIA o Salvar de novo', () => {
+    it('o re-sync que falha depois de um lote recusado BLOQUEIA o Salvar de novo', () => {
       // O `error` do salvar() re-sincroniza os dias que porventura passaram. Se ESSE GET falhar, a tela
       // volta a não saber quem já foi retificado — e o próximo envio seria o mesmo tiro no escuro.
       const comp = criarCarregado();
@@ -271,7 +250,7 @@ describe('PontoRetificarComponent', () => {
       expect(apiPost).not.toHaveBeenCalled();
     });
 
-    it('corrige F63 — um erro ATRASADO não re-bloqueia o envio que um retry bem-sucedido já destravou', () => {
+    it('um erro ATRASADO não re-bloqueia o envio que um retry bem-sucedido já destravou', () => {
       // Dois cliques no "Tentar novamente": a 1ª carga falha DEPOIS de a 2ª ter sucedido. Sem o token
       // de recência, o erro velho voltaria a esconder o botão Salvar de uma tela já sincronizada.
       const primeira = new Subject<any>();
@@ -308,9 +287,9 @@ describe('PontoRetificarComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // RENDER (C13b/F63) — o usuário VÊ a caixa com retry, e o Salvar não está lá
+  // RENDER — o usuário VÊ a caixa com retry, e o Salvar não está lá
   // ═══════════════════════════════════════════════════════════════════
-  describe('corrige F63 — render: caixa de erro com retry e Salvar bloqueado', () => {
+  describe('render: caixa de erro com retry e Salvar bloqueado', () => {
     async function renderizarComDiaAberto(): Promise<ComponentFixture<PontoRetificarComponent>> {
       const fixture = TestBed.createComponent(PontoRetificarComponent);
       fixture.detectChanges();                     // ngOnInit + render (respostas síncronas)
@@ -351,8 +330,8 @@ describe('PontoRetificarComponent', () => {
     });
 
     it('durante a recarga a tela NÃO fica muda: sai a caixa, entra o "Verificando..." (e o Salvar segue fora)', async () => {
-      // Achado da revisão adversarial do próprio C13b: a caixa (que contém o botão de retry) sumia no
-      // clique e NADA a substituía — num GET lento o usuário ficava sem Salvar, sem caixa e sem pista.
+      // A caixa (que contém o botão de retry) sumia no clique e NADA a substituía —
+      // num GET lento o usuário ficava sem Salvar, sem caixa e sem pista.
       retificacoesFalham();
       const fixture = await renderizarComDiaAberto();
 
@@ -385,7 +364,7 @@ describe('PontoRetificarComponent', () => {
 
   // ═══════════════════════════════════════════════════════════════════
   // Prazo de retificação — 5 dias após a publicação (calculado no BACKEND)
-  // Datas congeladas distintas, derivadas do mesmo instante (exigência do plano)
+  // Datas congeladas distintas, derivadas do mesmo instante
   // ═══════════════════════════════════════════════════════════════════
   describe('prazo de retificação (relógio congelado dentro e fora dos 5 dias)', () => {
     const PUBLICADO = new Date('2026-07-10T09:00:00-03:00'); // folha publicada em 10/07
@@ -593,10 +572,10 @@ describe('PontoRetificarComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // salvar — submit (C10: UM POST de LOTE, tudo-ou-nada no backend)
+  // salvar — submit (UM POST de LOTE, tudo-ou-nada no backend)
   // ═══════════════════════════════════════════════════════════════════
   describe('salvar — submit', () => {
-    it('corrige F39 — 2 horários: um POST no endpoint de LOTE, com o dia dentro de "dias"', () => {
+    it('2 horários: um POST no endpoint de LOTE, com o dia dentro de "dias"', () => {
       const comp = criarCarregado();
       preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00', observacoes: '  esqueci de bater  ' });
       comp.salvar();
@@ -633,9 +612,9 @@ describe('PontoRetificarComponent', () => {
       expect(diasEnviados()[0]).toMatchObject({ ent1: '08:00', sai1: '12:00' });
     });
 
-    it('corrige F39 — dois dias abertos: UM ÚNICO POST com os dois dias (em ordem cronológica)', () => {
+    it('dois dias abertos: UM ÚNICO POST com os dois dias (em ordem cronológica)', () => {
       // Antes eram 2 POSTs paralelos (`forkJoin`), cada um numa transação própria: um falhar
-      // deixava o outro gravado — e sem edição/exclusão na v1 (Q1), isso era definitivo.
+      // deixava o outro gravado — e sem edição/exclusão na v1, isso era definitivo.
       const comp = criarCarregado();
       preencher(comp, 2, { r_ent1: '09:00', r_sai1: '15:00' });
       preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
@@ -646,7 +625,7 @@ describe('PontoRetificarComponent', () => {
       expect(diasEnviados().map((d: any) => d.data)).toEqual(['2026-07-06', '2026-07-08']);
     });
 
-    it('corrige F39 — 2º clique enquanto o lote está no ar NÃO dispara um 2º POST (guard do salvando)', () => {
+    it('2º clique enquanto o lote está no ar NÃO dispara um 2º POST (guard do salvando)', () => {
       const comp = criarCarregado();
       apiPost.mockReturnValue(new Subject<any>()); // POST no ar: nunca responde
       preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
@@ -683,7 +662,7 @@ describe('PontoRetificarComponent', () => {
       expect(navigateByUrl).toHaveBeenCalledWith('/ponto');
     });
 
-    it('corrige F40 — sair da tela dentro da janela de 1,4 s CANCELA a navegação (o timer morre no destroy)', () => {
+    it('sair da tela dentro da janela de 1,4 s CANCELA a navegação (o timer morre no destroy)', () => {
       // Antes, o handle do setTimeout não era guardado e o componente não implementava OnDestroy:
       // o timer disparava mesmo fora da tela e arrancava o usuário da rota nova de volta para /ponto.
       const fixture = TestBed.createComponent(PontoRetificarComponent);
@@ -698,7 +677,7 @@ describe('PontoRetificarComponent', () => {
       expect(navigateByUrl).not.toHaveBeenCalled();
     });
 
-    it('corrige F39 — lote recusado: a tela diz que NENHUM dia foi gravado (não há mais falha parcial) e preserva o motivo, que nomeia o dia', () => {
+    it('lote recusado: a tela diz que NENHUM dia foi gravado (não há mais falha parcial) e preserva o motivo, que nomeia o dia', () => {
       // Inversão da caracterização: antes, um POST podia gravar e o outro falhar — a tela dizia
       // "não foi possível salvar" enquanto dias já estavam no banco, e a 2ª tentativa batia na UK.
       // Agora é um lote só: se ele é recusado, nada foi gravado — e a tela afirma isso.
@@ -730,7 +709,7 @@ describe('PontoRetificarComponent', () => {
   // RENDER — a trava de duplo clique no DOM (o guard sozinho é invisível)
   // ═══════════════════════════════════════════════════════════════════
   describe('render do botão Salvar (trava de duplo clique)', () => {
-    // Exceção deliberada ao GATE "só lógica não-visual", na família já autorizada no C7/C9: o
+    // Exceção deliberada ao GATE "só lógica não-visual": o
     // `[disabled]` de um controle DESTRUTIVO vive só no template. Sem este teste, apagar o binding
     // deixaria a suíte verde e devolveria o defeito na pior forma — o usuário clicando duas vezes
     // num botão que parece ativo (o 2º lote morreria na UK, com o error-box junto do ok-box).
@@ -775,9 +754,9 @@ describe('PontoRetificarComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // C11 — par mínimo (F31) e teto da observação (F33)
+  // par mínimo de horários e teto da observação
   // ═══════════════════════════════════════════════════════════════════
-  describe('corrige F31 — retificação sem horários não existe mais', () => {
+  describe('retificação sem horários não existe mais', () => {
     it('dia aberto e INTOCADO (o "+" por engano) fica FORA do lote — sem erro, sem POST', () => {
       // A retificação vazia vencia a precedência na grade e na planilha da chefia: o dia que dizia
       // "Banco de horas"/"Férias" virava célula vazia e a contagem de folgas caía 1 — sem desfazer.
@@ -830,14 +809,14 @@ describe('PontoRetificarComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // C12 — o dia retificado por OUTRA folha da mesma pessoa chega travado
+  // o dia retificado por OUTRA folha da mesma pessoa chega travado
   // ═══════════════════════════════════════════════════════════════════
-  describe('corrige F32 — dia retificado por outra folha vem marcado e travado (render)', () => {
+  describe('dia retificado por outra folha vem marcado e travado (render)', () => {
     // Semanais cumulativas (01–05, 01–12…) dão à mesma pessoa DUAS folhas publicadas cobrindo o
     // mesmo dia. A listagem do backend filtrava por PAGINA_ID enquanto a gravação valida pela UK
     // (pessoa+dia): na folha B o dia já retificado pela folha A vinha LIVRE e habilitado, e o envio
     // levava 400 "O dia … já foi retificado" sem NENHUMA retificação visível na tela — sem edição
-    // nem exclusão na v1 (Q1), o dia ficava congelado sem explicação.
+    // nem exclusão na v1, o dia ficava congelado sem explicação.
     // Corrigida a chave de leitura, o front (que só enxerga `data`, nunca a proveniência) trava o
     // dia sozinho. É o que estes testes provam — no DOM das DUAS vistas, e no corpo do POST.
 
@@ -888,7 +867,7 @@ describe('PontoRetificarComponent', () => {
       const comp = criarCarregado();
 
       // forçando a abertura do dia travado (a UI não oferece o "+", mas o filtro do payload é o que
-      // impede o dia de chegar ao backend e derrubar o LOTE INTEIRO na UK — tudo-ou-nada, C10)
+      // impede o dia de chegar ao backend e derrubar o LOTE INTEIRO na UK — tudo-ou-nada)
       preencher(comp, 2, { r_ent1: '09:00', r_sai1: '15:00' });
       preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
 
@@ -904,7 +883,7 @@ describe('PontoRetificarComponent', () => {
     });
   });
 
-  describe('corrige F33/F47 — teto de 300 caracteres nas observações (render)', () => {
+  describe('teto de 300 caracteres nas observações (render)', () => {
     it('os textareas de observação (desktop e celular) têm maxlength="300"', () => {
       // OBSERVACOES é VARCHAR2(2000) em BYTES: sem o teto, ~1.100 caracteres acentuados estouravam a
       // coluna e o ORA-12899 era respondido como "o dia já foi retificado" — o usuário ia embora
@@ -932,7 +911,7 @@ describe('PontoRetificarComponent', () => {
 
       comp.salvar();
 
-      expect(comp.erro()).toContain('nenhum dia foi gravado');     // a guia da tela (C10)
+      expect(comp.erro()).toContain('nenhum dia foi gravado');     // a guia da tela
       expect(comp.erro()).toContain('máximo de 300 caracteres');   // o motivo do backend
       expect(comp.enviado()).toBe(false);
       expect(comp.salvando()).toBe(false);                         // a trava é liberada: dá para consertar

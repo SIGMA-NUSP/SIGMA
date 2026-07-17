@@ -35,16 +35,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contrato HTTP do {@link AvisoController} (T16).
- *
- * Controller MISTO (sem @RequestMapping de classe): rotas /api/admin/avisos/**
- * e rotas comuns /api/forms/checklist/** e /api/avisos/** no mesmo arquivo. O
- * RBAC dessa mistura já está provado na matriz do T15 (EscalaSemanal/Aviso são
- * os representativos mistos) — aqui é só o contrato de resposta, com o token de
- * papel certo. Famílias do T16: paginação admin (e), criar 201 + validação
- * mapeada (c), binding inválido respondendo 400 (d, F6 — corrigido no C4), e a mistura
- * admin/comum de contrato singular (f). Sem guard manual (a) nem 404 de
- * detalhe (b) neste controller.
+ * Contrato HTTP do {@link AvisoController}. Controller MISTO (sem @RequestMapping de
+ * classe): rotas /api/admin/avisos/** e rotas comuns /api/forms/checklist/** e
+ * /api/avisos/** no mesmo arquivo — o RBAC dessa mistura tem suíte própria (matriz RBAC);
+ * aqui é só o contrato de resposta, com o token do papel certo. Cobre: paginação admin,
+ * criar 201 + validação mapeada pelo handler, binding inválido respondendo 400 e a mistura
+ * admin/comum de contrato singular. Sem guard manual por username nem 404 de detalhe
+ * neste controller.
  */
 @SigmaControllerTest(AvisoController.class)
 class AvisoControllerTest {
@@ -99,7 +96,7 @@ class AvisoControllerTest {
                             .contentType(MediaType.APPLICATION_JSON)
                             // Público SALA: o service é @MockitoBean (o payload não chega em validarAlvo),
                             // mas o caminho feliz do slice deve espelhar um corpo que o service REAL aceita
-                            // — "ADMIN" hoje é 400 (F8), e usá-lo aqui daria a impressão contrária.
+                            // — "ADMIN" hoje é 400, e usá-lo aqui daria a impressão contrária.
                             .content("{\"tipo\":\"VERIFICACAO\",\"permanente\":true,\"mensagens\":[\"oi\"],\"alvo_tipo\":\"SALA\",\"sala_ids\":[3]}"))
                     .andExpect(status().isCreated())
                     .andExpect(jsonPath("$.ok").value(true))
@@ -169,14 +166,14 @@ class AvisoControllerTest {
         }
     }
 
-    // ══ (d) Binding inválido — corrige F6 (400) ════════════════════════════
+    // ══ Binding inválido (400) ════════════════════════════════════════════
 
     @Test
-    @DisplayName("corrige F6 — binding inválido responde 400 no shape padrão de erro")
-    void bindingInvalido_corrigeF6_400() throws Exception {
+    @DisplayName("binding inválido responde 400 no shape padrão de erro")
+    void bindingInvalido_400() throws Exception {
         // sala_id é @RequestParam obrigatório em /aviso-pendente: ausente →
         // MissingServletRequestParameterException, agora tratada pelo handler de requisição
-        // malformada do GlobalExceptionHandler → 400. Achado F6 da §5 do plano — corrigido no C4.
+        // malformada do GlobalExceptionHandler → 400.
         mockMvc.perform(Requests.get("/api/forms/checklist/aviso-pendente").header("Authorization", operador))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.ok").value(false))

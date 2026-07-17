@@ -408,7 +408,7 @@ class MarcacaoServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // F34 — a marcação pessoal exige que a pessoa EXISTA
+    // A marcação pessoal exige que a pessoa EXISTA
     // ══════════════════════════════════════════════════════════════
 
     /**
@@ -422,11 +422,11 @@ class MarcacaoServiceTest {
      * id existe — no cadastro do OUTRO tipo.
      */
     @Nested
-    @DisplayName("F34 — pessoa inexistente (ou par trocado) não grava marcação órfã")
+    @DisplayName("pessoa inexistente (ou par trocado) não grava marcação órfã")
     class PessoaDaMarcacao {
 
         @Test
-        @DisplayName("corrige F34 — pessoa inexistente no APLICAR → 400 e nada gravado")
+        @DisplayName("pessoa inexistente no APLICAR → 400 e nada gravado")
         void pessoaInexistenteNoAplicar() {
             when(pessoaCadastro.existe("fantasma", "OPERADOR")).thenReturn(false);
             Map<String, Object> body = Map.of("pessoais", Map.of(
@@ -443,7 +443,7 @@ class MarcacaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F34 — pessoa inexistente no REMOVER → 400 e nada removido (a guarda cobre os dois ramos)")
+        @DisplayName("pessoa inexistente no REMOVER → 400 e nada removido (a guarda cobre os dois ramos)")
         void pessoaInexistenteNoRemover() {
             when(pessoaCadastro.existe("fantasma", "TECNICO")).thenReturn(false);
             Map<String, Object> body = Map.of("pessoais", Map.of(
@@ -464,7 +464,7 @@ class MarcacaoServiceTest {
          * módulo procura. É por isso que a checagem é feita no cadastro DAQUELE tipo.
          */
         @Test
-        @DisplayName("corrige F34 — par trocado (id de OPERADOR com pessoa_tipo TECNICO) → 400 e nada gravado")
+        @DisplayName("par trocado (id de OPERADOR com pessoa_tipo TECNICO) → 400 e nada gravado")
         void parTrocado() {
             when(pessoaCadastro.existe("op-1", "TECNICO")).thenReturn(false);   // existe como OPERADOR, não como TECNICO
             Map<String, Object> body = Map.of("pessoais", Map.of(
@@ -480,7 +480,7 @@ class MarcacaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F34 — o par é conferido no cadastro DO TIPO informado, com o tipo já normalizado")
+        @DisplayName("o par é conferido no cadastro DO TIPO informado, com o tipo já normalizado")
         void consultaOCadastroDoTipoInformado() {
             pessoaExiste("adm-9", "ADMINISTRADOR");
             when(pessoaRepo.findByPessoaIdAndPessoaTipoAndData("adm-9", "ADMINISTRADOR", LocalDate.of(2026, 7, 9)))
@@ -499,7 +499,7 @@ class MarcacaoServiceTest {
 
         /** O ramo GLOBAL não tem pessoa: a guarda nova não pode pedir cadastro nenhum para um feriado. */
         @Test
-        @DisplayName("corrige F34 — ramo global (feriado) segue sem consultar cadastro de pessoa")
+        @DisplayName("ramo global (feriado) segue sem consultar cadastro de pessoa")
         void ramoGlobalIntocado() {
             when(diaRepo.findByData(LocalDate.of(2026, 7, 9))).thenReturn(Optional.empty());
             Map<String, Object> body = Map.of("globais", Map.of(

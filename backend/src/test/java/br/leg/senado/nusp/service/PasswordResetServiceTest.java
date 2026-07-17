@@ -44,24 +44,16 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Unitário de {@link PasswordResetService} — criado no T18 (§4.17).
+ * Unitário de {@link PasswordResetService}. Trava os invariantes de segurança do fluxo de
+ * reset: validade do token (não-usado E não-expirado), rejeição de token usado/expirado/
+ * inexistente e, no sucesso, a <b>ordem obrigatória</b> das 4 operações na mesma transação —
+ * UPDATE do hash → token {@code USED=1} → invalidar demais pendentes → revogar sessões.
+ * {@code requestReset} de username inexistente devolve {@code null} sem enviar e-mail; o
+ * lookup faz {@code UNION ALL} nas três tabelas de pessoa, e {@code updatePasswordHash}
+ * mapeia papel→tabela por {@code NativeQueryUtils.tableForRole} (papel desconhecido aborta).
  *
- * <p>Trava os invariantes de segurança do fluxo de reset: validade do token
- * (não-usado E não-expirado), rejeição de token usado/expirado/inexistente e,
- * no sucesso, a <b>ordem obrigatória</b> das 4 operações na mesma transação —
- * UPDATE do hash → token {@code USED=1} → invalidar demais pendentes → revogar
- * sessões. {@code requestReset} de username inexistente devolve {@code null}
- * sem enviar e-mail.</p>
- *
- * <p><b>F1 (§5 do plano) CORRIGIDO no C2:</b> {@code requestReset} passou a fazer
- * {@code UNION ALL} nas três tabelas de pessoa (o técnico era invisível ao reset), e
- * {@code updatePasswordHash} mapeia papel→tabela por {@code NativeQueryUtils.tableForRole}
- * — papel desconhecido agora <b>aborta</b> em vez de cair silenciosamente em
- * {@code PES_OPERADOR} (era esse fallback que gravava o hash do técnico na tabela errada).
- * Os testes {@code corrige F1} abaixo travam os três caminhos.</p>
- *
- * <p>Stubs de {@code Query} seguem a §0.5: SQL casado por fragmento
- * ({@code contains(...)}), nunca {@code anyString()}.</p>
+ * <p>Stubs de {@code Query}: SQL casado por fragmento ({@code contains(...)}),
+ * nunca {@code anyString()}.</p>
  */
 @ExtendWith(MockitoExtension.class)
 class PasswordResetServiceTest {
@@ -207,7 +199,7 @@ class PasswordResetServiceTest {
             ord.verify(entityManager).createNativeQuery(contains("PES_PASSWORD_RESET"));
             ord.verify(entityManager).createNativeQuery(contains("PES_AUTH_SESSION"));
 
-            // Disciplina §0.5(c): o hash novo e o id do usuário chegam à query.
+            // O hash novo e o id do usuário chegam à query.
             verify(hashQ).setParameter(eq("hash"), eq("hash-novo"));
             verify(hashQ).setParameter(eq("id"), eq("uuid-user"));
         }
@@ -229,9 +221,9 @@ class PasswordResetServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F1 — token de técnico grava o hash em PES_TECNICO (a tabela do próprio técnico)")
-        void tecnico_gravaEmPesTecnico_corrigeF1() {
-            // F1 (§5 do plano): updatePasswordHash mapeava binariamente
+        @DisplayName("token de técnico grava o hash em PES_TECNICO (a tabela do próprio técnico)")
+        void tecnico_gravaEmPesTecnico() {
+            // updatePasswordHash mapeava binariamente
             // "administrador"→PES_ADMINISTRADOR e QUALQUER outro→PES_OPERADOR — o token de
             // técnico caía em PES_OPERADOR e o hash do técnico real nunca era atualizado.
             // Agora o papel resolve a tabela por tableForRole (fonte única).
@@ -252,9 +244,9 @@ class PasswordResetServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F1 — papel desconhecido no token aborta com exceção: nenhuma tabela é tocada")
+        @DisplayName("papel desconhecido no token aborta com exceção: nenhuma tabela é tocada")
         void papelDesconhecido_abortaSemGravar() {
-            // O fallback silencioso em PES_OPERADOR era a armadilha do F1: um USER_TYPE que o
+            // O fallback silencioso em PES_OPERADOR era a armadilha: um USER_TYPE que o
             // service não sabe mapear tem de estourar, não escolher uma tabela por descarte.
             PasswordResetToken resetToken = valido("faxineiro");
             when(tokenRepository.findByToken("tok-123")).thenReturn(Optional.of(resetToken));
@@ -295,9 +287,9 @@ class PasswordResetServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F1 — o UNION ALL do requestReset cobre as TRÊS tabelas de pessoa")
-        void unionCobreAsTresTabelas_corrigeF1() {
-            // F1 (§5 do plano): o UNION ALL cobria só PES_ADMINISTRADOR e PES_OPERADOR — um
+        @DisplayName("o UNION ALL do requestReset cobre as TRÊS tabelas de pessoa")
+        void unionCobreAsTresTabelas() {
+            // O UNION ALL cobria só PES_ADMINISTRADOR e PES_OPERADOR — um
             // técnico não era encontrado, caía no ramo null e nunca recebia o e-mail.
             mockBuscaVazia();
 
@@ -308,8 +300,8 @@ class PasswordResetServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F1 — técnico é encontrado: token nasce com perfil 'tecnico' e o e-mail sai")
-        void tecnicoRecebeReset_corrigeF1() {
+        @DisplayName("técnico é encontrado: token nasce com perfil 'tecnico' e o e-mail sai")
+        void tecnicoRecebeReset() {
             // A prova de comportamento (o SQL casado por contains não basta): a row de técnico
             // atravessa o fluxo — token com USER_TYPE 'tecnico' (que o resetPassword usa para
             // achar PES_TECNICO) e e-mail efetivamente enviado.

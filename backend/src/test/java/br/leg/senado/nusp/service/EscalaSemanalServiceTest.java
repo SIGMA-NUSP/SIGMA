@@ -41,13 +41,13 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * T4 — EscalaSemanalService (§4.1 da auditoria). Sem EntityManager: mockam-se
- * os 6 repositories. CRUD/consultas por asserção exata; rodízio COM escala
+ * Testes unitários de EscalaSemanalService com os 6 repositories mockados (sem
+ * EntityManager). CRUD/consultas por asserção exata; rodízio COM escala
  * anterior por asserção exata (sem vaga órfã e sem entrante o sorteio não
  * participa — determinístico); rodízio SEM escala anterior (distribuição
  * inicial aleatória) apenas por propriedades invariantes, nunca igualdade
- * exata (briefing/§0.5). minhaEscalaHoje/operadoresEscaladosHoje usam o
- * relógio real → fixtures relativas a hoje, válidas em qualquer dia (§0.5).
+ * exata. minhaEscalaHoje/operadoresEscaladosHoje usam o relógio real →
+ * fixtures relativas a hoje, válidas em qualquer dia.
  */
 @ExtendWith(MockitoExtension.class)
 class EscalaSemanalServiceTest {
@@ -242,7 +242,7 @@ class EscalaSemanalServiceTest {
             assertEquals("2026-07-10", m1.get("data_fim"));
             assertEquals("Douglas Antunes", m1.get("criado_por"));
             assertEquals("2026-07-01T10:30", m1.get("criado_em"));
-            // fallback: o valor esperado vem da ENTIDADE (criadoPor), não do default do mock (§0.5)
+            // fallback: o valor esperado vem da ENTIDADE (criadoPor), não do default do mock
             assertEquals("fantasma", out.get(1).get("criado_por"));
             assertNull(out.get(1).get("criado_em"));
         }
@@ -276,7 +276,7 @@ class EscalaSemanalServiceTest {
 
             var out = service.listarEscalasPaginado(0, 0);
 
-            // meta é aritmética derivada no SUT, não eco de stub (§0.5)
+            // meta é aritmética derivada no SUT, não eco de stub
             assertEquals(List.of(), out.get("data"));
             Map<?, ?> meta = (Map<?, ?>) out.get("meta");
             assertEquals(1, meta.get("page"));
@@ -349,7 +349,7 @@ class EscalaSemanalServiceTest {
 
             assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
             assertEquals("Escala não encontrada.", ex.getMessage());
-            verify(escalaRepo).findById(99L); // guarda do stub igual ao default do Mockito (§0.5)
+            verify(escalaRepo).findById(99L); // guarda do stub igual ao default do Mockito
         }
     }
 
@@ -363,7 +363,7 @@ class EscalaSemanalServiceTest {
             var ref = stubSaveCarimbandoId(100L);
             stubFindByIdDaSalva(100L, ref);
             // beta não vem no turnosPorSala → turno buscado no cadastro; "M" é distinto do payload
-            // de alfa ("V") para a asserção discriminar as duas fontes de turno (§0.5)
+            // de alfa ("V") para a asserção discriminar as duas fontes de turno
             when(operadorRepo.findById("beta")).thenReturn(Optional.of(operador("beta", "Beto", "M")));
 
             Map<Integer, List<String>> salasOperadores = new LinkedHashMap<>();
@@ -488,7 +488,7 @@ class EscalaSemanalServiceTest {
     }
 
     @Nested
-    @DisplayName("minhaEscalaHoje / operadoresEscaladosHoje — SUT usa o relógio real, fixtures relativas a hoje (§0.5)")
+    @DisplayName("minhaEscalaHoje / operadoresEscaladosHoje — SUT usa o relógio real, fixtures relativas a hoje")
     class EscaladosHoje {
 
         @Test
@@ -519,7 +519,7 @@ class EscalaSemanalServiceTest {
 
             assertEquals(List.of(), service.minhaEscalaHoje("op1"));
 
-            // o retorno vazio é o early-return provado pela ausência de interações (§0.5)
+            // o retorno vazio é o early-return provado pela ausência de interações
             verifyNoInteractions(escalaOpRepo, salaRepo);
         }
 
@@ -666,7 +666,7 @@ class EscalaSemanalServiceTest {
     class PreviaRodizio {
 
         @Test
-        @DisplayName("prévia com escala anterior: mapa rotacionado exato e NENHUM efeito de escrita (distinção-chave da §4.1)")
+        @DisplayName("prévia com escala anterior: mapa rotacionado exato e NENHUM efeito de escrita")
         void gerarPrevia_naoEscreveERotacionaExato() {
             when(operadorRepo.findParticipantesEscala()).thenReturn(participantes(8, 8));
             when(salaRepo.findAtivasOrdenadas()).thenReturn(salasDoCiclo());

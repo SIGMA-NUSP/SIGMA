@@ -44,35 +44,24 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
 /**
- * IT de CONCORRÊNCIA das BORDAS da publicação de lote, contra Oracle real — o que o lock do lote do
- * C6 (F49) não cobria: a alteração de vínculo, que corria por fora dele (F58), e a re-âncora do banco
- * de horas, que mexia no saldo sem travar a PESSOA (F60).
+ * IT de CONCORRÊNCIA das BORDAS da publicação de lote, contra Oracle real: a alteração de vínculo
+ * e a re-âncora do banco de horas têm de SERIALIZAR com a publicação (lock do lote e da pessoa).
+ * A corrida é determinística: uma das threads é SEGURA no meio da sua transação (espiando
+ * {@link SaldoAberturaService#reancorar}, o único colaborador-classe do caminho — spy de interface
+ * não sabe chamar o método real) e é ela quem abre o {@link CountDownLatch} que dá a largada à
+ * rival; cada caso asserta a INVARIANTE, não só o desfecho.
  *
- * <p><b>Como a corrida vira determinística.</b> Barreira não bastaria: os dois defeitos vivem numa
- * janela de milissegundos DENTRO de uma transação. Em cada caso, uma das threads é SEGURA no meio da
- * sua transação (espiando {@link SaldoAberturaService#reancorar}, o único colaborador-classe do
- * caminho — spy de interface não sabe chamar o método real), e é ela quem abre o
- * {@link CountDownLatch} que dá a largada à rival. Sem a correção, o defeito acontece SEMPRE; com
- * ela, a espera pelo lock fecha a janela e o desfecho é único.
- *
- * <p>Cada caso asserta a INVARIANTE, não só o desfecho: o vínculo que sobrevive tem de ter passado
- * pelo pipeline da publicação, e o que o admin viu (200 ou recusa) tem de bater com o banco.
- *
- * <p>{@code @SpringBootTest} pelas razões do {@code PontoPublicacaoConcorrenteIT}: o
- * {@code @DataJpaTest} não instancia services e as threads não enxergariam o seed. Sem rollback
- * automático, a limpeza é manual. O {@link Clock} é FIXO porque {@code solicitar} só aceita dia útil
- * FUTURO do mês corrente — sem ele o teste dependeria do dia da execução (gotcha 13).
- *
- * <p><b>Toda pessoa destes cenários já tem linha em PNT_BANCO_SALDO</b>, como tem qualquer pessoa já
- * publicada uma vez. É o que o lock precisa para travar: pessoa sem linha não bloqueia ninguém (o
- * residual do F60, documentado no registro do C9b) — e duas publicações simultâneas da PRIMEIRA folha
- * dela colidem na UK UQ_PNT_SALDO_PESSOA em vez de esperar.
+ * <p>{@code @SpringBootTest} porque {@code @DataJpaTest} não instancia services e as threads não
+ * enxergariam o seed; sem rollback automático, a limpeza é manual. O {@link Clock} é FIXO porque
+ * {@code solicitar} só aceita dia útil FUTURO do mês corrente. Toda pessoa dos cenários já tem
+ * linha em PNT_BANCO_SALDO: pessoa sem linha não bloqueia ninguém, e duas publicações simultâneas
+ * da PRIMEIRA folha dela colidem na UK UQ_PNT_SALDO_PESSOA em vez de esperar.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @ActiveProfiles("test")
 class PontoConcorrenciaBordasIT {
 
-    /** Quarta-feira: 16/07 é dia útil futuro do mesmo mês — o dia que a folga do F60 pede. */
+    /** Quarta-feira: 16/07 é dia útil futuro do mesmo mês — o dia que a folga dos cenários pede. */
     private static final LocalDate HOJE = LocalDate.of(2026, 7, 15);
     private static final ZoneId ZONA = ZoneId.of("America/Sao_Paulo");
     private static final LocalDate DIA_DA_FOLGA = LocalDate.of(2026, 7, 16);
@@ -94,7 +83,7 @@ class PontoConcorrenciaBordasIT {
     @Autowired
     private BancoHorasService bancoHorasService;
 
-    /** Espiado para SEGURAR a transação no meio (e, no C6, para contar re-âncoras). */
+    /** Espiado para SEGURAR a transação no meio (e para contar re-âncoras). */
     @MockitoSpyBean
     private SaldoAberturaService saldoAberturaService;
 
@@ -315,7 +304,7 @@ class PontoConcorrenciaBordasIT {
 
     // ══════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("F58 — o vínculo alterado com a publicação em voo")
+    @DisplayName("o vínculo alterado com a publicação em voo")
     class VinculoDuranteAPublicacao {
 
         private Administrador admin;
@@ -338,7 +327,7 @@ class PontoConcorrenciaBordasIT {
                 paginaPendente = CenarioFactory.novaPaginaPendente(em, lote, 2);
             });
             // A publicação é segurada ANTES de re-ancorar: nesse ponto ela já tem o lote travado e o
-            // snapshot das páginas em mãos, e ainda não commitou — a janela exata do F58.
+            // snapshot das páginas em mãos, e ainda não commitou — a janela exata da corrida.
             doAnswer(inv -> {
                 abrirJanelaESegurar();
                 return inv.callRealMethod();
@@ -346,7 +335,7 @@ class PontoConcorrenciaBordasIT {
         }
 
         @Test
-        @DisplayName("corrige F58(a) — vincular página PENDENTE durante a publicação: nenhum vínculo sobrevive sem passar por ela")
+        @DisplayName("vincular página PENDENTE durante a publicação: nenhum vínculo sobrevive sem passar por ela")
         void vinculoFantasmaNaoSobrevive() throws Exception {
             List<String> r = correr(
                     publicar(lote.getId(), true),
@@ -355,7 +344,7 @@ class PontoConcorrenciaBordasIT {
             assertEquals("PUBLICOU", r.get(0), () -> "resultados: " + r);
 
             Map<String, String> pagina = paginaNoBanco(paginaPendente.getId());
-            // A INVARIANTE do F58, asserida ANTES do desfecho porque é ela que descreve o dano: um vínculo
+            // A INVARIANTE, asserida ANTES do desfecho porque é ela que descreve o dano: um vínculo
             // que sobrevive à publicação TEM de ter passado pelo pipeline dela (aviso pessoal + re-âncora).
             // Sem o lock, Maria ficava com folha publicada e NENHUM dos dois — a folha órfã.
             if (maria.getId().equals(pagina.get("pessoa"))) {
@@ -376,7 +365,7 @@ class PontoConcorrenciaBordasIT {
         }
 
         @Test
-        @DisplayName("corrige F58(b) — re-vincular página VINCULADA durante a publicação: nenhum 200 com a mudança desfeita")
+        @DisplayName("re-vincular página VINCULADA durante a publicação: nenhum 200 com a mudança desfeita")
         void revinculoNaoEDesfeitoEmSilencio() throws Exception {
             List<String> r = correr(
                     publicar(lote.getId(), true),
@@ -405,7 +394,7 @@ class PontoConcorrenciaBordasIT {
 
     // ══════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("F60 — a re-âncora do saldo com um evento da pessoa em voo")
+    @DisplayName("a re-âncora do saldo com um evento da pessoa em voo")
     class ReancoraSobLockDaPessoa {
 
         private Administrador admin;
@@ -422,7 +411,7 @@ class PontoConcorrenciaBordasIT {
         }
 
         @Test
-        @DisplayName("corrige F60(a) — publicar × solicitar folga da mesma pessoa: o saldo gravado desconta o débito commitado")
+        @DisplayName("publicar × solicitar folga da mesma pessoa: o saldo gravado desconta o débito commitado")
         void publicacaoESolicitacaoNaoIntercalam() throws Exception {
             PontoLote novo = tx.execute(status -> {
                 // Folha oficial de junho (âncora 30/06, BANCO 1000) + lote de julho a publicar. A página
@@ -457,7 +446,7 @@ class PontoConcorrenciaBordasIT {
         }
 
         @Test
-        @DisplayName("corrige F60(b) — duas publicações com as MESMAS pessoas em ordens opostas: nenhuma morre de deadlock (ORA-00060)")
+        @DisplayName("duas publicações com as MESMAS pessoas em ordens opostas: nenhuma morre de deadlock (ORA-00060)")
         void duasPublicacoesConcorrentesNaoDaoDeadlock() throws Exception {
             List<PontoLote> lotes = tx.execute(status -> {
                 PontoLote l1 = novoLoteEmRevisao("SEMANAL",

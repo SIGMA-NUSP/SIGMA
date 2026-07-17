@@ -5,9 +5,9 @@ import { ApiService } from './api.service';
 import { MetabaseService } from './metabase.service';
 
 /**
- * T21 — MetabaseService (§5.5/B5): só `embedUrl` tem lógica própria (extrai `r.url` e
- * passa por DomSanitizer.bypassSecurityTrustResourceUrl). `listarDashboards` é
- * delegação pura → no máximo um verify de endpoint (assertar o retorno testaria o mock).
+ * MetabaseService: só `embedUrl` tem lógica própria (extrai `r.url` e passa por
+ * DomSanitizer.bypassSecurityTrustResourceUrl). `listarDashboards` é delegação
+ * pura → no máximo um verify de endpoint (assertar o retorno testaria o mock).
  */
 describe('MetabaseService', () => {
   let svc: MetabaseService;

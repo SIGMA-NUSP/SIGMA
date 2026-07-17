@@ -24,10 +24,9 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Testes unitários do AnormalidadeService (T5 — §4.2/§4.6 da auditoria).
- *
- * Prioridade máxima: syncHouveAnormalidade (substitui trigger do PostgreSQL)
- * e validações condicionais (substituem CHECK constraints).
+ * Testes unitários do AnormalidadeService. Foco: syncHouveAnormalidade (mantém o flag
+ * houve_anormalidade da entrada coerente — não há trigger no banco fazendo isso) e as
+ * validações condicionais do registro (não há CHECK constraints equivalentes no Oracle).
  */
 @ExtendWith(MockitoExtension.class)
 class AnormalidadeServiceTest {
@@ -216,10 +215,10 @@ class AnormalidadeServiceTest {
             service.registrar(body, "user-1");
 
             // aplicarCampos() não seta entradaId no fluxo de edição — a entidade permanece com a
-            // entrada original mesmo que o body tente enviar outra. Confirmado com o Douglas: RAOA
-            // não é reatribuível entre entradas — o form real (anormalidade-form.component.ts) só
-            // reenvia o mesmo entrada_id da rota (nunca oferece trocar), e o legado Python nunca
-            // incluiu entrada_id no SET do UPDATE (db/anormalidade.py); não é um bug do port Java,
+            // entrada original mesmo que o body tente enviar outra. RAOA não é reatribuível
+            // entre entradas — o form real (anormalidade-form.component.ts) só reenvia o mesmo
+            // entrada_id da rota (nunca oferece trocar), e o legado Python nunca incluiu
+            // entrada_id no SET do UPDATE (db/anormalidade.py); não é um bug do port Java,
             // é uma invariante intencional do sistema — este teste a trava contra regressão futura.
             assertEquals(50L, existing.getEntradaId());
             verify(anormalidadeRepo).updateHouveAnormalidade(eq(50L), eq(1));
@@ -361,10 +360,10 @@ class AnormalidadeServiceTest {
         }
     }
 
-    // ── corrige F73 (C19): régua de horário na porta da anormalidade ──
+    // ── régua de horário na porta da anormalidade ──
 
     @Nested
-    class ReguaDeHorarioF73 {
+    class ReguaDeHorario {
 
         private Map<String, Object> bodyValido() {
             Map<String, Object> body = new LinkedHashMap<>();
@@ -383,7 +382,7 @@ class AnormalidadeServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — hora_inicio_anormalidade torta recusa 400 nomeando o rótulo da tela")
+        @DisplayName("hora_inicio_anormalidade torta recusa 400 nomeando o rótulo da tela")
         void horaInicioTorta_recusa() {
             Map<String, Object> body = bodyValido();
             body.put("hora_inicio_anormalidade", "25:10:00");
@@ -398,7 +397,7 @@ class AnormalidadeServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — hora_acionamento_manutencao torta recusa 400 nomeando o rótulo da tela")
+        @DisplayName("hora_acionamento_manutencao torta recusa 400 nomeando o rótulo da tela")
         void horaAcionamentoTorta_recusa() {
             Map<String, Object> body = bodyValido();
             body.put("acionou_manutencao", "true");
@@ -413,7 +412,7 @@ class AnormalidadeServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — hora_solucao torta recusa 400 (porta só de API: nenhuma tela envia o campo hoje)")
+        @DisplayName("hora_solucao torta recusa 400 (porta só de API: nenhuma tela envia o campo hoje)")
         void horaSolucaoTorta_recusa() {
             Map<String, Object> body = bodyValido();
             body.put("data_solucao", "2026-03-18");
@@ -428,7 +427,7 @@ class AnormalidadeServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — a recusa de FORMATO precede a coerência (torta não vira 'não pode ser anterior')")
+        @DisplayName("a recusa de FORMATO precede a coerência (torta não vira 'não pode ser anterior')")
         void formatoPrecedeCoerencia() {
             // hora_solucao torta E "anterior" ao início no mesmo dia: sem a precedência,
             // ck_datas_coerentes responderia "Hora da solução não pode ser anterior..."

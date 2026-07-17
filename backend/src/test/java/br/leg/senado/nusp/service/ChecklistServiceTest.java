@@ -33,10 +33,10 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * T5 — invariantes de ChecklistService (§4.2 da auditoria): janela de 5 min
- * do registro, DELETE-antes-do-reload na edição e o mapeamento de
- * itensTipoPorSala. Disciplina §0.5: SQL casado por fragmento-chave, nunca
- * anyString(), com verify dos setParameter relevantes.
+ * Testes unitários dos invariantes de ChecklistService: janela de 5 min do
+ * registro, DELETE-antes-do-reload na edição e o mapeamento de itensTipoPorSala.
+ * SQL nativo casado por fragmento-chave (nunca anyString()), com verify dos
+ * setParameter relevantes.
  */
 @ExtendWith(MockitoExtension.class)
 class ChecklistServiceTest {
@@ -55,7 +55,7 @@ class ChecklistServiceTest {
     private static final String USER_ID = "uuid-operador-1";
     private static final long CHECKLIST_ID = 5L;
 
-    // ── Helper de stub (mesma disciplina de OperacaoServiceTest/§0.5) ──
+    // ── Helper de stub (mesma disciplina de OperacaoServiceTest) ──
 
     /**
      * Mock de Query devolvido só quando o SQL contém o fragmento-chave.
@@ -116,7 +116,7 @@ class ChecklistServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F29 — 'itens': null responde 400 (antes: NPE no validarItens → 500)")
+        @DisplayName("'itens': null responde 400 (não 500 por NPE no validarItens)")
         void itensNull_400() {
             Map<String, Object> body = bodyRegistrarValido();
             body.put("itens", null);   // a CHAVE existe: o getOrDefault não protegia
@@ -129,7 +129,7 @@ class ChecklistServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F29 — item que não é objeto responde 400 (antes: ClassCastException → 500)")
+        @DisplayName("item que não é objeto responde 400 (não 500 por ClassCastException)")
         void itemNaoEhObjeto_400() {
             Map<String, Object> body = bodyRegistrarValido();
             body.put("itens", List.of("nao-sou-um-objeto"));   // o cast some no erasure
@@ -183,7 +183,7 @@ class ChecklistServiceTest {
 
         @Test
         @DisplayName("usuário não é o criador (inclusive se fosse operador adicional via junction) → "
-                + "403 — achado: o gate de ownership por CRIADO_POR roda ANTES de isDonoOuAdicional, "
+                + "403 — o gate de ownership por CRIADO_POR roda ANTES de isDonoOuAdicional, "
                 + "tornando o acesso via FRM_CHECKLIST_OPERADOR inalcançável neste fluxo")
         void naoCriador_403() {
             when(checklistRepo.findCriadoPorById(CHECKLIST_ID)).thenReturn(Optional.of("outro-uuid"));
@@ -261,13 +261,13 @@ class ChecklistServiceTest {
         }
     }
 
-    // ── corrige F73 (C19): régua de horário na porta do checklist ──
+    // ── régua de horário na porta do checklist ──
 
     @Nested
-    class ReguaDeHorarioF73 {
+    class ReguaDeHorario {
 
         @Test
-        @DisplayName("corrige F73 — hora_inicio_testes torta recusa 400 nomeando 'Início dos testes', antes de tocar o banco")
+        @DisplayName("hora_inicio_testes torta recusa 400 nomeando 'Início dos testes', antes de tocar o banco")
         void registrar_horaInicioTorta_recusa() {
             Map<String, Object> body = bodyRegistrarValido();
             body.put("hora_inicio_testes", "24:00:00");
@@ -282,7 +282,7 @@ class ChecklistServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F73 — hora_termino_testes torta recusa 400 nomeando 'Término dos testes'")
+        @DisplayName("hora_termino_testes torta recusa 400 nomeando 'Término dos testes'")
         void registrar_horaTerminoTorta_recusa() {
             Map<String, Object> body = bodyRegistrarValido();
             body.put("hora_termino_testes", "xx");

@@ -10,41 +10,14 @@ import { ToastService } from '../../shared/components/toast.component';
 import { AdminAvisosSalaComponent } from './admin-avisos-sala.component';
 
 /**
- * C13b — AdminAvisosSalaComponent (/admin/avisos-sala): tela de DUAS metades — o formulário de
- * cadastro de aviso (multi-select de locais + mensagens) em cima, e UMA listagem server-side
- * ("Avisos Cadastrados") no `TableStateController` `ctrl` (`/api/admin/avisos/list`) embaixo.
- *
- * O que este spec trava é o CANAL DE ERRO (C7) recém-instalado na listagem. Antes dele, a tela
- * preenchia o `erro` do controlador e NÃO o exibia: uma leitura que falhava caía no ramo de lista
- * vazia e a tela AFIRMAVA "Nenhum aviso cadastrado." — a pior leitura falsa possível justamente
- * AQUI, porque a tela é de escrita: o admin conclui que a sala está limpa e cadastra um aviso por
- * cima (ou deixa de DESATIVAR o aviso ativo que devia sair), e é a listagem — não o formulário —
- * que lhe mostra o que já existe. Pior ainda: o backend só admite 1 aviso ativo por sala, então a
- * verdade escondida vira erro de cadastro depois, sem que o admin entenda por quê.
- *
- * Por isso os testes são de RENDER (exceção deliberada à regra "só lógica" do módulo): o canal só
- * cumpre a decisão do estágio se o TEMPLATE o consumir. Travar apenas o signal deixaria a suíte
- * verde com o ramo `@if (ctrl.erro())` apagado e o defeito de volta na tela. O motor em si
- * (rows/meta/loading/erro/recência) já está coberto no T21 (`table-state.controller.spec.ts`);
- * aqui prova-se a INSTALAÇÃO: caixa presente com a mensagem certa, retry que re-pede o endpoint,
- * vazio legítimo intacto, rodapé que não mente e — no lugar do teste de isolamento entre tabelas
- * (só há uma) — a prova de que a falha da LISTA não leva junto o FORMULÁRIO de cadastro.
- *
- * Estratégia: TestBed com `ApiService` mockado por `useValue` e `getList` roteado POR ENDPOINT;
- * `LookupService` (salas do multi-select) e `ToastService` também por `useValue`. O
- * `TableStateController` é REAL. Sem fake timers: nada no caminho testado depende de `Date` e o
- * debounce da busca (400 ms) não é exercido. O template tem `ngModel` (mensagens, permanente,
- * duração, busca) → todo render passa por `await fixture.whenStable()`.
- *
- * ⚠️ Divergência do roteiro do estágio (o CÓDIGO vence): o `Router` NÃO pode ser um `useValue`
- * cru — o template usa `RouterLink` ("← Voltar"), e a diretiva exige um `Router` de verdade
- * (`events`, `createUrlTree`, `serializeUrl`) + `ActivatedRoute`. Usa-se `provideRouter([])`, como
- * no spec irmão do `/admin/operacao-audio`, e espiona-se `navigate` quando preciso.
- *
- * C18 (F67): o lock "1 aviso ativo por sala" falhava ABERTO — `loadSalasOcupadas()` sem handler de
- * erro deixava o multi-select exibir todas as salas como livres num 500. Decisão do Douglas:
- * FAIL-CLOSED — erro visível com retry e o CADASTRO bloqueado ([disabled] + guard no onSubmit)
- * enquanto a carga não tiver sucedido (em voo ou falhou). O describe "lock fail-closed" cobre isso.
+ * Testes de RENDER da listagem "Avisos Cadastrados": caixa de erro presente com a
+ * mensagem certa, retry que re-pede o endpoint, estado vazio legítimo intacto, rodapé
+ * coerente, e falha da LISTA não derruba o FORMULÁRIO de cadastro. Também cobre o lock
+ * fail-closed de "1 aviso ativo por sala" (cadastro bloqueado enquanto a carga de salas
+ * não tiver sucedido).
+ * TestBed com ApiService mockado por useValue (getList roteado POR ENDPOINT); Router
+ * real via provideRouter([]) — RouterLink não aceita useValue cru; sem fake timers.
+ * O template tem ngModel → todo render passa por `await fixture.whenStable()`.
  */
 
 // ── Endpoints da tela ──
@@ -70,7 +43,7 @@ const MSG_500 = 'Não foi possível carregar a lista. (Erro interno do servidor)
 
 const VAZIO = 'Nenhum aviso cadastrado.';
 
-describe('AdminAvisosSalaComponent — canal de erro da listagem (C7/C13b)', () => {
+describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
   let apiGetList: ReturnType<typeof vi.fn>;
   let apiGet: ReturnType<typeof vi.fn>;
   let apiPost: ReturnType<typeof vi.fn>;
@@ -81,7 +54,7 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem (C7/C13b)', () 
 
   /** Resposta corrente da listagem — `falhar`/`vazio` trocam o cenário sem tocar no resto da tela. */
   let respostas: Record<string, () => Observable<any>>;
-  /** Resposta corrente do GET .../salas-ocupadas — os testes do F67 a trocam. */
+  /** Resposta corrente do GET .../salas-ocupadas — os testes do fail-closed a trocam. */
   let respostaSalasOcupadas: () => Observable<any>;
   /** Cache de salas do lookup (o multi-select) — signal trocável por teste. */
   let salasLookup: ReturnType<typeof signal<any[]>>;
@@ -94,7 +67,7 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem (C7/C13b)', () 
     respostas = { [EP_LISTA]: ok(AVISO_ATIVO, AVISO_DESATIVADO) };
     apiGetList = vi.fn((endpoint: string) => respostas[endpoint]());
     // `ngOnInit` também chama `loadSalasOcupadas()` (GET .../salas-ocupadas, que trava no
-    // multi-select as salas com aviso ativo). O F67 (fail-closed) exige a resposta trocável.
+    // multi-select as salas com aviso ativo). O fail-closed exige a resposta trocável.
     respostaSalasOcupadas = () => of({ data: [] });
     apiGet = vi.fn((url: string) =>
       url === EP_SALAS_OCUPADAS ? respostaSalasOcupadas() : of({ data: [] }));
@@ -175,7 +148,7 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem (C7/C13b)', () 
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Canal de erro (C7) — a falha de leitura deixa de se passar por "lista vazia"
+  // Canal de erro — a falha de leitura deixa de se passar por "lista vazia"
   // ═══════════════════════════════════════════════════════════════════
   describe('falha na carga da listagem', () => {
     it('mostra a caixa app-erro-carga com role="alert" e a mensagem do canal, SEM "Nenhum aviso cadastrado."', async () => {
@@ -310,15 +283,15 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem (C7/C13b)', () 
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Lock "1 aviso ativo por sala" — FAIL-CLOSED (C18/F67, decisão do Douglas)
+  // Lock "1 aviso ativo por sala" — FAIL-CLOSED
   //
   // `loadSalasOcupadas()` era assinado só com `next`: num 500, o mapa ficava `{}`, os rótulos
   // "— Cadastro nº X" sumiam e o multi-select mostrava TODAS as salas destravadas — o admin
   // selecionava uma ocupada e levava a recusa do backend sem entender. Agora a carga que não
   // SUCEDEU (em voo ou falhou) mostra erro com retry e BLOQUEIA o envio; preencher pode.
   // ═══════════════════════════════════════════════════════════════════
-  describe('lock "1 aviso ativo por sala" — fail-closed (C18/F67)', () => {
-    const MSG_F67 = 'Não foi possível verificar quais locais já têm aviso ativo. '
+  describe('lock "1 aviso ativo por sala" — fail-closed', () => {
+    const MSG_ERRO_LOCK_SALAS = 'Não foi possível verificar quais locais já têm aviso ativo. '
       + 'O cadastro fica bloqueado até recarregar — um local ocupado apareceria como livre. (Erro interno do servidor)';
 
     const botaoCadastrar = (f: ComponentFixture<AdminAvisosSalaComponent>) =>
@@ -331,13 +304,13 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem (C7/C13b)', () 
       f.componentInstance.mensagens = ['Verificar o microfone da bancada'];
     }
 
-    it('corrige F67 — falha das salas-ocupadas: caixa com retry, botão DESABILITADO e onSubmit() não emite POST nem forçado', async () => {
+    it('falha das salas-ocupadas: caixa com retry, botão DESABILITADO e onSubmit() não emite POST nem forçado', async () => {
       respostaSalasOcupadas = () => throwError(() => ERRO_500);
       const fixture = await renderizar();
 
       const box = caixa(fixture);
       expect(box).not.toBeNull();
-      expect(box.componentInstance.mensagem()).toBe(MSG_F67);
+      expect(box.componentInstance.mensagem()).toBe(MSG_ERRO_LOCK_SALAS);
       expect(botaoCadastrar(fixture).disabled).toBe(true);         // camada de UI
 
       preencherFormValido(fixture);
@@ -346,7 +319,7 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem (C7/C13b)', () 
       expect(fixture.componentInstance.saving()).toBe(false);
     });
 
-    it('corrige F67 — em VOO (antes da 1ª resposta) o envio já está bloqueado', async () => {
+    it('em VOO (antes da 1ª resposta) o envio já está bloqueado', async () => {
       const emVoo = new Subject<any>();
       respostaSalasOcupadas = () => emVoo;
       const fixture = await renderizar();
@@ -362,7 +335,7 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem (C7/C13b)', () 
       expect(botaoCadastrar(fixture).disabled).toBe(false);        // destravou
     });
 
-    it('corrige F67 — retry com sucesso: destrava o envio e as salas ocupadas voltam rotuladas/travadas', async () => {
+    it('retry com sucesso: destrava o envio e as salas ocupadas voltam rotuladas/travadas', async () => {
       salasLookup.set([{ id: 7, nome: 'Plenário 2' }, { id: 8, nome: 'Sala 5' }]);
       respostaSalasOcupadas = () => throwError(() => ERRO_500);
       const fixture = await renderizar();

@@ -43,18 +43,15 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.*;
 
 /**
- * T8 — AdminCrudService (§4.8 da auditoria).
+ * Unitário de {@link AdminCrudService}: criação/atualização dos 3 tipos de usuário,
+ * duplicatas globais de e-mail/username entre eles, invariante da substituição de foto
+ * (incluindo o desfecho da transação, simulado via TransactionSynchronizationManager),
+ * regras de turno por papel, guarda do master e toggles/operações pontuais.
  *
- * <p>Os 3 {@code @Nested} originais (CriarOperador, CriarAdministrador, ListFormEdit) foram
- * mantidos; o estágio acrescenta os grupos de maior risco: duplicatas globais entre os 3 tipos
- * de usuário, invariante da substituição de foto, regras de turno por papel, guarda do master
- * e os toggles/operações pontuais.
- *
- * <p>Disciplina anti-falso-verde (§0.5 do plano): nenhum valor esperado vem do default do
- * Mockito. Os {@code Optional.empty()} usados como pré-condição de "sem conflito" são stubados
- * explicitamente (e todos são efetivamente chamados — ver o comentário de short-circuit em
- * {@link #semConflitoDeEmail}); onde um {@code Optional.empty()} é o próprio insumo do caso
- * (404), o stub explícito é acompanhado do {@code verify} do argumento exato.
+ * <p>Nenhum valor esperado vem do default do Mockito: os {@code Optional.empty()} de
+ * pré-condição são stubados explicitamente (ver o comentário de short-circuit em
+ * {@link #semConflitoDeEmail}); onde um {@code Optional.empty()} é o próprio insumo do
+ * caso (404), o stub explícito é acompanhado do {@code verify} do argumento exato.
  */
 @ExtendWith(MockitoExtension.class)
 class AdminCrudServiceTest {
@@ -76,7 +73,7 @@ class AdminCrudServiceTest {
     }
 
     /**
-     * Os testes do F12 simulam a transação com {@code TransactionSynchronizationManager}, cujo estado
+     * Os testes de fotos simulam a transação com {@code TransactionSynchronizationManager}, cujo estado
      * é um ThreadLocal — o surefire reusa a thread entre testes. O hook vive na classe EXTERNA (e não
      * no @Nested que hoje o usa) para que qualquer teste futuro que ative sincronização, em qualquer
      * grupo, seja limpo: um vazamento aqui apareceria como falha em cascata, difícil de rastrear.
@@ -464,7 +461,7 @@ class AdminCrudServiceTest {
         }
 
         @Test
-        @DisplayName("criarAdministrador — username já usado por OPERADOR → 409, sem salvar (lacuna da §2.1)")
+        @DisplayName("criarAdministrador — username já usado por OPERADOR → 409, sem salvar")
         void criarAdministrador_usernameDeOperador_throws409() {
             setMasterUsername("douglas.antunes");
             semConflitoDeEmail("adm@senado.leg.br");
@@ -656,7 +653,7 @@ class AdminCrudServiceTest {
             assertEquals(1L, arquivosNoDiretorio());
         }
 
-        // ── F11: whitelist de extensão e contenção do caminho ────────────────────────
+        // ── Whitelist de extensão e contenção do caminho ─────────────────────────────
         // O diretório é servido publicamente (/files/** é permitAll e isento do filtro JWT):
         // gravar a extensão que o cliente mandar é XSS armazenado (.html/.svg servidos no
         // domínio da aplicação). A extensão passa a sair sempre da whitelist {jpg,jpeg,png,gif,webp}.
@@ -684,7 +681,7 @@ class AdminCrudServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F11 — nome 'foto.html' com contentType image/png → grava .png (a extensão do cliente é ignorada)")
+        @DisplayName("nome 'foto.html' com contentType image/png → grava .png (a extensão do cliente é ignorada)")
         void extensaoForaDaWhitelist_caiNoContentType() throws Exception {
             String fotoUrl = enviarFoto(fotoMock("foto.html", "image/png"));
 
@@ -696,7 +693,7 @@ class AdminCrudServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F11 — 'foto.svg' com contentType text/html → 400 e NADA é gravado")
+        @DisplayName("'foto.svg' com contentType text/html → 400 e NADA é gravado")
         void extensaoENemContentTypeMapeiam_rejeita() throws Exception {
             MultipartFile foto = fotoMock("foto.svg", "text/html");
             when(operadorRepo.findById("op-1")).thenReturn(Optional.of(op));
@@ -715,7 +712,7 @@ class AdminCrudServiceTest {
 
         @Test
         @DisplayName("nome com traversal ('../../evil.png') não escapa: só a extensão é aproveitada (documental — "
-                + "o nome do cliente NUNCA compôs o caminho; este caso passa também no código pré-F11)")
+                + "o nome do cliente NUNCA compôs o caminho)")
         void nomeComTraversal_naoInfluenciaOCaminho() throws Exception {
             String fotoUrl = enviarFoto(fotoMock("../../evil.png", "image/png"));
 
@@ -725,7 +722,7 @@ class AdminCrudServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F11 — username com traversal (dado do banco) → destino fora da base é rejeitado, sem gravar")
+        @DisplayName("username com traversal (dado do banco) → destino fora da base é rejeitado, sem gravar")
         void usernameComTraversal_contencaoRejeita() throws Exception {
             // O USERNAME_PATTERN barra isso na criação; a contenção é a rede de segurança do WRITE,
             // em paridade com a que apagarFotoFisica já tinha no DELETE.
@@ -756,7 +753,7 @@ class AdminCrudServiceTest {
             assertEquals(1L, arquivosNoDiretorio());
         }
 
-        // ── F12: os arquivos acompanham o desfecho da TRANSAÇÃO ──────────────────────
+        // ── Os arquivos acompanham o desfecho da TRANSAÇÃO ───────────────────────────
         // Sob proxy transacional os testes acima descrevem só o "sem transação ativa" (o delete
         // sai na hora, como antes). Com transação, o service registra uma sincronização: no COMMIT
         // some a antiga; no ROLLBACK some a NOVA — e a antiga, que o banco volta a referenciar,
@@ -771,7 +768,7 @@ class AdminCrudServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F12 — substituição: save falha e a transação reverte → foto ANTIGA preservada e a NOVA removida")
+        @DisplayName("substituição: save falha e a transação reverte → foto ANTIGA preservada e a NOVA removida")
         void substituicao_rollback_preservaAntigaERemoveNova() throws Exception {
             TransactionSynchronizationManager.initSynchronization();
             MultipartFile foto = fotoMock("avatar.jpg", "image/jpeg");
@@ -794,7 +791,7 @@ class AdminCrudServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F12 — substituição: transação commitada → a antiga é apagada (e só então)")
+        @DisplayName("substituição: transação commitada → a antiga é apagada (e só então)")
         void substituicao_commit_apagaAntiga() throws Exception {
             TransactionSynchronizationManager.initSynchronization();
             MultipartFile foto = fotoMock("avatar.jpg", "image/jpeg");
@@ -816,7 +813,7 @@ class AdminCrudServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F12 — criação: INSERT falha (sem transação) → a foto recém-gravada é removida, sem órfã")
+        @DisplayName("criação: INSERT falha (sem transação) → a foto recém-gravada é removida, sem órfã")
         void criacao_saveFalha_naoDeixaFotoOrfa() throws Exception {
             ReflectionTestUtils.setField(service, "tecnicosDirname", "operadores");  // reusa o TempDir
             semConflitoDeEmail("tec@senado.leg.br");
@@ -835,7 +832,7 @@ class AdminCrudServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F12 — criação: transação reverte DEPOIS do save (constraint no commit) → foto removida")
+        @DisplayName("criação: transação reverte DEPOIS do save (constraint no commit) → foto removida")
         void criacao_rollbackTardio_removeFoto() throws Exception {
             TransactionSynchronizationManager.initSynchronization();
             ReflectionTestUtils.setField(service, "tecnicosDirname", "operadores");
@@ -1068,9 +1065,9 @@ class AdminCrudServiceTest {
     class PlenarioPrincipalFixo {
 
         @Test
-        @DisplayName("corrige F10 — criarOperador com fixo=true sem apto → 400 INVALIDO, sem tocar repositórios")
+        @DisplayName("criarOperador com fixo=true sem apto → 400 INVALIDO, sem tocar repositórios")
         void criarOperador_fixoSemApto_throws400() {
-            // §5 do plano, achado F10: `atualizarOperador` (400) e `togglePlenarioPrincipalFixo`
+            // `atualizarOperador` (400) e `togglePlenarioPrincipalFixo`
             // (400) barram o par (apto=false, fixo=true); `criarOperador` gravava sem checar — um
             // operador NASCIA no estado que os outros dois caminhos proíbem, e o editor de perfil
             // passava a rejeitar qualquer salvamento dele. Agora a mesma guarda vale na criação, e
@@ -1304,7 +1301,7 @@ class AdminCrudServiceTest {
     // ══ Aplicar config a todos os plenários ═════════════════════
 
     @Nested
-    @DisplayName("applySalaConfigToAll — tudo-ou-nada (corrige F13)")
+    @DisplayName("applySalaConfigToAll — tudo-ou-nada")
     class ApplySalaConfigToAll {
 
         private static final int ITEM_TIPO_ID = 7;
@@ -1359,7 +1356,7 @@ class AdminCrudServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F13 — falha numa sala PROPAGA (sem contagem parcial): o catch que engolia ou "
+        @DisplayName("falha numa sala PROPAGA (sem contagem parcial): o catch que engolia ou "
                 + "descartava tudo num 500 opaco (rollback-only) ou devolvia 200 com contagem parcial")
         void falhaEmUmaSala_propagaSemContagemParcial() {
             stubSalasAtivas();

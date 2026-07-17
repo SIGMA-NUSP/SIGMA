@@ -2,17 +2,13 @@ import { TestBed } from '@angular/core/testing';
 import { HORA_RE, HoraMaskDirective } from './hora-mask.directive';
 
 /**
- * T19 — HoraMaskDirective (§5.3 da auditoria; §C4 do plano). `onInput` é exercitado
- * com um Event sintético `{ target:{value}, inputType }` e a emissão é capturada por
- * um espião em `horaChange.emit`. Cobre `HORA_RE`, digitação progressiva, colar 4
- * dígitos, backspace após ':' e truncamento > 4 dígitos.
- *
- * DIVERGÊNCIA vs auditoria §5.3 ("testável sem TestBed"): a diretiva declara
- * `horaChange = output<string>()` (output signal-based do Angular 21), cujo
- * inicializador chama `assertInInjectionContext` — `new HoraMaskDirective()` cru
- * lança NG0203. A instância é criada via `TestBed.runInInjectionContext`, o mínimo
- * para haver contexto de injeção; o restante do idiom (evento sintético + espião no
- * emit, sem fixture/host component) é preservado.
+ * HoraMaskDirective e `HORA_RE`: digitação progressiva (':' após o 2º dígito), colar
+ * 4 dígitos, backspace após ':' e truncamento > 4 dígitos. `onInput` é exercitado com
+ * um Event sintético `{ target:{value}, inputType }` e a emissão capturada por espião
+ * em `horaChange.emit` — sem fixture/host component.
+ * Armadilha: `horaChange = output<string>()` (signal-based) chama
+ * `assertInInjectionContext` no inicializador — `new HoraMaskDirective()` cru lança
+ * NG0203; instanciar via `TestBed.runInInjectionContext`.
  */
 function makeDirective(): HoraMaskDirective {
   return TestBed.runInInjectionContext(() => new HoraMaskDirective());

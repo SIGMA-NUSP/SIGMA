@@ -35,15 +35,12 @@ import jakarta.persistence.PersistenceException;
  * Oracle real — a raiz do grafo da operação (sessão de áudio).
  *
  * Nos testes de comportamento, toda releitura de OPR_REGISTRO_AUDIO é por SQL NATIVO
- * ({@link #lerRegistroAudio}) — e não por em.find(). Era o contorno do F14 (§5 do plano):
- * até o C5, a leitura JPA dos campos Instant (CRIADO_EM/FECHADO_EM, coluna TIMESTAMP)
- * morria com ORA-18716. O C2 mediu a causa: NÃO era o driver (o upgrade para 23.26.2.0.0
- * não mudava nada) e sim o mapeamento — o Hibernate lê Instant como TIMESTAMP_UTC, pedindo
- * OffsetDateTime numa coluna sem fuso. O C5 CUROU (property
- * hibernate.type.preferred_instant_jdbc_type: TIMESTAMP, no application.yml); o contorno
- * segue de pé porque continua correto — removê-lo é limpeza, fora do escopo do C5.
- * O @Nested "leitura da entidade pelo JPA (F14)", ao fim desta classe, é o ÚNICO em.find()
- * daqui: era ele que travava o ORA-18716 e agora trava a cura (corrige F14).
+ * ({@link #lerRegistroAudio}) — e não por em.find(). O @Nested "leitura da entidade
+ * pelo JPA", ao fim desta classe, é o ÚNICO em.find() daqui: trava que a leitura JPA
+ * dos campos Instant (CRIADO_EM/FECHADO_EM, coluna TIMESTAMP) não estoura ORA-18716 —
+ * ela depende da property {@code hibernate.type.preferred_instant_jdbc_type: TIMESTAMP}
+ * no application.yml (sem ela, o Hibernate lê Instant como TIMESTAMP_UTC e pede
+ * OffsetDateTime numa coluna sem fuso).
  */
 @OracleIT
 class RegistroOperacaoAudioRepositoryIT {
@@ -58,7 +55,7 @@ class RegistroOperacaoAudioRepositoryIT {
         return em.getEntityManager();
     }
 
-    /** Estado do registro sem passar pela entidade (F14): [EM_ABERTO, SALA_ID, FECHADO_POR, FECHADO_EM]. */
+    /** Estado do registro sem passar pela entidade: [EM_ABERTO, SALA_ID, FECHADO_POR, FECHADO_EM]. */
     private Object[] lerRegistroAudio(Long id) {
         return (Object[]) emReal().createNativeQuery("""
                 SELECT EM_ABERTO, SALA_ID, FECHADO_POR, FECHADO_EM
@@ -114,14 +111,13 @@ class RegistroOperacaoAudioRepositoryIT {
 
         @Test
         @DisplayName("caracteriza UQ_OPR_REGAUDIO_SALA_ABERTA — o banco impede 2ª sessão ABERTA na mesma sala "
-                + "(o cenário do plano 'FETCH FIRST 1 com duas abertas' é inalcançável; o ORDER BY ID DESC é hoje defensivo)")
+                + "(o cenário 'FETCH FIRST 1 com duas abertas' é inalcançável; o ORDER BY ID DESC é hoje defensivo)")
         void persistirSegundaSessaoAbertaNaMesmaSala_violaUnique() {
             Sala sala = CenarioFactory.novaSala(emReal());
             CenarioFactory.novoRegistroAudio(emReal(), sala, true);
 
-            // O plano previa "FETCH FIRST 1 com duas abertas"; a FBI única real do schema
-            // (a mesma cuja forma o WHERE da query espelha) torna o cenário impossível —
-            // registrado como divergência na entrada T11 do registro de execução.
+            // A FBI única real do schema (a mesma cuja forma o WHERE da query espelha)
+            // torna o cenário "FETCH FIRST 1 com duas abertas" impossível.
             PersistenceException ex = assertThrows(PersistenceException.class,
                     () -> CenarioFactory.novoRegistroAudio(emReal(), sala, true));
 
@@ -293,28 +289,27 @@ class RegistroOperacaoAudioRepositoryIT {
     }
 
     @Nested
-    @DisplayName("leitura da entidade pelo JPA (F14)")
+    @DisplayName("leitura da entidade pelo JPA")
     class LeituraJpaDaEntidade {
 
         @Test
-        @DisplayName("corrige F14 — em.find de campo Instant (coluna TIMESTAMP) devolve os carimbos gravados, "
+        @DisplayName("em.find de campo Instant (coluna TIMESTAMP) devolve os carimbos gravados, "
                 + "sem ORA-18716")
         void emFind_deCampoInstantDevolveOsCarimbosGravados() {
-            // F14 (§5 do plano) — este teste CARACTERIZAVA o ORA-18716 até o C5; agora trava a cura.
+            // Trava a ausência do ORA-18716 na leitura JPA de campos Instant.
             //
-            //  · O driver nunca foi o culpado: o C2 mediu o ojdbc11 23.26.2.0.0 (a mais recente do
-            //    Maven Central) e o erro saiu idêntico — o bump foi revertido.
+            //  · O driver não é o culpado: o erro reproduzia idêntico mesmo no ojdbc11 mais recente.
             //  · A causa é o mapeamento: no dialeto Oracle, o Hibernate 6 lê Instant como
             //    TIMESTAMP_UTC, isto é, pede getObject(col, OffsetDateTime.class) ao driver — e o
             //    ojdbc recusa isso numa coluna TIMESTAMP *sem* fuso ("ORA-18716: não está em nenhum
             //    fuso horário").
-            //  · CURA (C5): a property `hibernate.type.preferred_instant_jdbc_type: TIMESTAMP` no
+            //  · A cura é a property `hibernate.type.preferred_instant_jdbc_type: TIMESTAMP` no
             //    application.yml — Instant passa a ir e voltar por get/setTimestamp(), e ninguém mais
             //    pede OffsetDateTime. Que a ESCRITA continua byte a byte a de produção (wall-clock
             //    UTC) é o que o InstantJdbcTypeIT mede, com a JVM de teste pinada em UTC.
             //
-            // A releitura por SQL nativo dos demais testes (lerRegistroAudio, acima) segue de pé:
-            // virou opcional, não errada — removê-la é limpeza, fora do escopo do C5.
+            // A releitura por SQL nativo dos demais testes (lerRegistroAudio, acima) é opcional,
+            // não errada.
             Sala sala = CenarioFactory.novaSala(emReal());
             RegistroOperacaoAudio registro = CenarioFactory.novoRegistroAudio(emReal(), sala, false);
             Instant fechadoEm = Instant.parse("2026-07-12T15:00:00Z");

@@ -20,15 +20,10 @@ import br.leg.senado.nusp.it.support.OracleIT;
  * ITs dos 2 statements nativos de {@link AuthSessionRepository} contra Oracle real
  * (janela de inatividade com NUMTODSINTERVAL e revogação idempotente).
  *
- * Duas escolhas deliberadas de mecânica:
- * (1) todo cenário ancora LAST_ACTIVITY no relógio do BANCO (SYSTIMESTAMP, via
+ * Todo cenário ancora LAST_ACTIVITY no relógio do BANCO (SYSTIMESTAMP, via
  * {@link #fixarLastActivity}) — o carimbo do @PrePersist vem da JVM e a janela de
- * maxAge é avaliada pelo Oracle; ancorar num relógio só elimina flakiness;
- * (2) a releitura de verificação é por SQL NATIVO, não por em.find(): era o contorno do
- * F14 — até o C5, a leitura JPA de campo Instant (coluna TIMESTAMP) morria com ORA-18716.
- * O C5 curou (property hibernate.type.preferred_instant_jdbc_type: TIMESTAMP), então o
- * contorno virou opcional; mantê-lo é escolha, não necessidade — a limpeza está fora do
- * escopo daquele estágio.
+ * maxAge é avaliada pelo Oracle; ancorar num relógio só elimina flakiness. A
+ * releitura de verificação é feita por SQL nativo, não por em.find().
  */
 @OracleIT
 class AuthSessionRepositoryIT {
@@ -41,7 +36,6 @@ class AuthSessionRepositoryIT {
 
     /** Reposiciona LAST_ACTIVITY em (SYSTIMESTAMP - segundos) e limpa o cache de 1º nível. */
     private void fixarLastActivity(Long sessaoId, int segundosAtras) {
-        // ancoragem extraída para a CenarioFactory quando o T11 precisou dela (DRY na hora certa)
         CenarioFactory.fixarTimestamp(em.getEntityManager(), "PES_AUTH_SESSION", "LAST_ACTIVITY",
                 sessaoId, segundosAtras);
     }

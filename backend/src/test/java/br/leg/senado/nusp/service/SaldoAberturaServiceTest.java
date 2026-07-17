@@ -28,13 +28,13 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Unitários de {@link SaldoAberturaService#reancorar} — o mecanismo do F60.
+ * Unitários de {@link SaldoAberturaService#reancorar}.
  *
  * <p>Aqui se prova apenas que a re-âncora lê a linha de saldo pelo caminho que SEGURA a pessoa
  * ({@code lockPorPessoa} → {@code SELECT ... FOR UPDATE}), e que a trava vem ANTES das leituras que
- * alimentam o número gravado — sem isso, a publicação somava os débitos vivos antes do commit de uma
- * solicitação simultânea e gravava um saldo inflado depois dele. Que o lock de fato serializa duas
- * transações só o Oracle real pode dizer: é o {@code PontoReancoraConcorrenteIT}.
+ * alimentam o número gravado — sem a ordem, a soma dos débitos vivos sairia de um instante e a
+ * gravação de outro, com um commit alheio no meio. Que o lock de fato serializa duas transações só
+ * o Oracle real pode dizer: é o {@code PontoReancoraConcorrenteIT}.
  */
 @ExtendWith(MockitoExtension.class)
 class SaldoAberturaServiceTest {
@@ -79,7 +79,7 @@ class SaldoAberturaServiceTest {
     }
 
     @Test
-    @DisplayName("corrige F60 — a re-âncora TRAVA a pessoa antes de ler os débitos e de gravar o saldo")
+    @DisplayName("a re-âncora TRAVA a pessoa antes de ler os débitos e de gravar o saldo")
     void reancoraTravaAPessoaAntesDeLerEGravar() {
         when(saldoRepo.lockPorPessoa(OP, TIPO)).thenReturn(Optional.of(linhaExistente()));
         folhaOficialDe(1000);
@@ -88,7 +88,7 @@ class SaldoAberturaServiceTest {
 
         service.reancorar(OP, TIPO);
 
-        // A ordem é a correção: travar DEPOIS de somar os débitos deixaria a janela do F60 aberta —
+        // A ordem importa: travar DEPOIS de somar os débitos deixaria a janela de corrida aberta —
         // a soma sairia de um instante e a gravação de outro, com o commit alheio no meio.
         InOrder ordem = inOrder(saldoRepo, solicitacaoRepo);
         ordem.verify(saldoRepo).lockPorPessoa(OP, TIPO);
@@ -105,10 +105,10 @@ class SaldoAberturaServiceTest {
     }
 
     @Test
-    @DisplayName("corrige F60 — o SELECT do saldo na re-âncora é FOR UPDATE: lockPorPessoa carrega @Lock(PESSIMISTIC_WRITE)")
+    @DisplayName("o SELECT do saldo na re-âncora é FOR UPDATE: lockPorPessoa carrega @Lock(PESSIMISTIC_WRITE)")
     void lockPorPessoaCarregaLockPessimista() throws NoSuchMethodException {
         // Sem esta trava, apagar a anotação deixaria o método com o mesmo nome e a mesma assinatura: os
-        // unitários e a suíte seguiriam verdes, e o lock — a correção do F60 — teria evaporado em silêncio.
+        // unitários e a suíte seguiriam verdes, e o lock teria evaporado em silêncio.
         Lock lock = PontoBancoSaldoRepository.class
                 .getMethod("lockPorPessoa", String.class, String.class).getAnnotation(Lock.class);
 
@@ -134,7 +134,7 @@ class SaldoAberturaServiceTest {
     }
 
     @Test
-    @DisplayName("residual do F60 — pessoa que nunca teve saldo não tem linha para travar: a linha nasce aqui, na transação")
+    @DisplayName("pessoa que nunca teve saldo não tem linha para travar: a linha nasce aqui, na transação")
     void pessoaSemLinhaDeSaldoNasceNaTransacao() {
         // O lock não bloqueia ninguém quando a linha não existe (é o mesmo idioma — e o mesmo residual —
         // do `solicitar`): duas criações concorrentes colidem na UK UQ_PNT_SALDO_PESSOA, não na espera.

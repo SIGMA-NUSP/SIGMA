@@ -19,30 +19,18 @@ import br.leg.senado.nusp.security.AdminOnly;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Guarda estrutural do F2: {@code @AdminOnly} e o prefixo {@code /api/admin} andam juntos —
- * em TODA rota administrativa, não só nas amostradas.
- *
- * <p>O {@code AdminOnlyMethodSecurityTest} prova que a anotação FUNCIONA (403 sem o matcher),
- * mas exercita 3 rotas; a matriz do T15 mede o matcher, não a anotação. Sem este teste,
- * uma rota admin nova criada sem {@code @AdminOnly} — ou a anotação apagada de uma das
- * existentes — deixaria a suíte inteira verde e o F2 regrediria em silêncio, que é
- * exatamente o modo de falha que o achado descreve.
- *
- * <p>Duas formas de proteção, conforme o desenho do controller:
- * <ul>
- *   <li><b>MISTOS</b> (o F2 propriamente dito): sem {@code @RequestMapping} de classe, rotas admin e
- *       comuns lado a lado → a anotação vai <b>método a método</b>. Aqui se trava as duas direções:
- *       nenhuma rota {@code /api/admin/...} sem ela, e nenhuma rota comum COM ela (anotar uma rota de
- *       operador/técnico a fecharia em produção).</li>
- *   <li><b>PUROS</b> (extensão autorizada pelo Douglas): todo o controller é administrativo e o prefixo
- *       vem do {@code @RequestMapping} de classe → a anotação vai <b>na classe</b>, e vale para todos os
- *       métodos. Aqui se trava a anotação de classe e o prefixo — se alguém remover o
- *       {@code @RequestMapping} de classe, o teste cai.</li>
- * </ul>
+ * Guarda estrutural: {@code @AdminOnly} e o prefixo {@code /api/admin} andam juntos em TODA
+ * rota administrativa, não só nas amostradas ({@code AdminOnlyMethodSecurityTest} prova que a
+ * anotação funciona; esta varredura garante que ela está em todo lugar). Duas formas, conforme
+ * o desenho do controller: MISTOS (sem {@code @RequestMapping} de classe, rotas admin e comuns
+ * lado a lado) — anotação método a método, travada nas duas direções: nenhuma rota
+ * {@code /api/admin/...} sem ela e nenhuma rota comum COM ela (o que a fecharia em produção);
+ * PUROS (controller 100% administrativo) — anotação e prefixo no nível de classe, e o teste
+ * cai se o {@code @RequestMapping} de classe for removido.
  */
 class AdminOnlyCoberturaTest {
 
-    /** Os 3 controllers do F2 — sem {@code @RequestMapping} de classe, rotas admin e comuns lado a lado. */
+    /** Os 3 controllers MISTOS — sem {@code @RequestMapping} de classe, rotas admin e comuns lado a lado. */
     private static final List<Class<?>> CONTROLLERS_MISTOS =
             List.of(AvisoController.class, EscalaSemanalController.class, PontoController.class);
 
@@ -55,7 +43,7 @@ class AdminOnlyCoberturaTest {
     static Stream<Arguments> rotas() {
         List<Arguments> rotas = new ArrayList<>();
         for (Class<?> controller : CONTROLLERS_MISTOS) {
-            // Nenhum dos 3 tem @RequestMapping de classe (é o próprio achado F2): se um ganhar
+            // Nenhum dos 3 tem @RequestMapping de classe: se um ganhar
             // um prefixo de classe, o path do método deixa de ser o path completo e a varredura
             // mentiria — o assert abaixo derruba o teste antes disso acontecer em silêncio.
             assertThat(AnnotatedElementUtils.findMergedAnnotation(controller, RequestMapping.class))
@@ -77,7 +65,7 @@ class AdminOnlyCoberturaTest {
 
     @ParameterizedTest(name = "[{index}] {0}.{1} → {2}")
     @MethodSource("rotas")
-    @DisplayName("F2 — rota /api/admin tem @AdminOnly; rota comum não tem")
+    @DisplayName("rota /api/admin tem @AdminOnly; rota comum não tem")
     void prefixoEAnotacaoAndamJuntos(String controller, String metodo, String path, boolean anotada) {
         boolean admin = path.startsWith(PREFIXO_ADMIN);
 
@@ -95,7 +83,7 @@ class AdminOnlyCoberturaTest {
 
     @ParameterizedTest(name = "[{index}] {0}")
     @MethodSource("controllersAdminPuros")
-    @DisplayName("F2 — controller 100% admin tem @AdminOnly na classe, sob o prefixo /api/admin")
+    @DisplayName("controller 100% admin tem @AdminOnly na classe, sob o prefixo /api/admin")
     void controllerAdminPuro_anotadoNaClasse(Class<?> controller) {
         RequestMapping deClasse = AnnotatedElementUtils.findMergedAnnotation(controller, RequestMapping.class);
 

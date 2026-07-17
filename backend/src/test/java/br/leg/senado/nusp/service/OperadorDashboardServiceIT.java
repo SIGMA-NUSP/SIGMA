@@ -24,20 +24,14 @@ import br.leg.senado.nusp.it.support.OracleIT;
 import jakarta.persistence.EntityManager;
 
 /**
- * ITs dos gates de ownership de {@link OperadorDashboardService} contra Oracle real (§4.14).
+ * ITs dos gates de ownership de {@link OperadorDashboardService} contra Oracle real.
  *
- * O SUT é construído à mão — {@code EntityManager} é a única dependência. Matriz por recurso
+ * <p>O SUT é construído à mão — {@code EntityManager} é a única dependência. Matriz por recurso
  * (checklist, operação, anormalidade): 404 (query vazia decide, antes do gate), 403 (linha
  * existe mas o solicitante não tem acesso), dono direto, acesso "adicional" via junction e
- * "fixo do Plenário Principal".
- *
- * <p><b>Veredito do B1 (código vence).</b> O padrão sistemático dos fluxos de EDIÇÃO
- * (T6 {@code OperacaoService.editarEntrada}, T5 {@code ChecklistService.editar}) — gate de
- * ownership do titular ANTES de {@code isDonoOuAdicional}, tornando a junction inalcançável —
- * NÃO se repete aqui. {@code OperadorDashboardService} é LEITURA: {@code gate403} consulta a
- * junction logo após descartar o dono direto, então o acesso adicional é PLENAMENTE ALCANÇÁVEL
- * para checklist e operação. Anormalidade passa {@code sqlAdicional=null} — sem camada de
- * junction; um adicional recebe 403. A matriz do T14 fica exatamente como descrita.
+ * "fixo do Plenário Principal". Como o service é de LEITURA, {@code gate403} consulta a junction
+ * logo após descartar o dono direto — o acesso adicional é alcançável para checklist e operação;
+ * anormalidade passa {@code sqlAdicional=null} (sem camada de junction) e um adicional recebe 403.
  */
 @OracleIT
 class OperadorDashboardServiceIT {
@@ -139,7 +133,7 @@ class OperadorDashboardServiceIT {
             Map<String, Object> det = service.getMeuChecklistDetalhe(checklist.getId(), adicional.getId());
 
             assertEquals(checklist.getId().longValue(), asLong(det.get("id")),
-                    "diferente do fluxo de EDIÇÃO (T5): na leitura a junction é alcançável");
+                    "diferente do fluxo de EDIÇÃO: na leitura a junction é alcançável");
             assertEquals(Boolean.FALSE, det.get("somente_leitura"), "adicional tem leitura+escrita");
         }
 
@@ -213,7 +207,7 @@ class OperadorDashboardServiceIT {
             Map<String, Object> det = service.getMinhaOperacaoDetalhe(entrada.getId(), adicional.getId());
 
             assertEquals(entrada.getId().longValue(), asLong(det.get("id")),
-                    "diferente do fluxo de EDIÇÃO (T6): na leitura a junction é alcançável");
+                    "diferente do fluxo de EDIÇÃO: na leitura a junction é alcançável");
             assertEquals(Boolean.FALSE, det.get("somente_leitura"));
         }
 

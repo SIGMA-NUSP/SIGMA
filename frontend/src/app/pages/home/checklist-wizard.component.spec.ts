@@ -9,40 +9,19 @@ import { LookupService, LookupItem } from '../../core/services/lookup.service';
 import { ToastService } from '../../shared/components/toast.component';
 
 /**
- * T23 — ChecklistWizardComponent (page, 867 LOC; §A5).
- *
- * Estratégia (manual de PAGE do T22): CHAMADA DIRETA dos métodos de instância — o TestBed
- * cria o componente (DI + signals) mas NUNCA chamamos `detectChanges()` (o template importa
- * RouterLink/ngModel/@if e dispararia ngOnInit); o wiring de rota é exercitado chamando
- * `ngOnInit()` diretamente com o ActivatedRoute mockado. Services via `useValue` (padrão T21);
- * `LookupService` com signals writable (`salas`/`operadoresPlenario`) semeados por teste.
- *
- * NÚCLEO (§B do estágio) — rascunho em `localStorage` com DUPLA expiração independente:
- *  B1. por IDADE (`DRAFT_MAX_AGE_MS` = 2h): salvar, avançar >2h SEM cruzar meia-noite, recarregar → expira.
- *  B2. por VIRADA DE DIA (compara ano/mês/dia): salvar perto da meia-noite, avançar poucos minutos
- *      cruzando 00h (idade < limite), recarregar → expira. Fake clock atravessando a meia-noite.
- *  B3. GUARDA: a comparação de dia usa componentes LOCAIS (`getFullYear/getMonth/getDate`, l.494-496),
- *      NÃO UTC. Verificado no código real (contraste com o F19 do T22, que usa `toISOString()`): um
- *      draft salvo às 20:00 e recarregado às 21:30 do MESMO dia local (dias UTC distintos, pois
- *      21:30 BRT = 00:30Z do dia seguinte) é RESTAURADO — se a comparação fosse UTC, expiraria.
- *      Depende da TZ do runner ser America/Sao_Paulo (fixada por `npm test`, gotcha §3-8).
- *
- * F25 (corrigido no C4): o field initializer da l.392 era `new Date().toISOString().split('T')[0]`
- * — dia UTC, o gêmeo exato do F19 do T22. O T23 verificou a comparação de dia do RASCUNHO (B3, local
- * e correta) e o campo passou batido: nenhum teste travava o seu valor. Virou `toISODate(new Date())`,
- * com os testes do flanco 21h BRT abaixo (campo e payload no dia LOCAL).
- *
- * Relógio congelado SEMPRE: o field initializer `dataOperacao` (l.392)
- * e `startTime = new Date()`/`submit` leem `Date` — fake timers `{toFake:['Date']}` congelados no
- * beforeEach APÓS `compileComponents` (preserva setTimeout/rAF reais), re-setados por teste ANTES de
- * `criar()` quando o instante importa. `localStorage.clear()` em beforeEach; `vi.useRealTimers()` +
- * `vi.restoreAllMocks()` em afterEach.
- *
- * Divergência código-vs-plano: o C5 do estágio diz "`onSalaChange` reinicia o estado dependente",
- * mas o `onSalaChange` real (modo novo, l.690-696) só detecta multi-operador e carrega operadores —
- * NÃO reseta `selectedCabine`/`selectedPlenario`. Quem reconcilia estado é `onEditSalaChange` (modo
- * edição). Testado o comportamento REAL (o código vence; T22 já avisou que "avisos herdados" nem
- * sempre se aplicam).
+ * ChecklistWizardComponent (page): rascunho em `localStorage` com DUPLA expiração
+ * independente — por IDADE (`DRAFT_MAX_AGE_MS` = 2h) e por VIRADA DE DIA, comparada em
+ * componentes LOCAIS (`getFullYear/getMonth/getDate`, não UTC; depende da TZ do runner
+ * America/Sao_Paulo, fixada pelo `npm test`) —, navegação do wizard, submit/submitEdit,
+ * aviso de verificação e mudanças de sala (o `onSalaChange` do modo novo NÃO reseta
+ * `selectedCabine`/`selectedPlenario`; quem reconcilia estado é `onEditSalaChange`).
+ * TestBed sem `detectChanges()` — o template importa RouterLink/ngModel/@if e dispararia
+ * ngOnInit; `ngOnInit()` é chamado direto com o ActivatedRoute mockado; services via
+ * `useValue`, `LookupService` com signals writable semeados por teste. Relógio congelado
+ * SEMPRE (o field initializer `dataOperacao` e `startTime`/`submit` leem `Date`): fake
+ * timers `{toFake:['Date']}` ligados APÓS `compileComponents` (preserva setTimeout/rAF
+ * reais), re-setados por teste ANTES de `criar()` quando o instante importa;
+ * `localStorage.clear()` em beforeEach e afterEach.
  */
 describe('ChecklistWizardComponent', () => {
   let apiGet: ReturnType<typeof vi.fn>;
@@ -123,7 +102,7 @@ describe('ChecklistWizardComponent', () => {
   const key = (comp: ChecklistWizardComponent) => (comp as any).DRAFT_KEY as string;
 
   // ═══════════════════════════════════════════════════════════════════
-  // dataOperacao — dia LOCAL no flanco 21h BRT (corrige F25, o gêmeo do F19)
+  // dataOperacao — dia LOCAL no flanco 21h BRT
   // ═══════════════════════════════════════════════════════════════════
   describe('dataOperacao (relógio congelado — flanco 21h BRT)', () => {
     it('antes das 21h BRT coincide com o dia local', () => {
@@ -131,7 +110,7 @@ describe('ChecklistWizardComponent', () => {
       expect(criar().dataOperacao).toBe('2026-07-15');
     });
 
-    it('depois das 21h BRT mantém o dia LOCAL (corrige F25 — usa toISODate, não o dia UTC)', () => {
+    it('depois das 21h BRT mantém o dia LOCAL (usa toISODate, não o dia UTC)', () => {
       vi.setSystemTime(new Date('2026-07-15T22:30:00-03:00')); // 01:30Z do dia 16
       // O relógio está no flanco: o dia UTC (o que o código antigo gravava) é o 16.
       expect(new Date().toISOString().split('T')[0]).toBe('2026-07-16');
@@ -190,7 +169,7 @@ describe('ChecklistWizardComponent', () => {
 
     it('B3 (guarda) — comparação de dia é LOCAL, não UTC: 20:00→21:30 do mesmo dia local RESTAURA', () => {
       // 20:00 BRT = 23:00Z (dia 10); 21:30 BRT = 00:30Z (dia 11). Dia LOCAL igual (10) → não expira.
-      // Se a comparação usasse getUTC* (padrão do F19), o dia UTC mudaria e o rascunho expiraria.
+      // Se a comparação usasse getUTC*, o dia UTC mudaria e o rascunho expiraria.
       vi.setSystemTime(new Date(2026, 6, 10, 20, 0, 0));
       const comp = criar();
       semearRascunho(comp);
@@ -867,7 +846,6 @@ describe('ChecklistWizardComponent', () => {
 
   // ═══════════════════════════════════════════════════════════════════
   // onSalaChange (modo novo) — detecção de multi-operador
-  // (divergência: NÃO reinicia selectedCabine/Plenario — o código vence o C5 do plano)
   // ═══════════════════════════════════════════════════════════════════
   describe('onSalaChange (modo novo)', () => {
     it('sala multi-operador liga a flag e carrega o plenário', () => {
@@ -896,7 +874,7 @@ describe('ChecklistWizardComponent', () => {
       expect(comp.isMultiOperador).toBe(false);
     });
 
-    it('divergência do C5: onSalaChange NÃO reinicia selectedCabine/Plenario', () => {
+    it('onSalaChange NÃO reinicia selectedCabine/Plenario', () => {
       const comp = criar();
       salasSignal.set([{ id: 3, nome: 'Plenário 01' }]);
       comp.salaId = '3';

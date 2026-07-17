@@ -54,16 +54,15 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * T7 — AvisoService (§4.4 da auditoria) + sentinela do AvisoCienciaWriter (§4.5).
+ * Unitário de {@link AvisoService} + sentinela do {@code AvisoCienciaWriter}.
  *
  * <p>Trava o que é unitariamente testável: validações de {@code criar}, dedup e
  * coerência de público, idempotência de {@code registrarCiencia} e o contrato de
  * chamada do SQL de {@code buscarPendentes} (fragmento casado no argThat, nunca
- * anyString() — §0.5). A SEMÂNTICA real do SQL (e a demonstração em banco do
- * REQUIRES_NEW do writer, cuja sub-transação furaria o rollback do @DataJpaTest —
- * gotcha 5) está explicitamente FORA desta iteração (§4 do plano); do writer resta
- * aqui apenas o caso-sentinela por reflexão, única trava contra a remoção silenciosa
- * da anotação da qual a idempotência da ciência depende.
+ * anyString()). A SEMÂNTICA real do SQL e a demonstração em banco do REQUIRES_NEW do
+ * writer (cuja sub-transação furaria o rollback do @DataJpaTest) ficam fora; do writer
+ * resta aqui apenas o caso-sentinela por reflexão, única trava contra a remoção
+ * silenciosa da anotação da qual a idempotência da ciência depende.
  */
 @ExtendWith(MockitoExtension.class)
 class AvisoServiceTest {
@@ -96,7 +95,7 @@ class AvisoServiceTest {
     private static final String MSG_CRUA = "   Verifique o áudio da sala.   ";
     private static final String MSG_TRIM = "Verifique o áudio da sala.";
 
-    // ── Helpers de stub (disciplina §0.5) ────────────────────────
+    // ── Helpers de stub ──────────────────────────────────────────
 
     /**
      * Mock de Query devolvido só quando o SQL contém TODOS os fragmentos-chave.
@@ -230,7 +229,7 @@ class AvisoServiceTest {
         verifyNoInteractions(cadastroRepo, mensagemRepo, alvoRepo, cienciaRepo, cienciaWriter);
     }
 
-    // ═══ criar — validações (todas com caso negativo dedicado, §4.4) ═══
+    // ═══ criar — validações (todas com caso negativo dedicado) ═══
 
     @Nested
     @DisplayName("criar — validações de payload")
@@ -623,7 +622,7 @@ class AvisoServiceTest {
             stubSaveMensagens();
             stubSaveAllAlvos();
 
-            // SUT usa LocalDateTime.now() sem Clock: janela [antes, depois] em vez de igualdade (§0.5).
+            // SUT usa LocalDateTime.now() sem Clock: janela [antes, depois] em vez de igualdade.
             LocalDateTime antes = LocalDateTime.now();
             Map<String, Object> out = service.criar(
                     req("VERIFICACAO", false, 7, true, List.of(MSG_CRUA), "SALA", List.of(SALA_ID), null, null), ADMIN_ID);
@@ -701,9 +700,9 @@ class AvisoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F8 — público ADMIN é rejeitado: nada é gravado e a sequence não é consumida")
+        @DisplayName("público ADMIN é rejeitado: nada é gravado e a sequence não é consumida")
         void criar_publicoAdmin_rejeitado() {
-            // F8 (§5 do plano): AlvoTipoAviso tem 8 constantes; validarAlvo/montarAlvos tratavam 6
+            // AlvoTipoAviso tem 8 constantes; validarAlvo/montarAlvos tratavam 6
             // (faltavam ADMIN e TODOS_ADMIN) e são switch STATEMENT sobre enum — sem exaustividade e
             // sem default, os dois escapavam de toda validação e o cadastro nascia ATIVO e SEM alvo.
             // Agora falham em voz alta. ADMIN segue válido no caminho programático
@@ -724,7 +723,7 @@ class AvisoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F8 — público TODOS_ADMIN (que o banco aceita e buscarPendentes lê) também é rejeitado")
+        @DisplayName("público TODOS_ADMIN (que o banco aceita e buscarPendentes lê) também é rejeitado")
         void criar_publicoTodosAdmin_rejeitado() {
             // TODOS_ADMIN é o único valor do enum que NENHUMA linha de código grava: existe no enum, no
             // CHECK do banco (changelog 021) e na leitura (buscarPendentes do admin filtra por ele;
@@ -856,13 +855,13 @@ class AvisoServiceTest {
         }
 
         /**
-         * A proveniência (F59). O aviso PESSOAL nasce de DOIS caminhos com o mesmo autor, o mesmo tipo
+         * A proveniência. O aviso PESSOAL nasce de DOIS caminhos com o mesmo autor, o mesmo tipo
          * e textos parecidos: a publicação de folha e o desfecho de folga do banco de horas. Só o
          * primeiro grava ORIGEM_LOTE_ID — e é exatamente essa diferença que permite à exclusão de um
          * lote apagar os avisos dele sem levar junto os do outro caminho.
          */
         @Test
-        @DisplayName("corrige F59 — criarPessoalIndividual COM origem grava ORIGEM_LOTE_ID no cadastro")
+        @DisplayName("criarPessoalIndividual COM origem grava ORIGEM_LOTE_ID no cadastro")
         void criarPessoal_comOrigemGravaOLote() {
             stubAdminExistente();
             stubSequenciaNumero();
@@ -876,7 +875,7 @@ class AvisoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F59 — a sobrecarga SEM origem (desfecho de folga) deixa ORIGEM_LOTE_ID NULO: a exclusão de um lote jamais a alcança")
+        @DisplayName("a sobrecarga SEM origem (desfecho de folga) deixa ORIGEM_LOTE_ID NULO: a exclusão de um lote jamais a alcança")
         void criarPessoal_semOrigemDeixaNulo() {
             stubAdminExistente();
             stubSequenciaNumero();
@@ -1177,7 +1176,7 @@ class AvisoServiceTest {
         }
     }
 
-    // ═══ Sentinela do AvisoCienciaWriter (§4.5) ═══
+    // ═══ Sentinela do AvisoCienciaWriter ═══
 
     @Nested
     @DisplayName("AvisoCienciaWriter — sentinela do REQUIRES_NEW")
@@ -1187,7 +1186,7 @@ class AvisoServiceTest {
         @DisplayName("AvisoCienciaWriter.inserir — mantém @Transactional(REQUIRES_NEW) público e não-final: a idempotência de registrarCiencia depende disso")
         void inserir_mantemRequiresNew() throws Exception {
             // A semântica REAL (sub-transação que isola a violação de unicidade) só se prova em
-            // banco — fora desta iteração (§4 do plano; furaria o rollback do @DataJpaTest, gotcha 5).
+            // banco (furaria o rollback do @DataJpaTest).
             // Esta é a única trava contra a remoção silenciosa da anotação: sem REQUIRES_NEW, a
             // DataIntegrityViolationException capturada em registrarCiencia deixaria a transação
             // chamadora marcada para rollback (UnexpectedRollbackException no commit).

@@ -27,33 +27,19 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.*;
 
 /**
- * Unitário do {@link AgendaLegislativaService} (plano de testes T9).
+ * Unitário do {@link AgendaLegislativaService}: parsing, cache e mapeamento local→sala.
+ * Nenhum teste toca a rede real — o {@link HttpClient} é injetado e mockado, com cada
+ * fetch casado por URL exata via argThat.
  *
- * Possível apenas após o refactor de testabilidade D7 (HttpClient injetado via
- * {@code HttpClientConfig}): nenhum teste toca a rede real — todo fetch passa pelo
- * mock de {@link HttpClient}, casado por URL exata via argThat (§0.5).
+ * Fixtures XML em text blocks: COMISSOES_XML e PLENARIO_XML derivam de respostas reais
+ * da API de dados abertos do Senado (a de comissões reduzida a 2 reuniões — um literal
+ * Java tem limite de 64 KB); MAPEAMENTO_XML é sintético e serve só às variações de
+ * <local> do mapeamento local→sala. Salas do mock espelham o cadastro real (CAD_SALA).
  *
- * Fixtures XML: respostas REAIS da API de dados abertos do Senado, coletadas em
- * 10/07/2026 e congeladas em text blocks (modelo SecullumFolhaParserTest):
- * - COMISSOES_XML: /dadosabertos/comissao/agenda/20260708 — envelope e metadados
- *   originais; das 9 reuniões da resposta real (997 KB, acima do limite de 64 KB de um
- *   literal Java), foram mantidas INTACTAS as reuniões 14859 (CE, Plenário nº 15) e
- *   14843 (CAS, Plenário nº 3); as 7 irmãs foram removidas por inteiro.
- * - PLENARIO_XML: /dadosabertos/plenario/agenda/dia/20260702 — documento completo, com
- *   1 sessão do Congresso (Casa=CN, descartada pelo parser) e 1 do Senado (Casa=SF).
- *   Único desvio das duas fixtures vs. resposta real: o trailing whitespace da linha em
- *   branco de <Metadados>, removido pela semântica de text block — sem efeito no parse.
- * - MAPEAMENTO_XML: sintético (estrutura espelhada da reunião real 14859, reduzida às
- *   tags que o parser lê) — serve só às variações de <local> do mapeamento local→sala,
- *   que não ocorrem todas numa mesma resposta real.
- *
- * Salas do mock espelham o cadastro real do homolog (CAD_SALA em 10/07/2026).
- *
- * Fora do escopo, por decisão do plano (T9): subscribe/SSE (infraestrutura assíncrona
- * de baixo risco) e o agendamento @Scheduled (framework).
+ * Fora do escopo: subscribe/SSE e o agendamento @Scheduled.
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("AgendaLegislativaService — parsing, cache e mapeamento local→sala (T9)")
+@DisplayName("AgendaLegislativaService — parsing, cache e mapeamento local→sala")
 class AgendaLegislativaServiceTest {
 
     @Mock
@@ -176,7 +162,7 @@ class AgendaLegislativaServiceTest {
     }
 
     /**
-     * Stub do send casado pela URL EXATA (§0.5 — nunca any()). Atenção: URL não casada NÃO
+     * Stub do send casado pela URL EXATA (nunca any()). Atenção: URL não casada NÃO
      * explode — o send devolve null, o NPE morre no catch de httpGet e o fetch devolve lista
      * vazia SILENCIOSA. Por isso, todo teste cujo valor esperado é "vazio"/"cache preservado"
      * DEVE ter pré-condição de cache cheio ou asserção de conteúdo (nunca só o vazio).
@@ -351,7 +337,7 @@ class AgendaLegislativaServiceTest {
     }
 
     @Nested
-    @DisplayName("Falhas de fetch — os 4 quadrantes fonte×falha preservam o cache (corrige F9)")
+    @DisplayName("Falhas de fetch — os 4 quadrantes fonte×falha preservam o cache")
     class FalhasDeFetch {
 
         /** Deixa os dois caches populados e prepara a resposta SEGUINTE de cada fonte. */
@@ -378,9 +364,9 @@ class AgendaLegislativaServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F9 — comissões: HTTP 500 preserva o cache anterior (falha ≠ agenda vazia)")
+        @DisplayName("comissões: HTTP 500 preserva o cache anterior (falha ≠ agenda vazia)")
         void comissoes_http500_preservaCacheAnterior() throws Exception {
-            // F9 (§5 do plano): httpGet devolve null em não-2xx; fetchComissoes agora sinaliza
+            // httpGet devolve null em não-2xx; fetchComissoes sinaliza
             // FALHA (null) e atualizarComissoes não publica nada — o cache (e o hash) ficam de pé.
             primeiroPollOkSegundoCom(respostaErro(500), respostaOk(PLENARIO_XML));
 
@@ -390,10 +376,10 @@ class AgendaLegislativaServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F9 — comissões: exceção de rede no send preserva o cache anterior")
+        @DisplayName("comissões: exceção de rede no send preserva o cache anterior")
         void comissoes_excecaoDeRede_preservaCacheAnterior() throws Exception {
-            // Cenário real do homolog em 10/07/2026 — PKIX/TLS intermitente contra
-            // legis.senado.leg.br: o cache oscilava a cada poll e o SSE difundia agenda vazia.
+            // Cenário real: PKIX/TLS intermitente contra legis.senado.leg.br —
+            // o cache oscilava a cada poll e o SSE difundia agenda vazia.
             stubSalas();
             stubHttp(PLENARIO_API + hojeFmt(), respostaOk(PLENARIO_XML), respostaOk(PLENARIO_XML));
             HttpResponse<String> comissoesOk = respostaOk(COMISSOES_XML);
@@ -411,9 +397,8 @@ class AgendaLegislativaServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F9 — plenário: XML malformado preserva o cache anterior")
+        @DisplayName("plenário: XML malformado preserva o cache anterior")
         void plenario_xmlMalformado_preservaCacheAnterior() throws Exception {
-            // F9 (§5 do plano): fetchPlenario devolvia emptyList() até no catch de parse.
             primeiroPollOkSegundoCom(respostaOk(COMISSOES_XML), respostaOk(XML_MALFORMADO));
 
             service.poll();
@@ -422,7 +407,7 @@ class AgendaLegislativaServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F9 — plenário: HTTP 500 preserva o cache anterior")
+        @DisplayName("plenário: HTTP 500 preserva o cache anterior")
         void plenario_http500_preservaCacheAnterior() throws Exception {
             primeiroPollOkSegundoCom(respostaOk(COMISSOES_XML), respostaErro(500));
 
@@ -432,7 +417,7 @@ class AgendaLegislativaServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F9 — plenário: exceção de rede no send preserva o cache anterior (4º quadrante)")
+        @DisplayName("plenário: exceção de rede no send preserva o cache anterior (4º quadrante)")
         void plenario_excecaoDeRede_preservaCacheAnterior() throws Exception {
             stubSalas();
             stubHttp(COMISSAO_API + hojeFmt(), respostaOk(COMISSOES_XML), respostaOk(COMISSOES_XML));
@@ -452,10 +437,10 @@ class AgendaLegislativaServiceTest {
         // ── A contraprova: "sucesso com zero itens" NÃO é falha e DEVE zerar o cache ──
         // Sem estes dois casos, "preservar o cache" poderia ser implementado ignorando toda
         // resposta vazia — e uma agenda realmente vazia (feriado, recesso) nunca mais limparia
-        // o painel. É a distinção que o F9 exige: FALHA preserva, resposta válida publica.
+        // o painel. É a distinção que importa: FALHA preserva, resposta válida publica.
 
         @Test
-        @DisplayName("corrige F9 — comissões: XML válido SEM reuniões é sucesso → cache atualizado para vazio")
+        @DisplayName("comissões: XML válido SEM reuniões é sucesso → cache atualizado para vazio")
         void comissoes_respostaValidaVazia_atualizaCacheParaVazio() throws Exception {
             primeiroPollOkSegundoCom(respostaOk(COMISSOES_VAZIO_XML), respostaOk(PLENARIO_XML));
 
@@ -465,7 +450,7 @@ class AgendaLegislativaServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F9 — plenário: XML válido SEM sessões é sucesso → cache atualizado para vazio")
+        @DisplayName("plenário: XML válido SEM sessões é sucesso → cache atualizado para vazio")
         void plenario_respostaValidaVazia_atualizaCacheParaVazio() throws Exception {
             primeiroPollOkSegundoCom(respostaOk(COMISSOES_XML), respostaOk(PLENARIO_VAZIO_XML));
 
@@ -480,7 +465,7 @@ class AgendaLegislativaServiceTest {
         // recebe o dia como parâmetro (o poll() de produção passa LocalDate.now()).
 
         @Test
-        @DisplayName("corrige F9 — falha DEPOIS da virada do dia: o cache do dia anterior é descartado, não servido como hoje")
+        @DisplayName("falha DEPOIS da virada do dia: o cache do dia anterior é descartado, não servido como hoje")
         void falhaAposViradaDoDia_descartaCacheDeOntem() throws Exception {
             String ontem = "20260710";
             String hoje = "20260711";
@@ -502,7 +487,7 @@ class AgendaLegislativaServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F9 — falha NO MESMO dia do cache: preserva (é a preservação que o F9 pede)")
+        @DisplayName("falha NO MESMO dia do cache: preserva o cache anterior")
         void falhaNoMesmoDia_preserva() throws Exception {
             String hoje = "20260711";
             stubSalas();
@@ -518,7 +503,7 @@ class AgendaLegislativaServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F9 — cache descartado na virada volta a ser publicado assim que a API responde")
+        @DisplayName("cache descartado na virada volta a ser publicado assim que a API responde")
         void aposDescarte_proximoSucessoRepublica() throws Exception {
             String ontem = "20260710";
             String hoje = "20260711";
@@ -613,14 +598,14 @@ class AgendaLegislativaServiceTest {
             verifyNoInteractions(httpClient, salaRepository, cessaoSheetService);
         }
 
-        // ── Falha no fetch SOB DEMANDA (a outra metade do F9) ────────────────────────
+        // ── Falha no fetch SOB DEMANDA ───────────────────────────────────────────────
         // Aqui não há cache a preservar: o cache é de HOJE e a consulta é de outra data. O catch
         // antigo devolvia `cacheComissoes` — entregava as reuniões de HOJE como se fossem as da data
         // pedida. Agora o sentinela de falha vira lista vazia (ouVazio), e o contrato público
         // continua sem devolver null.
 
         @Test
-        @DisplayName("corrige F9 — getAgendaParaData: falha de PARSE de outra data devolve vazio, nunca o cache de HOJE")
+        @DisplayName("getAgendaParaData: falha de PARSE de outra data devolve vazio, nunca o cache de HOJE")
         void getAgendaParaData_outraData_falhaDeParse_naoVazaCacheDeHoje() throws Exception {
             pollComDadosReais();                                  // cache de hoje: 2 reuniões
             LocalDate data = LocalDate.now().minusDays(7);
@@ -636,7 +621,7 @@ class AgendaLegislativaServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F9 — getAgendaParaData: HTTP 500 de outra data devolve vazio (contrato não-null)")
+        @DisplayName("getAgendaParaData: HTTP 500 de outra data devolve vazio (contrato não-null)")
         void getAgendaParaData_outraData_http500_listaVazia() throws Exception {
             LocalDate data = LocalDate.now().minusDays(7);
             stubSalas();
@@ -650,7 +635,7 @@ class AgendaLegislativaServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F9 — getAgendaPlenarioParaData: HTTP 500 devolve lista vazia (contrato não-null)")
+        @DisplayName("getAgendaPlenarioParaData: HTTP 500 devolve lista vazia (contrato não-null)")
         void getAgendaPlenarioParaData_falha_listaVazia() throws Exception {
             LocalDate data = LocalDate.now().minusDays(7);
             stubHttp(PLENARIO_API + data.format(DATE_FMT), respostaErro(500));

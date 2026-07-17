@@ -7,35 +7,15 @@ import { MesAnoSelectorComponent } from './mes-ano-selector.component';
 import { ToastService } from './toast.component';
 
 /**
- * T28 — GradeRetificacoesComponent (shared, 503 LOC — card admin "Retificações", E10).
- *
- * ⚠️ [C20] O spec do próprio `MesAnoSelectorComponent` (componente de arquivo próprio,
- * `mes-ano-selector.component.ts`) MUDOU-SE para o seu spec DEDICADO
- * `mes-ano-selector.component.spec.ts` (nasceu ali no C20). Aqui fica só a cobertura do
- * CONSUMIDOR: o que a GRADE mostra através de `app-mes-ano-selector` (bloco de render F37, abaixo).
- *
- * ⚠️ Divergência 2 — "interação de célula": **não existe**. A célula da grade não tem handler de
- * clique (só `[title]` com a observação e classes de cor); o próprio SUT declara
- * `TODO(E10.3/Q1 — fora da v1): clicar numa célula para abrir/editar a retificação`. O que há para
- * travar é a MONTAGEM da célula a partir do payload (`celula()`/`horariosLinhas()`) — feito abaixo.
- *
- * Estratégia (manual de PAGE do T22/T23/T24): TestBed cria o componente (DI + signals) SEM
- * `detectChanges()` — logo `ngOnInit` é chamado à mão e os filhos (`app-mes-ano-selector`,
- * `app-mini-calendario`) nunca são instanciados (isolamento). `ApiService` mockado via `useValue`.
- * O spec trava LÓGICA e ESTADO (signals/computeds/payloads), nunca DOM/CSS — o layout do módulo
- * ainda pode mudar (ressalva do GATE).
- *
- * Relógio congelado (`{toFake:['Date']}`) ANTES de `createComponent`: `hoje`/`anoMes` são lidos no
- * field initializer, nos DOIS componentes.
- *
- * A precedência por célula é do BACKEND (E10 passo 1) — o spec trava a renderização fiel do
- * payload, não recalcula regra.
- *
- * **F38 CORRIGIDO (C13b)**: o erro do download do XLSX vai ao toast e não apaga mais a grade.
- * **F37 CORRIGIDO (C14)**: o seletor deixou de prender o módulo ao ano do relógio — a grade passa o
- * range da política em `[anos]` e alcança a virada do ano. Os blocos de render abaixo travam o que a
- * TELA da grade mostra (option/seta/GET); a política do range e a mecânica interna do seletor (o
- * salto do `<select>` do F69 e a janela de 13 meses do F70, C20) vivem no spec dedicado do componente.
+ * GradeRetificacoesComponent (card admin "Retificações"): carga da grade, montagem das células
+ * fiel ao payload (a precedência por célula é do BACKEND — nada é recalculado aqui), paginação
+ * client-side de 8 colunas, troca de categoria/mês, download do XLSX (o erro vai ao TOAST,
+ * canal separado do erro da grade) e o modal Configurar (marcações, diff aplicar/remover, gate
+ * do Aplicar, retry). TestBed sem `detectChanges()` por padrão — `ngOnInit` à mão, filhos não
+ * instanciados; `ApiService` mockado via `useValue`, com `get` roteado por endpoint. Relógio
+ * congelado (`{toFake:['Date']}`) ANTES de `createComponent`: `hoje`/`anoMes` são lidos no
+ * field initializer. A mecânica interna do seletor de mês/ano vive no spec dedicado
+ * `mes-ano-selector.component.spec.ts` — aqui só o que a grade exibe através dele.
  */
 
 /** Payload representativo de `GET /api/admin/ponto/retificacoes/grade` (julho/2026). */
@@ -98,7 +78,7 @@ describe('GradeRetificacoesComponent', () => {
       providers: [
         // baixarBlob/getBlob mockados: o ApiService real usa URL.createObjectURL, que o jsdom não implementa
         { provide: ApiService, useValue: { get: apiGet, put: apiPut, getBlob: apiGetBlob, baixarBlob } },
-        // C13b/F38: o erro do DOWNLOAD passou a sair pelo toast (canal separado do erro da grade)
+        // O erro do DOWNLOAD sai pelo toast (canal separado do erro da grade)
         { provide: ToastService, useValue: { error: toastError, success: vi.fn(), warning: vi.fn(), show: vi.fn() } },
       ],
     }).compileComponents(); // com timers reais — só depois falsificamos
@@ -123,7 +103,7 @@ describe('GradeRetificacoesComponent', () => {
     return comp;
   }
 
-  /** Componente + modal Configurar aberto (marcações do E6 já carregadas). */
+  /** Componente + modal Configurar aberto (marcações já carregadas). */
   function criarComConfigurar(): GradeRetificacoesComponent {
     const comp = criarCarregado();
     comp.abrirConfigurar();
@@ -346,8 +326,8 @@ describe('GradeRetificacoesComponent', () => {
       expect(baixarBlob).toHaveBeenCalledWith(XLSX, 'ponto_administradores_2603.xlsx');
     });
 
-    it('corrige F38 — o erro do DOWNLOAD vai para o TOAST: a grade não é apagada', () => {
-      // Antes (C13b/F38): `baixarTabela` fazia `erro.set(...)` — o mesmo signal do primeiro @if do
+    it('o erro do DOWNLOAD vai para o TOAST: a grade não é apagada', () => {
+      // Antes, `baixarTabela` fazia `erro.set(...)` — o mesmo signal do primeiro @if do
       // template (`@if (erro()) { error-box } @else if … { tabela }`). Um 500 no XLSX trocava a grade
       // inteira por "Erro ao baixar a tabela.", embora os dados continuassem em memória; só trocar de
       // mês/categoria a trazia de volta. O que falhou foi o ARQUIVO, não a tela.
@@ -413,7 +393,7 @@ describe('GradeRetificacoesComponent', () => {
       expect(comp.erroConfig()).toBe('Sem permissão');
       expect(comp.carregandoConfig()).toBe(false);
       expect(comp.configurarAberto()).toBe(true);
-      expect(comp.configCarregado()).toBe(false);   // C13b/F41: sem carga, o Aplicar não age
+      expect(comp.configCarregado()).toBe(false);   // sem carga, o Aplicar não age
     });
 
     it('escopo por funcionário traz só as marcações dele e troca o modo padrão', () => {
@@ -684,9 +664,9 @@ describe('GradeRetificacoesComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // C13b/F41 — o Configurar não reabre com o estado do mês/escopo anterior
+  // O Configurar não reabre com o estado do mês/escopo anterior
   // ═══════════════════════════════════════════════════════════════════
-  describe('corrige F41 — reabertura do Configurar sem estado velho', () => {
+  describe('reabertura do Configurar sem estado velho', () => {
     /** Faz o GET das marcações falhar (a grade continua respondendo normalmente). */
     function marcacoesFalham(msg = 'Erro no servidor') {
       apiGet.mockImplementation((url: string) =>
@@ -767,7 +747,7 @@ describe('GradeRetificacoesComponent', () => {
     });
 
     it('reabrir com um PUT em voo: o modal NÃO volta preso em "Aplicando..." — e a resposta velha não o fecha', () => {
-      // Achado da revisão adversarial do próprio C13b: o reset esquecia `aplicandoConfig`, e o PUT não
+      // O reset esquecia `aplicandoConfig`, e o PUT não
       // tinha token. Aplicar (PUT lento) → Cancelar → Configurar de novo devolvia um modal INÚTIL (botão
       // travado em "Aplicando...") que a resposta velha depois FECHAVA sozinha — ou enchia de erro
       // fantasma de uma ação que o usuário não repetiu nesta sessão.
@@ -832,7 +812,7 @@ describe('GradeRetificacoesComponent', () => {
       comp.aplicarConfig();
 
       expect(comp.erroConfig()).toBe('Dia inválido');
-      expect(comp.configCarregado()).toBe(true);   // ← a distinção do §3.3.2: repetir o Aplicar é o retry
+      expect(comp.configCarregado()).toBe(true);   // ← repetir o Aplicar é o retry
 
       apiPut.mockReturnValue(of({ ok: true }));
       comp.aplicarConfig();
@@ -842,10 +822,10 @@ describe('GradeRetificacoesComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // RENDER (C13b) — o que o usuário VÊ: a grade que não some (F38) e o
-  // Aplicar que não age sobre estado desconhecido (F41)
+  // RENDER — o que o usuário VÊ: a grade que não some e o
+  // Aplicar que não age sobre estado desconhecido
   // ═══════════════════════════════════════════════════════════════════
-  describe('render — grade preservada no erro de download (F38) e gate do Aplicar (F41)', () => {
+  describe('render — grade preservada no erro de download e gate do Aplicar', () => {
     // Exceção deliberada ao GATE "só lógica": as duas correções SÓ existem no template — a grade que
     // sobrevive (o primeiro @if) e o [disabled] do Aplicar. Sem render, apagar os bindings deixaria a
     // suíte verde e devolveria os defeitos na pior forma.
@@ -863,7 +843,7 @@ describe('GradeRetificacoesComponent', () => {
         .find(b => (b.nativeElement as HTMLButtonElement).textContent?.trim().startsWith('Aplic'))
         ?.nativeElement as HTMLButtonElement | undefined;
 
-    it('F38: com o download falhando, a TABELA continua na tela e não há caixa de erro', () => {
+    it('com o download falhando, a TABELA continua na tela e não há caixa de erro', () => {
       const fixture = renderizar();
       expect(fixture.debugElement.query(By.css('table.grade'))).not.toBeNull();
 
@@ -876,7 +856,7 @@ describe('GradeRetificacoesComponent', () => {
       expect(toastError).toHaveBeenCalledWith('Erro ao baixar a tabela.');
     });
 
-    it('F41: reabertura com o GET falhando → calendário sem marcações, erro no modal e Aplicar DESABILITADO', () => {
+    it('reabertura com o GET falhando → calendário sem marcações, erro no modal e Aplicar DESABILITADO', () => {
       const fixture = renderizar();
       const comp = fixture.componentInstance;
 
@@ -899,7 +879,7 @@ describe('GradeRetificacoesComponent', () => {
       expect(btnAplicar(fixture)!.disabled).toBe(true);   // não age sobre estado desconhecido
     });
 
-    it('F41: o modal com a carga falhada mostra a caixa COM RETRY, e o clique nela recarrega e libera o Aplicar', () => {
+    it('o modal com a carga falhada mostra a caixa COM RETRY, e o clique nela recarrega e libera o Aplicar', () => {
       const fixture = renderizar();
       const comp = fixture.componentInstance;
       apiGet.mockImplementation((url: string) =>
@@ -925,7 +905,7 @@ describe('GradeRetificacoesComponent', () => {
       expect(btnAplicar(fixture)!.disabled).toBe(false);
     });
 
-    it('F41: enquanto a carga do modal está EM VOO, o Aplicar não está disponível (o modal ainda diz "Carregando marcações...")', () => {
+    it('enquanto a carga do modal está EM VOO, o Aplicar não está disponível (o modal ainda diz "Carregando marcações...")', () => {
       const fixture = renderizar();
       const emVoo = new Subject<any>();
       apiGet.mockImplementation((url: string) =>
@@ -945,12 +925,12 @@ describe('GradeRetificacoesComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // RENDER (C14/F37) — a grade alcança o mês vivo na virada do ano
+  // RENDER — a grade alcança o mês vivo na virada do ano
   //
   // A correção está no TEMPLATE (`[anos]="anosSeletor"`): sem render, apagar esse binding deixaria
   // a suíte verde com o admin de novo sem acesso a dezembro em janeiro — bem no prazo de retificação.
   // ═══════════════════════════════════════════════════════════════════
-  describe('render — o seletor da barra cruza a virada do ano (F37)', () => {
+  describe('render — o seletor da barra cruza a virada do ano', () => {
     function renderizar(hoje: string): ComponentFixture<GradeRetificacoesComponent> {
       vi.useFakeTimers({ toFake: ['Date'] });
       vi.setSystemTime(new Date(hoje));
@@ -965,7 +945,7 @@ describe('GradeRetificacoesComponent', () => {
       f.debugElement.query(By.css('app-mes-ano-selector button[aria-label="Mês anterior"]'))
         .nativeElement as HTMLButtonElement;
 
-    it('corrige F37 — em 05/01/2027 o ‹ está habilitado e o clique pede a grade de DEZEMBRO/2026', () => {
+    it('em 05/01/2027 o ‹ está habilitado e o clique pede a grade de DEZEMBRO/2026', () => {
       const fixture = renderizar('2027-01-05T09:00:00-03:00');
       const comp = fixture.componentInstance;
 

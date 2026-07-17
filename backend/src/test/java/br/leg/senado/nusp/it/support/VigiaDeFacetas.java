@@ -11,18 +11,12 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 
 /**
- * Vigia anti-falso-verde das facetas do {@link DashboardQueryHelper} (gotcha 16).
+ * Vigia anti-falso-verde das facetas do {@link DashboardQueryHelper}.
  *
  * <p>A consolidação {@code GROUPING SETS} e o fallback por-coluna produzem o MESMO
  * resultado — só um WARN distingue os caminhos. Sem vigiar o log, todo teste de faceta
  * passaria mesmo com a consolidação quebrada (e a listagem regrediria em silêncio a
- * N+2 queries em produção). A campanha de validação exige ZERO WARN de faceta; este
- * vigia torna isso executável.
- *
- * <p>Idiom estabelecido pelo {@code DashboardQueryHelperIT} (T12) e extraído aqui
- * quando o segundo IT passou a precisar dele — o {@code BancoHorasServiceIT} (T27a)
- * exercita o colMap mais exótico do sistema: a faceta {@code nome} da fila do admin é
- * uma EXPRESSÃO ({@code CASE} sobre 3 LEFT JOINs), não uma coluna.
+ * N+2 queries em produção).
  *
  * <p>Uso: {@code instalar()} no {@code @BeforeEach} e {@code exigirZeroWarns()} no
  * {@code @AfterEach}.

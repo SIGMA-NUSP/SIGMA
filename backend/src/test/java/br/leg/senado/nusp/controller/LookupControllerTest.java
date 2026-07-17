@@ -30,12 +30,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Shape representativo do {@link LookupController} (T17).
+ * Shape representativo do {@link LookupController}.
  *
  * O javadoc de produção chama os lookups de públicos, mas o
- * {@code SecurityConfig} real exige autenticação para esta rota; esse RBAC já
- * foi caracterizado no T15. Aqui se usa token válido e se testa somente o
- * envelope/mapeamento do handler com repositories mockados.
+ * {@code SecurityConfig} real exige autenticação para esta rota — por isso o
+ * teste usa token válido. Cobre somente o envelope/mapeamento do handler,
+ * com repositories mockados.
  */
 @SigmaControllerTest(LookupController.class)
 class LookupControllerTest {

@@ -57,19 +57,15 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Unitários do {@link BancoHorasService} com o relógio INJETADO (T26a): o SUT lê o
- * "hoje" de um {@link Clock#fixed} em data controlada, e não do dia da execução.
- * Consequências diretas (§2.4 do plano): os 4 skips condicionais sumiram — nenhum
- * caso pode mais ser PULADO em silêncio porque o calendário do dia não colaborou —
- * e as bordas antes inalcançáveis (fim de mês, virada de ano) viraram testes.
+ * Unitários do {@link BancoHorasService} com o relógio INJETADO: o SUT lê o "hoje" de
+ * um {@link Clock#fixed} em data controlada, e não do dia da execução — sem skips
+ * condicionais por calendário, e com as bordas (fim de mês, virada de ano) testáveis.
  *
  * <p>A zona do clock é EXPLÍCITA ({@code America/Sao_Paulo}) — nenhum teste pode
- * depender da zona da máquina. O F7 (o "hoje" escorregando para o dia seguinte entre
- * 21h e 00h BRT) foi CURADO no runtime pelo C17: os containers passaram a declarar
- * {@code TZ=America/Sao_Paulo} e o {@link br.leg.senado.nusp.config.ClockConfig}
- * (systemDefaultZone) resolve para BRT. O teste {@link #caracterizaF7_hojeSegueAZonaDoClock()}
- * segue aqui como demonstração AGNÓSTICA do mecanismo (o "hoje" acompanha a zona do Clock
- * injetado) — é justamente por isso que fixar a zona, via TZ, resolve o transversal.
+ * depender da zona da máquina. O teste {@link #caracteriza_hojeSegueAZonaDoClock()}
+ * demonstra que o "hoje" do SUT acompanha a zona do Clock injetado — é por isso que
+ * fixar a zona do runtime (TZ do container + {@code ClockConfig} com
+ * systemDefaultZone) mantém o "hoje" em BRT.</p>
  */
 @ExtendWith(MockitoExtension.class)
 class BancoHorasServiceTest {
@@ -541,7 +537,7 @@ class BancoHorasServiceTest {
         assertTrue(ex.getMessage().contains("Já existe solicitação"));
     }
 
-    // ── bordas de calendário (só alcançáveis com o Clock fixo — T26a) ──
+    // ── bordas de calendário (só alcançáveis com o Clock fixo) ──
 
     @Test
     @DisplayName("solicitar em 30/07 (penúltimo dia útil do mês): o último dia útil ainda é solicitável")
@@ -597,11 +593,11 @@ class BancoHorasServiceTest {
     }
 
     @Test
-    @DisplayName("F7 (curado no runtime pelo C17) — 'hoje' segue a zona do Clock: o mesmo instante é 16/07 em UTC e 15/07 em BRT")
-    void caracterizaF7_hojeSegueAZonaDoClock() {
-        // F7 (§5 do plano): o "hoje" do service acompanha a zona do Clock. Enquanto os containers
+    @DisplayName("'hoje' segue a zona do Clock: o mesmo instante é 16/07 em UTC e 15/07 em BRT")
+    void caracteriza_hojeSegueAZonaDoClock() {
+        // O "hoje" do service acompanha a zona do Clock. Enquanto os containers
         // rodaram em UTC, entre 21h e 00h BRT o "hoje" já era o dia seguinte, e um dia útil legítimo
-        // aparecia como "transcorrido". O C17 curou isso declarando TZ=BRT nos containers (o bean é
+        // aparecia como "transcorrido". A cura foi declarar TZ=BRT nos containers (o bean é
         // systemDefaultZone() → resolve para BRT). Este teste é agnóstico: injeta o Clock nos dois
         // fusos e mostra o mecanismo — roda igual em qualquer ambiente.
         Instant instante = Instant.parse("2026-07-16T02:30:00Z");   // = 15/07 23:30 em Brasília
@@ -673,7 +669,7 @@ class BancoHorasServiceTest {
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
     }
 
-    // ══ Deliberação do admin (Bloco D / E8) ═══════════════════════
+    // ══ Deliberação do admin ══════════════════════════════════════
 
     // ── POST .../solicitacao/{id}/aprovar ──
 
@@ -757,11 +753,11 @@ class BancoHorasServiceTest {
     }
 
     @Test
-    @DisplayName("corrige F47 — motivo de 301 caracteres → 400 nomeando o CAMPO, antes de tocar o banco (era ORA-12899 → 500)")
+    @DisplayName("motivo de 301 caracteres → 400 nomeando o CAMPO, antes de tocar o banco (era ORA-12899 → 500)")
     void rejeitarMotivoAcimaDoLimite() {
         // MOTIVO_REJEICAO é VARCHAR2(1000) em BYTES: um motivo colado de um e-mail/norma estourava a
         // coluna, o ORA-12899 caía no handler genérico e o admin recebia um 500 com um toast sem
-        // nenhuma pista da causa — a rejeição ficava impossível. Mesma correção do F33 (retificação).
+        // nenhuma pista da causa — a rejeição ficava impossível.
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                 () -> service.rejeitar("sol-2", ADMIN, "ç".repeat(301)));
 
@@ -772,7 +768,7 @@ class BancoHorasServiceTest {
     }
 
     @Test
-    @DisplayName("corrige F47 — motivo de 300 caracteres passa (limite inclusivo) e é persistido inteiro")
+    @DisplayName("motivo de 300 caracteres passa (limite inclusivo) e é persistido inteiro")
     void rejeitarMotivoNoLimite() {
         String motivo = "ç".repeat(300);   // 600 bytes em UTF-8 — dentro do budget de 1000 da coluna
         PontoSolicitacaoFolga s = solicitacao(HOJE.plusDays(4), StatusSolicitacaoFolga.PENDENTE);

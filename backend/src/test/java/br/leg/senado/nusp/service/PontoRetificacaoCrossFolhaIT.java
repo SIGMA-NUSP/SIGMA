@@ -34,22 +34,14 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
 /**
- * IT do F32 (facetas EXIBIÇÃO e PRAZO) contra Oracle real — o cenário que o unitário não alcança:
- * a MESMA pessoa com DUAS folhas publicadas cobrindo o mesmo dia. Folhas SEMANAIS são cumulativas
- * por decisão (01–05, 01–12, 01–19…): a sobreposição de período é feature, não bug.
+ * IT das facetas EXIBIÇÃO e PRAZO da retificação contra Oracle real, no cenário que o unitário não
+ * alcança: a MESMA pessoa com DUAS folhas publicadas cobrindo o mesmo dia (folhas SEMANAIS são
+ * cumulativas — sobrepor período é o normal). Exibição: a listagem lê pela chave da UK
+ * (pessoa+tipo+dia) recortada pelo PERÍODO da folha consultada, não por PAGINA_ID. Prazo: a janela
+ * de 5 dias é DA FOLHA (âncora: PUBLICADO_EM do lote da página usada); folha nova reabre a janela
+ * SÓ por ela e SÓ para os dias ainda não retificados — a folha antiga vencida segue vencida.
  *
- * <p><b>Exibição:</b> a listagem lê pela chave da UK (pessoa+tipo+dia) recortada pelo PERÍODO da
- * folha consultada — não por PAGINA_ID. Antes, o dia retificado pela folha A vinha LIVRE na folha B,
- * e o envio levava 400 "já foi retificado" sem retificação nenhuma na tela; sem edição nem exclusão
- * na v1 (Q1), o dia ficava congelado sem explicação.
- *
- * <p><b>Prazo:</b> a janela de 5 dias é DA FOLHA (âncora: PUBLICADO_EM do lote da página usada).
- * Publicar uma folha nova reabre a janela SÓ pela folha nova e SÓ para os dias ainda não
- * retificados; os já retificados seguem travados pela UK, e a folha antiga continua regida pela SUA
- * janela — vencida é vencida, mesmo para os dias livres dela. É comportamento DECIDIDO, e estes
- * testes o travam.
- *
- * <p>Idioma do harness = {@link PontoRetificacaoLoteIT}: {@code @SpringBootTest} (não o slice
+ * <p>Harness igual ao de {@link PontoRetificacaoLoteIT}: {@code @SpringBootTest} (não o slice
  * {@code @OracleIT}) para que o {@code @Transactional} do service commite de verdade, e limpeza
  * manual. O período das folhas é fixo (junho/2026) e a publicação é sempre relativa a HOJE — os
  * dias retificados caem dentro do período em qualquer dia de execução.
@@ -146,7 +138,7 @@ class PontoRetificacaoCrossFolhaIT {
         return item;
     }
 
-    /** Envia os dias como UM lote pela folha indicada (é sempre um POST só — C10). */
+    /** Envia os dias como UM lote pela folha indicada (é sempre um POST só). */
     private void retificarVia(PontoLotePagina pagina, LocalDate... dias) {
         List<Map<String, Object>> itens = new ArrayList<>();
         for (LocalDate d : dias) itens.add(dia(d, "08:00", "12:00"));
@@ -180,7 +172,7 @@ class PontoRetificacaoCrossFolhaIT {
     }
 
     /**
-     * O cenário do achado: o dia 05 foi retificado pela folha A enquanto a janela dela estava aberta;
+     * O cenário: o dia 05 foi retificado pela folha A enquanto a janela dela estava aberta;
      * depois A venceu, e a folha B (publicada agora) cobre o mesmo dia.
      */
     private void diaRetificadoPelaFolhaAQueDepoisVenceu() {
@@ -193,7 +185,7 @@ class PontoRetificacaoCrossFolhaIT {
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("corrige F32 — o dia retificado pela folha A aparece retificado na listagem da folha B (a chave é pessoa+dia, não PAGINA_ID)")
+    @DisplayName("o dia retificado pela folha A aparece retificado na listagem da folha B (a chave é pessoa+dia, não PAGINA_ID)")
     void diaRetificadoPorOutraFolhaApareceNaFolhaB() {
         diaRetificadoPelaFolhaAQueDepoisVenceu();
 
@@ -203,12 +195,12 @@ class PontoRetificacaoCrossFolhaIT {
     }
 
     @Test
-    @DisplayName("corrige F32 — a folha B mostra o dia, e o envio dele pela folha B continua recusado (a UK trava; o lote inteiro cai)")
+    @DisplayName("a folha B mostra o dia, e o envio dele pela folha B continua recusado (a UK trava; o lote inteiro cai)")
     void diaJaRetificadoSegueTravadoNaFolhaB() {
         diaRetificadoPelaFolhaAQueDepoisVenceu();
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> retificarVia(paginaB, DIA_05, DIA_06));   // 05 travado; 06 livre — tudo-ou-nada (C10)
+                () -> retificarVia(paginaB, DIA_05, DIA_06));   // 05 travado; 06 livre — tudo-ou-nada
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertEquals("O dia 05/06/2026 já foi retificado.", ex.getMessage());
@@ -217,7 +209,7 @@ class PontoRetificacaoCrossFolhaIT {
     }
 
     @Test
-    @DisplayName("corrige F32 — as BORDAS do período entram (Between inclusivo): o 1º e o último dia da folha aparecem")
+    @DisplayName("as BORDAS do período entram (Between inclusivo): o 1º e o último dia da folha aparecem")
     void bordasDoPeriodoAparecem() {
         retificarVia(paginaB, B_INICIO, B_FIM);   // 01/06 e 19/06 — as bordas exatas da folha B
 
@@ -226,7 +218,7 @@ class PontoRetificacaoCrossFolhaIT {
     }
 
     @Test
-    @DisplayName("corrige F32 — o recorte é o PERÍODO da folha consultada: o dia 15 (só dentro de B) não aparece na folha A, que termina no dia 12")
+    @DisplayName("o recorte é o PERÍODO da folha consultada: o dia 15 (só dentro de B) não aparece na folha A, que termina no dia 12")
     void diaForaDoPeriodoDaFolhaNaoAparece() {
         retificarVia(paginaB, DIA_15);   // dentro de B (01–19), fora de A (01–12)
 
@@ -236,11 +228,11 @@ class PontoRetificacaoCrossFolhaIT {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // PRAZO — a janela de 5 dias é DA FOLHA (§4.2)
+    // PRAZO — a janela de 5 dias é DA FOLHA
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("corrige F32 — a folha B (publicada agora) REABRE a janela dos dias ainda livres: o dia 06 grava por ela, mesmo com a janela de A vencida")
+    @DisplayName("a folha B (publicada agora) REABRE a janela dos dias ainda livres: o dia 06 grava por ela, mesmo com a janela de A vencida")
     void folhaNovaReabreAJanelaDosDiasLivres() {
         diaRetificadoPelaFolhaAQueDepoisVenceu();
 
@@ -251,7 +243,7 @@ class PontoRetificacaoCrossFolhaIT {
     }
 
     @Test
-    @DisplayName("corrige F32 — a reabertura vale SÓ pela folha nova: o mesmo dia livre enviado pela folha A (vencida) leva PRAZO_EXPIRADO")
+    @DisplayName("a reabertura vale SÓ pela folha nova: o mesmo dia livre enviado pela folha A (vencida) leva PRAZO_EXPIRADO")
     void folhaVencidaNaoRetificaNemOsDiasLivres() {
         diaRetificadoPelaFolhaAQueDepoisVenceu();
 
@@ -265,7 +257,7 @@ class PontoRetificacaoCrossFolhaIT {
     }
 
     @Test
-    @DisplayName("corrige F32 — a folha A vencida diz 'prazo encerrado' MAS mostra o dia retificado pela folha B (a janela é da folha; a exibição é da pessoa)")
+    @DisplayName("a folha A vencida diz 'prazo encerrado' MAS mostra o dia retificado pela folha B (a janela é da folha; a exibição é da pessoa)")
     void folhaVencidaMostraORetificadoPelaFolhaNova() {
         diaRetificadoPelaFolhaAQueDepoisVenceu();
         retificarVia(paginaB, DIA_06);   // entra pela janela de B

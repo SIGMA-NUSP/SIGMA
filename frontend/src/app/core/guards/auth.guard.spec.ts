@@ -5,9 +5,9 @@ import { AuthService } from '../services/auth.service';
 import { FeatureFlagService } from '../services/feature-flags.service';
 
 /**
- * T18 (§5.6) — os 4 guards funcionais executados via
- * `TestBed.runInInjectionContext` (usam `inject()` internamente).
- * `AuthService` e `Router` são mockados; os computeds do AuthService viram
+ * Guards funcionais (authGuard, roleGuard, matchByRole, masterGuard, featureFlagGuard)
+ * executados via `TestBed.runInInjectionContext` (usam `inject()` internamente).
+ * `AuthService` e `Router` são mockados por useValue; os computeds do AuthService viram
  * funções (`vi.fn()`), como no código real (signals são chamados como função).
  */
 describe('auth.guard', () => {

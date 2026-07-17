@@ -37,23 +37,16 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
 /**
- * IT de CONCORRÊNCIA da publicação de lote (F49) contra Oracle real.
+ * IT de CONCORRÊNCIA da publicação de lote contra Oracle real: dois POSTs simultâneos do MESMO lote
+ * em revisão — exatamente uma transação vence, a outra recebe o 400 honesto ("Lote já está
+ * publicado.") e o efeito colateral acontece UMA vez (o aviso PESSOAL é contado no banco; a
+ * re-âncora, no colaborador espionado — {@code PNT_BANCO_SALDO} tem UNIQUE por pessoa, então contar
+ * linhas lá não distinguiria uma re-âncora de dez).
  *
- * <p>O caso é o da tela: com dois lotes em revisão, a resposta de um destrava o botão "Publicar" do
- * outro (slot único {@code publicandoId} — a trava de frontend fica para o estágio dela) e o admin
- * reclica, disparando um SEGUNDO POST do MESMO lote com o primeiro ainda em voo. Sem lock, as duas
- * transações liam o status REVISAO no mesmo instante, ambas passavam da guarda e o lote era publicado
- * duas vezes: aviso PESSOAL duplicado para cada pessoa da folha e re-âncora dupla.
- *
- * <p>A invariante provada aqui: <b>exatamente uma</b> das duas transações vence; a outra recebe o 400
- * honesto ("Lote já está publicado."), e o efeito colateral acontece UMA vez (o aviso da pessoa é
- * contado no banco; a re-âncora, no colaborador espionado — {@code PNT_BANCO_SALDO} tem UNIQUE por
- * pessoa, então contar linhas lá não distinguiria uma re-âncora de dez).
- *
- * <p>É o PRIMEIRO {@code @SpringBootTest} do repositório, e não por capricho: o {@code @OracleIT}
- * ({@code @DataJpaTest}) abre uma transação com rollback e não instancia beans de service — as
- * threads não enxergariam o seed e não haveria proxy transacional para {@code publicar} abrir uma
- * transação por thread. Sem rollback automático, a limpeza é manual ({@code @AfterEach}).
+ * <p>Usa {@code @SpringBootTest}, não {@code @OracleIT}: o {@code @DataJpaTest} abre uma transação
+ * com rollback e não instancia beans de service — as threads não enxergariam o seed e não haveria
+ * proxy transacional para {@code publicar} abrir uma transação por thread. Sem rollback automático,
+ * a limpeza é manual ({@code @AfterEach}).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @ActiveProfiles("test")
@@ -130,9 +123,9 @@ class PontoPublicacaoConcorrenteIT {
     }
 
     @Test
-    @DisplayName("corrige F49 — publicação concorrente do mesmo lote: exatamente uma vence, e o aviso/re-âncora acontecem UMA vez")
+    @DisplayName("publicação concorrente do mesmo lote: exatamente uma vence, e o aviso/re-âncora acontecem UMA vez")
     void publicacaoConcorrenteDoMesmoLote() throws Exception {
-        // Barreira: as duas threads entram em publicar() no mesmo instante — é a janela do F49.
+        // Barreira: as duas threads entram em publicar() no mesmo instante — é a janela da corrida.
         CyclicBarrier largada = new CyclicBarrier(2);
         Callable<String> publicar = () -> {
             largada.await(10, TimeUnit.SECONDS);
@@ -164,7 +157,7 @@ class PontoPublicacaoConcorrenteIT {
             assertEquals("PUBLICADO", lote.getStatus());
             assertNotNull(lote.getPublicadoEm());
 
-            // O dano real do F49: um aviso PESSOAL por publicação → a pessoa receberia dois.
+            // O dano real da corrida: um aviso PESSOAL por publicação → a pessoa receberia dois.
             assertEquals(1, contar("SELECT COUNT(*) FROM FRM_AVISO_ALVO a JOIN FRM_AVISO_CADASTRO c "
                     + "ON c.ID = a.CADASTRO_ID WHERE c.TIPO = 'PESSOAL' AND a.OPERADOR_ID = :operador"),
                     "a pessoa da folha só pode ter sido avisada UMA vez");

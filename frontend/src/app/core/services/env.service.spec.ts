@@ -6,10 +6,10 @@ import { environment } from '../../../environments/environment';
 import { EnvService } from './env.service';
 
 /**
- * T21 — EnvService (§5.5/B4): GET /api/health; sucesso seta `label` e prefixa o
- * document.title com `[LABEL] `; label vazio NÃO prefixa; erro → ''. Usa HttpClient
- * DIRETO (não ApiService) → provideHttpClientTesting; `verify()` em afterEach (B7).
- * O prefixo é observado no `Title` real (mesma instância injetada no service).
+ * EnvService: GET /api/health; sucesso seta `label` e prefixa o document.title com
+ * `[LABEL] `; label vazio NÃO prefixa; erro → ''. Usa HttpClient DIRETO (não
+ * ApiService) → provideHttpClientTesting; `verify()` em afterEach. O prefixo é
+ * observado no `Title` real (mesma instância injetada no service).
  */
 const HEALTH = `${environment.apiBaseUrl}/api/health`;
 

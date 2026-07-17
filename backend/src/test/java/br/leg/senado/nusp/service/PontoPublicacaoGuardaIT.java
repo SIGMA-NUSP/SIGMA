@@ -31,16 +31,15 @@ import br.leg.senado.nusp.repository.TecnicoRepository;
 import jakarta.persistence.EntityManager;
 
 /**
- * IT da guarda da folha MENSAL (F32) contra Oracle real: a regra depende de uma consulta que cruza
- * PNT_LOTE_PAGINA com PNT_LOTE (status PUBLICADO + tipo MENSAL + janela de competência), e é o banco
- * — não o mock — que diz se ela casa as folhas certas.
+ * IT da guarda da folha MENSAL na publicação, contra Oracle real: a regra depende de uma consulta
+ * que cruza PNT_LOTE_PAGINA com PNT_LOTE (status PUBLICADO + tipo MENSAL + janela de competência),
+ * e é o banco — não o mock — que diz se ela casa as folhas certas.
  *
- * <p>Service construído à mão (padrão da FASE C): repositórios REAIS — são eles que a guarda usa — e
- * mocks nos colaboradores que a publicação apenas dispara depois (aviso, re-âncora), que aqui servem
- * de sensor: num lote recusado eles não podem ser tocados.
- *
- * <p>Cada teste semeia o próprio grafo e o rollback do {@code @DataJpaTest} limpa; o PDF das páginas
- * não existe em disco (BANCO_FINAL_MIN fica nulo, com WARN — a publicação nunca aborta por isso).
+ * <p>Service construído à mão: repositórios REAIS — são eles que a guarda usa — e mocks nos
+ * colaboradores que a publicação apenas dispara depois (aviso, re-âncora), que aqui servem de
+ * sensor: num lote recusado eles não podem ser tocados. Cada teste semeia o próprio grafo e o
+ * rollback do {@code @DataJpaTest} limpa; o PDF das páginas não existe em disco (BANCO_FINAL_MIN
+ * fica nulo, com WARN — a publicação nunca aborta por isso).
  */
 @OracleIT
 class PontoPublicacaoGuardaIT {
@@ -76,7 +75,7 @@ class PontoPublicacaoGuardaIT {
 
     @BeforeEach
     void setUp() {
-        // O lookup de existência (F34) é montado sobre os MESMOS repositórios reais: a checagem do
+        // O lookup de existência é montado sobre os MESMOS repositórios reais: a checagem do
         // vínculo continua batendo no Oracle, não num mock.
         service = new PontoService(loteRepo, paginaRepo, operadorRepo, tecnicoRepo, administradorRepo,
                 avisoService, saldoAberturaService, mock(RetificacaoService.class),
@@ -106,7 +105,7 @@ class PontoPublicacaoGuardaIT {
     }
 
     @Test
-    @DisplayName("corrige F32 — 2ª folha MENSAL da pessoa no mesmo mês: 400 nomeando a pessoa e lote intacto (REVISAO)")
+    @DisplayName("2ª folha MENSAL da pessoa no mesmo mês: 400 nomeando a pessoa e lote intacto (REVISAO)")
     void segundaMensalDoMesmoMesRecusada() {
         PontoLote junho = loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
         service.publicar(junho.getId(), false);
@@ -119,7 +118,7 @@ class PontoPublicacaoGuardaIT {
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         String msg = mensagemDoAdmin(ex);
-        assertEquals(ex.getMessage(), msg, "a frase tem de estar nos dois campos do erro (F57)");
+        assertEquals(ex.getMessage(), msg, "a frase tem de estar nos dois campos do erro");
         assertTrue(msg.contains(operador.getNomeCompleto()),
                 () -> "a recusa precisa nomear quem está em conflito (é por ele que o admin acha a página): " + msg);
         assertTrue(msg.contains("06/2026"), () -> "e dizer a competência já ocupada: " + msg);
@@ -129,7 +128,7 @@ class PontoPublicacaoGuardaIT {
     }
 
     @Test
-    @DisplayName("corrige F32 — SEMANAL atrasada de mês já fechado pela MENSAL publicada: 400 e lote intacto (REVISAO)")
+    @DisplayName("SEMANAL atrasada de mês já fechado pela MENSAL publicada: 400 e lote intacto (REVISAO)")
     void semanalDeMesFechadoRecusada() {
         service.publicar(loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)).getId(), false);
 
@@ -146,7 +145,7 @@ class PontoPublicacaoGuardaIT {
     }
 
     @Test
-    @DisplayName("corrige F32 — duas folhas MENSAIS da mesma pessoa DENTRO do próprio lote: 400 e lote intacto (REVISAO)")
+    @DisplayName("duas folhas MENSAIS da mesma pessoa DENTRO do próprio lote: 400 e lote intacto (REVISAO)")
     void mensalDuplicadaNoProprioLoteRecusada() {
         PontoLote lote = CenarioFactory.novoLotePonto(emReal(), "MENSAL",
                 LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30), admin);
@@ -164,7 +163,7 @@ class PontoPublicacaoGuardaIT {
     }
 
     @Test
-    @DisplayName("corrige F32 — a MENSAL de OUTRA pessoa não fecha o mês de quem não tem folha")
+    @DisplayName("a MENSAL de OUTRA pessoa não fecha o mês de quem não tem folha")
     void mensalDeOutraPessoaNaoFechaOMesDosDemais() {
         Operador colega = CenarioFactory.novoOperador(emReal(), "Colega Sem Conflito");
         PontoLote junhoDoColega = CenarioFactory.novoLotePonto(emReal(), "MENSAL",
@@ -179,7 +178,7 @@ class PontoPublicacaoGuardaIT {
     }
 
     @Test
-    @DisplayName("corrige F32 — SEMANAIS cumulativas do mesmo mês (01–05, 01–12) publicam: sobrepor período é o normal")
+    @DisplayName("SEMANAIS cumulativas do mesmo mês (01–05, 01–12) publicam: sobrepor período é o normal")
     void semanaisCumulativasPublicam() {
         service.publicar(loteDoOperador("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5)).getId(), false);
         PontoLote ate12 = loteDoOperador("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 12));
@@ -191,7 +190,7 @@ class PontoPublicacaoGuardaIT {
     }
 
     @Test
-    @DisplayName("corrige F32 — a MENSAL de junho não impede a MENSAL de julho da mesma pessoa")
+    @DisplayName("a MENSAL de junho não impede a MENSAL de julho da mesma pessoa")
     void mensalDeOutroMesPublica() {
         service.publicar(loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)).getId(), false);
         PontoLote julho = loteDoOperador("MENSAL", LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31));
@@ -202,7 +201,7 @@ class PontoPublicacaoGuardaIT {
     }
 
     @Test
-    @DisplayName("corrige F32 — MENSAL de mês ainda aberto publica normalmente (a guarda não barra a 1ª folha)")
+    @DisplayName("MENSAL de mês ainda aberto publica normalmente (a guarda não barra a 1ª folha)")
     void primeiraMensalPublica() {
         PontoLote junho = loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
 

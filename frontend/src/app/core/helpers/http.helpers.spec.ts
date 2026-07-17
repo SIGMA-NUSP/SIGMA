@@ -27,7 +27,7 @@ describe('httpErrorMsg', () => {
 });
 
 /**
- * C7 — mensagem do canal de erro de CARGA: a orientação da TELA vem sempre na frente (é ela que
+ * Mensagem do canal de erro de CARGA: a orientação da TELA vem sempre na frente (é ela que
  * diz o que está em jogo e o que fazer), com o detalhe do backend anexado quando houver.
  */
 describe('erroCargaMsg', () => {

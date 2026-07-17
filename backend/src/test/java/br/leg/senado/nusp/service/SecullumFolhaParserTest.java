@@ -12,13 +12,12 @@ import static br.leg.senado.nusp.service.SecullumFolhaParser.parse;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Testes do parser numérico do BANCO (E2). As amostras são trechos VERBATIM
- * de folhas reais de homolog (jul/2026), reduzidas às linhas relevantes —
- * o formato completo (cabeçalho/rodapé) já é exercitado pelos casos, pois a
- * linha TOTAIS e a assinatura não casam com a gramática de linha-dia.
+ * Testes do parser numérico do BANCO. As amostras são trechos VERBATIM de
+ * folhas reais, reduzidos às linhas relevantes — o formato completo
+ * (cabeçalho/rodapé) já é exercitado pelos casos, pois a linha TOTAIS e a
+ * assinatura não casam com a gramática de linha-dia.
  *
- * A regra sob teste (interpretação validada em 324/324 folhas contra a linha
- * TOTAIS impressa): último banco não-vazio de QUALQUER linha, inclusive de
+ * A regra sob teste: último banco não-vazio de QUALQUER linha, inclusive de
  * status — Falta no fim do mês reduz o acumulado e só a linha de status
  * carrega o valor certo.
  */
@@ -130,7 +129,7 @@ class SecullumFolhaParserTest {
         void bancoDeTresDigitosViaParse() {
             // O BANCO é acumulado e pode passar de 99h: com o DELTA restrito a 2 dígitos,
             // "+100:54" não casaria, o TOTALDIA viraria BANCO e "00:54" viraria ENT.2 falsa
-            // — saldo silenciosamente errado (achado da revisão do E2).
+            // — saldo silenciosamente errado.
             String texto = """
                      25/02/25 - ter06:2713:09+01:24+100:54
                      26/02/25 - qua06:2512:48+00:46+101:40

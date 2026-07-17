@@ -8,19 +8,14 @@ import { LookupService, LookupItem } from '../../core/services/lookup.service';
 import { ToastService } from '../../shared/components/toast.component';
 
 /**
- * T24 — AnormalidadeFormComponent (page, 327 LOC — o form mais simples do escopo; §A5).
- *
- * Estratégia (manual de PAGE do T22/T23): o TestBed cria o componente (DI + signals) mas
- * NUNCA chamamos `detectChanges()` — o template importa RouterLink/ngModel e dispararia
- * ngOnInit; o wiring de rota é exercitado chamando `ngOnInit()` diretamente com o
- * ActivatedRoute mockado (`queryParams` reatribuível). Services mockados via `useValue`
- * (padrão T21). Sem Date/localStorage/timers (o form não os usa) → sem fake timers.
- *
- * `onSubmit`: o ramo `res.ok===false` monta a msg INLINE (`res.error || 'Erro desconhecido'`)
- * → asserção do valor EXATO; o ramo de erro HTTP usa `httpErrorMsg(err, 'Erro de conexão',
- * ['error'])` sob o prefixo `'Erro ao salvar: '` → `expect.stringContaining` (padrão T22).
- * `focusFirst` (guardas) faz `document.querySelector('[name=…]')` → null sem DOM renderizado
- * → no-op seguro; a guarda é observada pela ausência de POST.
+ * AnormalidadeFormComponent (page): wiring de rota, pré-preenchimento via lookup, hidratação
+ * de RAOA existente, toggles condicionais, guardas de submit, montagem do payload e erros.
+ * O TestBed cria o componente SEM `detectChanges()` — o template importa RouterLink/ngModel e
+ * dispararia ngOnInit; o wiring de rota é exercitado chamando `ngOnInit()` diretamente com o
+ * ActivatedRoute mockado (`queryParams` reatribuível). Services mockados via `useValue`.
+ * Sem fake timers (o form não usa Date/localStorage/timers). `focusFirst` faz
+ * `document.querySelector('[name=…]')` → null sem DOM renderizado → no-op seguro; as
+ * guardas são observadas pela ausência de POST.
  */
 describe('AnormalidadeFormComponent', () => {
   let apiGet: ReturnType<typeof vi.fn>;

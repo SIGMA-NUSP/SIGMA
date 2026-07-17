@@ -42,22 +42,22 @@ import br.leg.senado.nusp.service.DashboardQueryHelper.PagedResult;
 import jakarta.persistence.EntityManager;
 
 /**
- * IT das 2 listagens de {@link BancoHorasService} contra Oracle real (§3.3 do plano): o SQL delas é
- * literal (`FROM PNT_SOLICITACAO_FOLGA s …`, executado pelo {@code executePagedQuery}) e **escapa de
- * qualquer grep** — só a integração prova o ownership, o CASE dos 3 tipos de pessoa, os LEFT JOINs de
- * deliberador e de saldo, a ordenação default composta e os filtros.
+ * IT das 2 listagens de {@link BancoHorasService} contra Oracle real: o SQL delas é
+ * literal ({@code FROM PNT_SOLICITACAO_FOLGA s …}, executado pelo {@code executePagedQuery})
+ * e escapa de qualquer grep — só a integração prova o ownership, o CASE dos 3 tipos de
+ * pessoa, os LEFT JOINs de deliberador e de saldo, a ordenação default composta e os filtros.
  *
- * <p>Service construído à mão (padrão da FASE C, {@code ChecklistServiceIT}): {@code EntityManager} e
- * {@link AdministradorRepository} REAIS — é o único repositório que as listagens tocam (o
- * {@code servidorPublico} do caller, em {@code anotarDeliberacao}) — e mocks Mockito nas dependências
- * que elas não exercitam. O {@link Clock} é FIXO (15/07/2026, zona explícita — gotcha 13): é ele que
- * decide a flag {@code atrasada}, e sem ele o teste dependeria do dia da execução.
+ * <p>Service construído à mão: {@code EntityManager} e {@link AdministradorRepository} REAIS
+ * — é o único repositório que as listagens tocam (o {@code servidorPublico} do caller, em
+ * {@code anotarDeliberacao}) — e mocks Mockito nas dependências que elas não exercitam. O
+ * {@link Clock} é FIXO, com zona explícita: é ele que decide a flag {@code atrasada}, e sem
+ * ele o teste dependeria do dia da execução.
  *
- * <p>Formas do Oracle nas asserções (gotchas 4/5): {@code saldo_min} chega como {@code Number} (o
+ * <p>Formas do Oracle nas asserções: {@code saldo_min} chega como {@code Number} (o
  * {@code convertValue} do motor devolve {@code Long}), {@code data_folga} como texto
- * {@code "yyyy-MM-dd 00:00:00.0"}, e {@code deliberado_por}/{@code motivo} existem no Map com valor
- * nulo quando o LEFT JOIN não casa. Nada é semeado fora do teste: o NUSP_TEST é clone vazio e o
- * rollback do {@code @DataJpaTest} isola cada caso.
+ * {@code "yyyy-MM-dd 00:00:00.0"}, e {@code deliberado_por}/{@code motivo} existem no Map
+ * com valor nulo quando o LEFT JOIN não casa. Nada é semeado fora do teste: o NUSP_TEST é
+ * clone vazio e o rollback do {@code @DataJpaTest} isola cada caso.
  */
 @OracleIT
 class BancoHorasServiceIT {
@@ -206,7 +206,7 @@ class BancoHorasServiceIT {
                     "OPERADOR", empate, StatusSolicitacaoFolga.PENDENTE);
             // A cancelada nasce 1h ANTES — o tiebreaker CRIADO_EM DESC tem de pôr a nova na frente.
             // As DUAS âncoras vêm do relógio do BANCO (SYSTIMESTAMP): o @PrePersist carimba pela JVM, e
-            // comparar os dois relógios só funcionaria enquanto ambos estivessem em UTC (F7).
+            // comparar os dois relógios só funcionaria enquanto ambos estivessem no mesmo fuso.
             CenarioFactory.fixarTimestamp(emReal(), "PNT_SOLICITACAO_FOLGA", "CRIADO_EM",
                     antigaNoEmpate.getId(), 7200);
             CenarioFactory.fixarTimestamp(emReal(), "PNT_SOLICITACAO_FOLGA", "CRIADO_EM",
@@ -434,7 +434,7 @@ class BancoHorasServiceIT {
 
             // ⚠️ A ordem esperada vem do BANCO, não de String.compareTo: a sessão JDBC ordena VARCHAR2 por
             // colação LINGUÍSTICA (WEST_EUROPEAN — o driver herda o locale pt-BR da JVM), onde LETRA vem
-            // antes de DÍGITO. Comparar com o sort do Java daria falha fantasma (achado F30 da §5).
+            // antes de DÍGITO. Comparar com o sort do Java daria falha fantasma.
             @SuppressWarnings("unchecked")
             List<String> ordemDoBanco = emReal()
                     .createNativeQuery("SELECT s.ID FROM PNT_SOLICITACAO_FOLGA s ORDER BY s.ID")

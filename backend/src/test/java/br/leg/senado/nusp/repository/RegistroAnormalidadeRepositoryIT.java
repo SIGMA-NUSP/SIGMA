@@ -89,9 +89,6 @@ class RegistroAnormalidadeRepositoryIT {
             RegistroOperacaoOperador entrada = CenarioFactory.novaEntrada(emReal(), registro, operador, 1);
             CenarioFactory.novaAnormalidade(emReal(), registro, sala, entrada.getId(), operador.getId());
 
-            // O plano previa "semear 2 e ler a mais recente"; o índice único real do schema
-            // (UQ_OPR_ANOM_ENTRADA em ENTRADA_ID) torna o cenário impossível — registrado
-            // como divergência plano-vs-banco na entrada T10 do registro de execução.
             PersistenceException ex = assertThrows(PersistenceException.class,
                     () -> CenarioFactory.novaAnormalidade(emReal(), registro, sala,
                             entrada.getId(), operador.getId()));

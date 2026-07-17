@@ -38,17 +38,14 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
 /**
- * IT de CONCORRÊNCIA da exclusão (F59) contra Oracle real: excluir toma o MESMO lock de linha do lote
- * que publicar e vincular (C6/F49, C9b/F58), então os três caminhos SERIALIZAM.
+ * IT de CONCORRÊNCIA da exclusão de publicações contra Oracle real: excluir toma o MESMO lock de
+ * linha do lote que publicar e vincular, então os três caminhos SERIALIZAM. Sem o lock, uma
+ * exclusão simultânea a uma publicação ainda não commitada leria o lote em REVISÃO — apagaria as
+ * páginas sem enxergar o aviso PESSOAL em criação (aviso vivo de folha inexistente, saldo ancorado
+ * em página morta); na ordem inversa, a publicação ressuscitaria em silêncio um lote recém-excluído.
  *
- * <p><b>O dano que o lock evita.</b> Sem ele, uma exclusão que largasse enquanto uma publicação do
- * mesmo lote ainda não commitou leria o lote em REVISÃO: apagaria as páginas sem enxergar o aviso
- * PESSOAL que a publicação está criando, e a publicação commitaria depois — deixando um aviso vivo de
- * uma folha que já não existe, e um saldo ancorado numa página morta. Na ordem inversa, a publicação
- * ressuscitaria em silêncio um lote que o master acabou de excluir.
- *
- * <p><b>Como a corrida vira determinística</b> (idioma do {@code PontoConcorrenciaBordasIT}): a thread
- * LENTA é segurada DENTRO da sua transação — espiando {@link SaldoAberturaService#reancorar}, o
+ * <p>A corrida é determinística (mesmo idioma do {@code PontoConcorrenciaBordasIT}): a thread LENTA
+ * é segurada DENTRO da sua transação — espiando {@link SaldoAberturaService#reancorar}, o
  * colaborador-classe que os dois caminhos atravessam (spy de interface não saberia chamar o método
  * real) — e é ela quem abre o latch que dá a largada à rival. As duas ordens são provadas.
  */
@@ -253,7 +250,7 @@ class PontoExclusaoConcorrenciaIT {
      * acharia aviso nenhum (ele ainda não commitou) e o deixaria vivo, apontando para um lote morto.
      */
     @Test
-    @DisplayName("corrige F59 — excluir DURANTE a publicação: a exclusão espera o lock e age sobre o lote já publicado (nenhum aviso órfão)")
+    @DisplayName("excluir DURANTE a publicação: a exclusão espera o lock e age sobre o lote já publicado (nenhum aviso órfão)")
     void exclusaoEsperaAPublicacao() throws Exception {
         List<String> r = correr(publicar(), excluir());
 
@@ -276,7 +273,7 @@ class PontoExclusaoConcorrenciaIT {
      * re-âncora para um lote apagado (escrita órfã).
      */
     @Test
-    @DisplayName("corrige F59 — publicar DURANTE a exclusão: a publicação espera, relê e responde 404 — sem escrita órfã")
+    @DisplayName("publicar DURANTE a exclusão: a publicação espera, relê e responde 404 — sem escrita órfã")
     void publicacaoEsperaAExclusao() throws Exception {
         List<String> r = correr(excluir(), publicar());
 

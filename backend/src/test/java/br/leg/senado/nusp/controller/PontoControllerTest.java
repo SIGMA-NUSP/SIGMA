@@ -65,31 +65,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contrato HTTP do {@link PontoController} (T27b) — o maior controller do módulo Ponto e o último
- * do sistema sem teste (26 mappings: 16 admin em {@code /api/admin/ponto/**} e 10 comuns em
- * {@code /api/ponto/**}; empata com o {@code AdminDashboardController} em número de rotas).
- *
- * <p><b>Controller MISTO</b> (sem {@code @RequestMapping} de classe — é o F2): as rotas admin e as
- * do funcionário convivem no mesmo arquivo. A matriz do T15 ({@code RbacMatrixMistoTest}) deixou o
- * Ponto de fora por decisão do plano, então a <b>cadeia completa</b> (filtro JWT + matcher
- * {@code /api/admin/**} + {@code @AdminOnly}) sobre estas rotas é medida aqui. As outras duas
- * coberturas do F2 já existem e NÃO são duplicadas: a varredura estática da anotação
- * ({@code AdminOnlyCoberturaTest}) e a prova da camada de method security isolada
- * ({@code AdminOnlyMethodSecurityTest}, com os filtros desligados). Os 4 modos de token inválido
- * também são do T15 — aqui só o "sem token".
- *
- * <p><b>Regra de famílias (T16):</b> com os 9 services mockados, endpoint homogêneo é plumbing de
- * delegação — cobre-se cada FAMÍLIA de contrato em endpoints representativos, mais os singulares
- * (upload multipart, publicação, grade/XLSX, streaming de PDF, retificação em lote, solicitação de
- * folgas, deliberação, relatório, paginação e binding). Exaurir os 26 mappings seria testar o
- * {@code @RequestMapping} do Spring. Ficam deliberadamente FORA, por serem repetição de família já
- * coberta: a LEITURA das retificações da folha, o relatório PESSOAL ({@code respondPdf} — mesma
- * família do relatório do admin), o saldo ({@code GET /api/ponto/banco}) e as leituras admin de
- * lote/página/pessoas.
- *
- * <p>O POST de retificação entrou na seleção no C10: deixou de ser "mais um POST por dia" e virou o
- * LOTE transacional (F39) — contrato novo, corpo estruturado e recusa que precisa chegar ao usuário
- * nomeando o dia.
+ * Contrato HTTP do {@link PontoController} — controller MISTO (sem {@code @RequestMapping} de
+ * classe): rotas admin ({@code /api/admin/ponto/**}) e do funcionário ({@code /api/ponto/**}) no
+ * mesmo arquivo; a cadeia completa (filtro JWT + matcher {@code /api/admin/**} +
+ * {@code @AdminOnly}) sobre estas rotas é medida aqui. Com os services mockados, endpoint
+ * homogêneo é plumbing de delegação — cobre-se cada FAMÍLIA de contrato em endpoints
+ * representativos, mais os singulares (upload multipart, publicação, grade/XLSX, streaming de
+ * PDF, retificação em lote, folgas, deliberação, relatório, paginação e binding), sem exaurir
+ * os 26 mappings.
  *
  * <p><b>Onde a resposta é do controller e onde é do stub:</b> {@code download}/{@code preview}
  * montam os headers no próprio controller ({@code streamPdf}) — ali os headers SÃO asserção. Já o
@@ -105,7 +88,7 @@ class PontoControllerTest {
     private static final String PAGINA_ID = "c9f0f895-fb98-4b1e-a5d2-1b0ab1e2c3d4";
     private static final String SOLICITACAO_ID = "45c48cce-2e2d-4d1f-b8f9-fbcd8b1d5a11";
 
-    /** Mensagem única do handler de requisição malformada (F6, corrigido no C4). */
+    /** Mensagem única do handler de requisição malformada. */
     private static final String MSG_BINDING_INVALIDO = "Requisição inválida. Verifique os dados enviados.";
 
     /** Conteúdo binário fixo — nada de PDF real: o parser vive no service, aqui só trafega bytes. */
@@ -142,7 +125,7 @@ class PontoControllerTest {
         // Sessão viva; o default do Mockito (0) significaria sessão inválida → 401 em tudo.
         when(authSessionRepository.touchSession(anyLong(), anyString(), anyInt())).thenReturn(1);
 
-        // Stubs do braço 2xx da matriz (§0.5: valores diferentes do default do Mockito).
+        // Stubs do braço 2xx da matriz (valores diferentes do default do Mockito).
         when(pontoService.listarLotes()).thenReturn(List.of(Map.of("id", LOTE_ID, "paginas", 42)));
         when(pontoService.minhasFolhas(TokenFactory.USER_ID))
                 .thenReturn(List.of(Map.of("id", PAGINA_ID, "mes_ref", "2026-07")));
@@ -159,10 +142,10 @@ class PontoControllerTest {
     /**
      * Rotas GET representativas dos dois prefixos, incluindo um PAR do mesmo domínio (as
      * solicitações do banco de horas): a fila do admin exige ADMINISTRADOR e a lista do próprio
-     * funcionário aceita os 3 papéis — no MESMO arquivo, que é o risco que o F2 descreve.
+     * funcionário aceita os 3 papéis — no MESMO arquivo.
      *
-     * <p>O dado é tabular por natureza (rota × papel × status), única situação em que a §0.5
-     * autoriza {@code @ParameterizedTest}; é o mesmo idiom do {@code RbacMatrixMistoTest}.
+     * <p>O dado é tabular por natureza (rota × papel × status), a situação que justifica
+     * {@code @ParameterizedTest}; é o mesmo idiom do {@code RbacMatrixMistoTest}.
      */
     static Stream<Arguments> matriz() {
         return Stream.of(
@@ -227,7 +210,7 @@ class PontoControllerTest {
         verify(pontoService).listarLotes();
     }
 
-    // ══ 3) Exclusão de publicações (F59) — master-only ══════════════════════
+    // ══ 3) Exclusão de publicações — master-only ════════════════════════════
 
     /**
      * A permissão de excluir viaja como FLAG na listagem, computada pelo backend a partir do
@@ -235,7 +218,7 @@ class PontoControllerTest {
      * aparecer — e é só um controle de UI: quem chamar o DELETE mesmo assim leva o 403 do service.
      */
     @Nested
-    @DisplayName("F59 — exclusão de lote/página pelo admin master")
+    @DisplayName("exclusão de lote/página pelo admin master")
     class ExclusaoDePublicacoes {
 
         private static final String PREVIEW_LOTE = "/api/admin/ponto/lote/" + LOTE_ID + "/exclusao/preview";
@@ -248,7 +231,7 @@ class PontoControllerTest {
         private static final String USERNAME_DO_TOKEN = "teste." + TokenFactory.ADMIN;
 
         @Test
-        @DisplayName("corrige F59 — GET /lotes carrega pode_excluir, computado pelo backend a partir do username do principal")
+        @DisplayName("GET /lotes carrega pode_excluir, computado pelo backend a partir do username do principal")
         void listagemCarregaAFlagDoMaster() throws Exception {
             when(pontoExclusaoService.podeExcluir(USERNAME_DO_TOKEN)).thenReturn(true);
 
@@ -293,7 +276,7 @@ class PontoControllerTest {
          * EXCLUIDO_POR_ID). Trocar um pelo outro daria 403 em todo mundo ou uma FK violada.
          */
         @Test
-        @DisplayName("corrige F59 — DELETE do lote e da página: o controller passa username (permissão) e id (autoria da trilha)")
+        @DisplayName("DELETE do lote e da página: o controller passa username (permissão) e id (autoria da trilha)")
         void deleteRepassaUsernameEId() throws Exception {
             when(pontoExclusaoService.excluirLote(LOTE_ID, USERNAME_DO_TOKEN, TokenFactory.USER_ID))
                     .thenReturn(Map.of("escopo", "LOTE", "paginas_excluidas", 2));
@@ -319,7 +302,7 @@ class PontoControllerTest {
          * nunca foi a segurança; esta rota é.
          */
         @Test
-        @DisplayName("corrige F59 — admin comum autenticado: o 403 do service chega ao cliente nas quatro rotas")
+        @DisplayName("admin comum autenticado: o 403 do service chega ao cliente nas quatro rotas")
         void adminComumRecebe403DoService() throws Exception {
             ServiceValidationException forbidden =
                     new ServiceValidationException("forbidden", HttpStatus.FORBIDDEN);
@@ -440,7 +423,7 @@ class PontoControllerTest {
                     .andExpect(jsonPath("$.data.lote_id").value(LOTE_ID))
                     .andExpect(jsonPath("$.data.paginas").value(3));
 
-            // O UUID do dono NÃO vem do corpo: é o principal.getId() do token (mesmo padrão do F2).
+            // O UUID do dono NÃO vem do corpo: é o principal.getId() do token.
             verify(pontoService).upload(
                     argThat(f -> "cartao-ponto.pdf".equals(f.getOriginalFilename())
                             && "arquivo".equals(f.getName())
@@ -449,20 +432,19 @@ class PontoControllerTest {
         }
 
         /**
-         * Inversão do {@code caracteriza F36} (C13): requisição NÃO-multipart no endpoint de upload (o
-         * cliente errou o Content-Type) faz o resolver do {@code @RequestParam MultipartFile} lançar
-         * {@code MultipartException("Current request is not a multipart request")}. Ela não tinha handler
-         * — só a subclasse do 413 tinha — e caía no {@code @ExceptionHandler(Exception.class)}: <b>500 +
-         * log ERROR com stacktrace</b> por um erro que é do CLIENTE. Agora a {@code MultipartException}
-         * está na lista do {@code handleBadRequest} → 400 no shape padrão, log WARN.
+         * Requisição NÃO-multipart no endpoint de upload (o cliente errou o Content-Type) faz o
+         * resolver do {@code @RequestParam MultipartFile} lançar
+         * {@code MultipartException("Current request is not a multipart request")} — um erro do
+         * CLIENTE. A {@code MultipartException} está na lista do {@code handleBadRequest} → 400 no
+         * shape padrão, log WARN.
          *
          * <p>A resposta depende de o {@code MultipartFile} ser o PRIMEIRO argumento resolvido: reordenar
          * a assinatura faria um {@code @RequestParam} String faltar antes, e o 400 viria por outro
-         * caminho (o do F6) — com a MESMA mensagem, que é genérica. Se este teste mudar de comportamento
+         * caminho — com a MESMA mensagem, que é genérica. Se este teste mudar de comportamento
          * depois de um refactor da assinatura, é isto.
          */
         @Test
-        @DisplayName("corrige F36 — upload com Content-Type JSON (não multipart) responde 400, não 500")
+        @DisplayName("upload com Content-Type JSON (não multipart) responde 400, não 500")
         void upload_requisicaoNaoMultipart_400() throws Exception {
             mockMvc.perform(Requests.post("/api/admin/ponto/upload")
                             .header("Authorization", admin)
@@ -497,7 +479,7 @@ class PontoControllerTest {
     // ══ 2b) Vínculo da página (leitura tipada que PRESERVA o desvincular) ══
 
     /**
-     * O corpo do vínculo é opcional em dois sentidos diferentes, e é essa distinção que o F35 tinha de
+     * O corpo do vínculo é opcional em dois sentidos diferentes, e é essa distinção que a leitura tem de
      * respeitar: {@code pessoa_id} AUSENTE é a ordem de <b>desvincular</b> (o service devolve a página a
      * PENDENTE quando recebe {@code null}); {@code pessoa_id} presente com o tipo ERRADO é erro do
      * cliente. Um helper "campo obrigatório" aqui teria matado o desvincular — daí o teste-guardião.
@@ -526,12 +508,12 @@ class PontoControllerTest {
         }
 
         /**
-         * O guardião do trap do estágio: sem corpo, os DOIS campos chegam ao service como {@code null} —
+         * O teste-guardião: sem corpo, os DOIS campos chegam ao service como {@code null} —
          * é assim que o admin desfaz um vínculo errado. Se um dia alguém trocar a leitura por um helper
          * de campo obrigatório, este teste cai antes de a função sumir da tela.
          */
         @Test
-        @DisplayName("corrige F35 — PATCH sem corpo continua DESVINCULANDO: o service recebe null/null")
+        @DisplayName("PATCH sem corpo continua DESVINCULANDO: o service recebe null/null")
         void vincular_semCorpo_desvincula() throws Exception {
             when(pontoService.atualizarVinculo(eq(LOTE_ID), eq(PAGINA_ID), isNull(), isNull()))
                     .thenReturn(Map.of("id", LOTE_ID, "status_match", "PENDENTE"));
@@ -549,7 +531,7 @@ class PontoControllerTest {
          * um helper que confundisse "null" com "tipo inválido" teria quebrado — na tela, não no teste.
          */
         @Test
-        @DisplayName("corrige F35 — PATCH {\"pessoa_id\":null,\"pessoa_tipo\":null} (o corpo REAL do front) desvincula")
+        @DisplayName("PATCH {\"pessoa_id\":null,\"pessoa_tipo\":null} (o corpo REAL do front) desvincula")
         void vincular_nullsExplicitos_desvincula() throws Exception {
             when(pontoService.atualizarVinculo(eq(LOTE_ID), eq(PAGINA_ID), isNull(), isNull()))
                     .thenReturn(Map.of("id", LOTE_ID, "status_match", "PENDENTE"));
@@ -566,7 +548,7 @@ class PontoControllerTest {
 
         /** Idem com corpo vazio: {@code {}} não é "tipo errado", é ausência — desvincula igual. */
         @Test
-        @DisplayName("corrige F35 — PATCH com corpo {} também desvincula (ausência ≠ tipo errado)")
+        @DisplayName("PATCH com corpo {} também desvincula (ausência ≠ tipo errado)")
         void vincular_corpoVazio_desvincula() throws Exception {
             when(pontoService.atualizarVinculo(eq(LOTE_ID), eq(PAGINA_ID), isNull(), isNull()))
                     .thenReturn(Map.of("id", LOTE_ID, "status_match", "PENDENTE"));
@@ -587,7 +569,7 @@ class PontoControllerTest {
          * do erro nomeia o campo.
          */
         @Test
-        @DisplayName("corrige F35 — lista em pessoa_tipo → 400 nomeando o campo, service nunca chamado")
+        @DisplayName("lista em pessoa_tipo → 400 nomeando o campo, service nunca chamado")
         void vincular_tipoNaoTextual_400() throws Exception {
             mockMvc.perform(Requests.patch(ROTA)
                             .header("Authorization", admin)
@@ -601,7 +583,7 @@ class PontoControllerTest {
         }
 
         @Test
-        @DisplayName("corrige F35 — objeto em pessoa_id → 400 nomeando o campo, service nunca chamado")
+        @DisplayName("objeto em pessoa_id → 400 nomeando o campo, service nunca chamado")
         void vincular_idNaoTextual_400() throws Exception {
             mockMvc.perform(Requests.patch(ROTA)
                             .header("Authorization", admin)
@@ -650,7 +632,7 @@ class PontoControllerTest {
         }
 
         /**
-         * Inversão do {@code caracteriza F35} (C13): o desligamento do aviso era
+         * O desligamento do aviso era
          * {@code !Boolean.FALSE.equals(valor)}, então a STRING "false" — tipo errado, não booleano — não
          * desligava nada: o lote era publicado COM aviso, e a publicação dispara um aviso PESSOAL para
          * CADA pessoa da folha. O cliente pedia silêncio e recebia notificação em massa, sem erro.
@@ -660,7 +642,7 @@ class PontoControllerTest {
          * ANTES da publicação, não depois).
          */
         @Test
-        @DisplayName("corrige F35 — corpo {emitir_aviso:\"false\"} (string) → 400 nomeando o campo, sem publicar nada")
+        @DisplayName("corpo {emitir_aviso:\"false\"} (string) → 400 nomeando o campo, sem publicar nada")
         void publicar_emitirAvisoStringFalse_400() throws Exception {
             mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
                             .header("Authorization", admin)
@@ -675,7 +657,7 @@ class PontoControllerTest {
 
         /** Qualquer outro tipo no campo tem o mesmo destino — o número 0 não é "false" (nem 1 é "true"). */
         @Test
-        @DisplayName("corrige F35 — {emitir_aviso:0} (número) também é 400 nomeando o campo, sem publicar")
+        @DisplayName("{emitir_aviso:0} (número) também é 400 nomeando o campo, sem publicar")
         void publicar_emitirAvisoNumero_400() throws Exception {
             mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
                             .header("Authorization", admin)
@@ -689,7 +671,7 @@ class PontoControllerTest {
 
         /** Corpo presente, campo ausente: o default continua sendo emitir (o {@code null} não é "false"). */
         @Test
-        @DisplayName("corrige F35 — corpo sem o campo emitir_aviso mantém o default (publica COM aviso)")
+        @DisplayName("corpo sem o campo emitir_aviso mantém o default (publica COM aviso)")
         void publicar_corpoSemOCampo_emiteAviso() throws Exception {
             when(pontoService.publicar(LOTE_ID, true)).thenReturn(Map.of("publicado", true, "avisos", 12));
 
@@ -823,8 +805,7 @@ class PontoControllerTest {
     // ══ 5b) Retificação em LOTE (o único POST do funcionário com corpo estruturado) ══
 
     /**
-     * A rota de retificação estava fora da seleção enquanto era "mais um POST por dia". Desde o C10
-     * ela é o LOTE transacional (F39) — contrato NOVO, e o único caminho de gravação da retificação:
+     * A rota de retificação é o LOTE transacional — o único caminho de gravação da retificação:
      * o corpo carrega todos os dias, e uma recusa por dia tem de chegar ao usuário nomeando o dia.
      * Aqui trava-se o que é do CONTROLLER (o corpo cru chega inteiro ao service, o dono vem do token,
      * o 201 envelopa o resumo do lote e a recusa do service vira 400 com a frase intacta).
@@ -1015,14 +996,14 @@ class PontoControllerTest {
         }
 
         /**
-         * O caso mais feio do F35: {@code body.get("motivo").toString()} aceitava um OBJETO e gravava o
+         * O caso mais feio: {@code body.get("motivo").toString()} aceitava um OBJETO e gravava o
          * literal {@code "{a=1}"} como motivo da rejeição — passava na obrigatoriedade e no teto de 300
          * do service, e o funcionário lia aquilo como justificativa. Agora o controller exige texto
          * quando o campo vem; a OBRIGATORIEDADE continua sendo do service (não é duplicada aqui — o
          * teste do "sem corpo" acima prova que o {@code null} segue chegando lá).
          */
         @Test
-        @DisplayName("corrige F35 — objeto em motivo → 400 nomeando o campo, service nunca chamado (nada é gravado)")
+        @DisplayName("objeto em motivo → 400 nomeando o campo, service nunca chamado (nada é gravado)")
         void rejeitar_motivoNaoTextual_400() throws Exception {
             mockMvc.perform(Requests.post("/api/admin/ponto/banco/solicitacao/" + SOLICITACAO_ID + "/rejeitar")
                             .header("Authorization", admin)
@@ -1108,7 +1089,7 @@ class PontoControllerTest {
         }
 
         /**
-         * Contraste deliberado com o binding do F6: aqui page/limit são {@code @RequestParam String}
+         * Contraste deliberado com o handler de binding inválido: aqui page/limit são {@code @RequestParam String}
          * passados pelo {@code getInt}, que ENGOLE o lixo e cai no default (1/25) — não é 400. E um
          * {@code filters} que não é JSON vira {@code null} no {@code parseJson}, também sem erro. É o
          * contrato atual das listagens; só os params tipados ({@code int}) devolvem 400.
@@ -1148,7 +1129,7 @@ class PontoControllerTest {
             when(bancoHorasService.enriquecerRowsParaRelatorioSolicitacoesAdmin(cruas)).thenReturn(enriquecidas);
             when(pdfService.gerarRelatorioSolicitacoesAdmin(enriquecidas)).thenReturn(pdf);
             when(docxService.gerarRelatorioSolicitacoesAdmin(enriquecidas)).thenReturn(docx);
-            // respond devolve ResponseEntity<?> (wildcard) → doReturn evita o problema de captura de tipo (T16).
+            // respond devolve ResponseEntity<?> (wildcard) → doReturn evita o problema de captura de tipo.
             doReturn(ResponseEntity.ok(RESPOSTA_REPORT_SERVICE))
                     .when(reportService).respond(anyString(), anyString(), any(), any());
 
@@ -1163,17 +1144,17 @@ class PontoControllerTest {
         }
     }
 
-    // ══ 9) Binding inválido → 400 (F6, corrigido no C4) ════════════════════
+    // ══ 9) Binding inválido → 400 ══════════════════════════════════════════
 
     @Nested
-    @DisplayName("corrige F6 — requisição malformada responde 400 no shape padrão, não 500")
+    @DisplayName("requisição malformada responde 400 no shape padrão, não 500")
     class BindingInvalido {
 
         @Test
         @DisplayName("GET /api/admin/ponto/marcacoes — param tipado com lixo (?ano=abc) dá 400, e o service não é chamado")
         void paramTipadoInvalido_400() throws Exception {
             // ano/mes são @RequestParam int: valor não-numérico → MethodArgumentTypeMismatchException,
-            // hoje tratada pelo handler de requisição malformada (F6, corrigido no C4) → 400.
+            // tratada pelo handler de requisição malformada → 400.
             mockMvc.perform(Requests.get("/api/admin/ponto/marcacoes")
                             .param("ano", "abc").param("mes", "7")
                             .header("Authorization", admin))

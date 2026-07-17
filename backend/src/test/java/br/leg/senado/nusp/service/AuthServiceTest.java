@@ -33,29 +33,17 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Unitário de {@link AuthService} — reescrito parcialmente no T18 (§2.3).
+ * Unitário de {@link AuthService}: os métodos puros e baratos —
+ * {@code canEditObs*}/{@code isMaster}, {@code temFolhaPonto}, {@code getFotoUrl} e
+ * {@code verifyPassword}.
  *
- * <p>Três mudanças em relação ao estado do T17:</p>
- * <ol>
- *   <li><b>Deps completadas.</b> {@code TecnicoRepository} e {@code JwtTokenProvider}
- *       ficavam {@code null} no SUT (A1); entram como {@code @Mock} — o ramo
- *       {@code getFotoUrl("tecnico")} passa a ser exercitável.</li>
- *   <li><b>Falso verde eliminado (§2.3).</b> {@code getFotoUrl("administrador")}
- *       passava por acaso: sem stub de {@code findFotoUrlById}, o default do Mockito
- *       ({@code Optional.empty()} → {@code ""}) coincidia com o valor esperado. Agora
- *       o ramo é stubado com uma URL <b>não-vazia</b> e o teste asserta esse valor
- *       (mutar o stub o faz falhar — item E do estágio).</li>
- *   <li><b>{@code findUserForLogin} removido do unitário.</b> Era o padrão
- *       EntityManager-mockado morto (SQL passava sem verificação, acoplado à ordem
- *       das colunas do {@code Object[]}); a cobertura real do UNION ALL/precedência
- *       está no {@code AuthServiceIT} (T13, contra Oracle real).</li>
- * </ol>
- *
- * <p>Escopo estrito (uma das MENORES etapas do plano): estende apenas os puros
- * baratos do briefing — {@code canEditObs*}/{@code isMaster} e {@code temFolhaPonto}
- * completo. {@code isSenhaProvisoria}/{@code changePassword}/{@code createSession}/
- * {@code revokeSession}/{@code validarHtmlGuard} ficam fora do default (lacunas
- * conhecidas da §2.3, retomáveis em iteração futura).</p>
+ * <p>{@code findUserForLogin} não é testado aqui: com EntityManager mockado o SQL
+ * passaria sem verificação — a cobertura real do UNION ALL/precedência está no
+ * {@code AuthServiceIT}, contra Oracle real. Em {@code getFotoUrl}, os ramos são
+ * stubados com URL <b>não-vazia</b>: o default do Mockito ({@code Optional.empty()}
+ * → {@code ""}) coincidiria com o valor esperado e produziria um falso verde.
+ * {@code isSenhaProvisoria}/{@code changePassword}/{@code createSession}/
+ * {@code revokeSession}/{@code validarHtmlGuard} ficam fora deste unitário.</p>
  */
 @ExtendWith(MockitoExtension.class)
 class AuthServiceTest {
@@ -73,13 +61,13 @@ class AuthServiceTest {
 
     @BeforeEach
     void configurarUsernamesAdministrativos() {
-        // @Value não é injetado por @InjectMocks — semeado por reflexão (padrão §2.1).
+        // @Value não é injetado por @InjectMocks — semeado por reflexão.
         ReflectionTestUtils.setField(service, "supervisorUsername", "supervisor.teste");
         ReflectionTestUtils.setField(service, "chefeUsername", "chefe.teste");
         ReflectionTestUtils.setField(service, "masterUsername", "master.teste");
     }
 
-    // ══ verifyPassword (mantidos do T17) ══════════════════════════════════════
+    // ══ verifyPassword ════════════════════════════════════════════════════════
 
     @Test
     @DisplayName("verifyPassword — senha correta retorna true")
@@ -118,9 +106,9 @@ class AuthServiceTest {
         }
 
         @Test
-        @DisplayName("administrador com foto — devolve a URL (falso verde §2.3 eliminado: stub NÃO-vazio asserido)")
+        @DisplayName("administrador com foto — devolve a URL (falso verde eliminado: stub NÃO-vazio asserido)")
         void admin_comFoto() {
-            // Item E do estágio: URL não-vazia, diferente do default do Mockito.
+            // URL não-vazia, diferente do default do Mockito.
             // Mutar este stub para outro valor DEVE quebrar a asserção abaixo.
             when(administradorRepository.findFotoUrlById("uuid-adm"))
                     .thenReturn(Optional.of("/files/administradores/adm.jpg"));
@@ -132,7 +120,7 @@ class AuthServiceTest {
         void admin_semFoto() {
             when(administradorRepository.findFotoUrlById("uuid-adm")).thenReturn(Optional.empty());
             assertEquals("", service.getFotoUrl("uuid-adm", "administrador"));
-            // §0.5(a): o esperado "" coincide com o .orElse("") do default do Mockito; sem este
+            // O esperado "" coincide com o .orElse("") do default do Mockito; sem este
             // verify, o teste passaria mesmo se getFotoUrl devolvesse "" ignorando o repositório.
             verify(administradorRepository).findFotoUrlById("uuid-adm");
         }
@@ -171,7 +159,7 @@ class AuthServiceTest {
             Query q = mockServidorPublico(1);
             assertFalse(service.temFolhaPonto("administrador", "uuid-adm"));
             verify(entityManager).createNativeQuery(contains("SERVIDOR_PUBLICO"));
-            verify(q).setParameter("id", "uuid-adm"); // §0.5(c): o id certo chega ao bind
+            verify(q).setParameter("id", "uuid-adm"); // o id certo chega ao bind
         }
 
         @Test
@@ -180,11 +168,11 @@ class AuthServiceTest {
             Query q = mockServidorPublico(0);
             assertTrue(service.temFolhaPonto("administrador", "uuid-adm"));
             verify(entityManager).createNativeQuery(contains("SERVIDOR_PUBLICO"));
-            verify(q).setParameter("id", "uuid-adm"); // §0.5(c): o id certo chega ao bind
+            verify(q).setParameter("id", "uuid-adm"); // o id certo chega ao bind
         }
 
-        /** Stub disciplinado (§0.5): SQL casado por fragmento e valor ≠ default do Mockito;
-         *  devolve o Query para o verify do binding do id (§0.5(c)). */
+        /** Stub disciplinado: SQL casado por fragmento e valor ≠ default do Mockito;
+         *  devolve o Query para o verify do binding do id. */
         private Query mockServidorPublico(int valor) {
             Query mockQuery = mock(Query.class);
             when(entityManager.createNativeQuery(contains("SERVIDOR_PUBLICO"))).thenReturn(mockQuery);

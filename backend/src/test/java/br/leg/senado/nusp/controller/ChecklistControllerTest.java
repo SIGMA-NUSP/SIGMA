@@ -33,7 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contrato HTTP representativo do {@link ChecklistController} (T17).
+ * Contrato HTTP representativo do {@link ChecklistController}.
  *
  * <p>Cobre criação, lookup público, edição com identidade exata, validação
  * inline e o 404/403 real do service. Regras de negócio permanecem mockadas.</p>
@@ -173,7 +173,7 @@ class ChecklistControllerTest {
         @Test
         @DisplayName("operador adicional — contrato real de edição continua 403 forbidden")
         void operadorAdicional_403() throws Exception {
-            // T5: o pré-gate de criado_por barra o adicional antes da junction.
+            // O pré-gate de criado_por barra o adicional antes da junction.
             Map<String, Object> body = Map.of("checklist_id", 43);
             when(checklistService.editar(43L, body, TokenFactory.USER_ID))
                     .thenThrow(new ServiceValidationException("forbidden", HttpStatus.FORBIDDEN));
@@ -191,10 +191,10 @@ class ChecklistControllerTest {
     }
 
     @Test
-    @DisplayName("corrige F6 — binding inválido responde 400 no shape padrão de erro")
-    void bindingInvalido_corrigeF6_400() throws Exception {
-        // @RequestBody malformado → HttpMessageNotReadableException, agora tratada pelo handler
-        // de requisição malformada do GlobalExceptionHandler → 400. Achado F6 da §5 (C4).
+    @DisplayName("binding inválido responde 400 no shape padrão de erro")
+    void bindingInvalido_400() throws Exception {
+        // @RequestBody malformado → HttpMessageNotReadableException, tratada pelo handler
+        // de requisição malformada do GlobalExceptionHandler → 400.
         mockMvc.perform(Requests.post("/api/forms/checklist/registro")
                         .header("Authorization", operador)
                         .contentType(MediaType.APPLICATION_JSON)

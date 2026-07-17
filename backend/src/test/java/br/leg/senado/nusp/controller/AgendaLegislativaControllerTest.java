@@ -29,11 +29,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contrato dos endpoints de leitura do {@link AgendaLegislativaController}
- * (T17), com datas fixas e {@link AgendaLegislativaService} mockado.
- *
- * O SSE {@code /api/agenda/stream} fica deliberadamente fora: a decisão do
- * plano exclui a assincronia do {@code SseEmitter} deste slice.
+ * Contrato dos endpoints de leitura do {@link AgendaLegislativaController}, com datas fixas
+ * e {@link AgendaLegislativaService} mockado. O SSE {@code /api/agenda/stream} fica
+ * deliberadamente fora deste slice (assincronia do {@code SseEmitter}).
  */
 @SigmaControllerTest(AgendaLegislativaController.class)
 class AgendaLegislativaControllerTest {
@@ -89,11 +87,10 @@ class AgendaLegislativaControllerTest {
     }
 
     @Test
-    @DisplayName("corrige F6 — binding inválido responde 400 no shape padrão de erro")
-    void bindingInvalido_corrigeF6_400() throws Exception {
+    @DisplayName("binding inválido responde 400 no shape padrão de erro")
+    void bindingInvalido_400() throws Exception {
         // data usa LocalDate.parse no controller: formato não ISO gera DateTimeParseException,
-        // agora tratada pelo handler de requisição malformada do GlobalExceptionHandler → 400.
-        // Achado F6 da §5 do plano (test-implementation-plan-2026-07.md) — corrigido no C4.
+        // tratada pelo handler de requisição malformada do GlobalExceptionHandler → 400.
         mockMvc.perform(Requests.get("/api/agenda/hoje?data=09-07-2026")
                         .header("Authorization", operador))
                 .andExpect(status().isBadRequest())

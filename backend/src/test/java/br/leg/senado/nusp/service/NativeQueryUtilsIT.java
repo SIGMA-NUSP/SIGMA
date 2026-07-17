@@ -24,7 +24,7 @@ import jakarta.persistence.EntityManager;
  *
  * {@code isDonoOuAdicional} é o gate de edição de checklist e de entrada de
  * operação: os nomes de tabela/coluna são interpolados por String.format, então
- * cada um dos 2 call sites reais (ChecklistService:97 e OperacaoService:54) é
+ * cada um dos 2 call sites reais (ChecklistService e OperacaoService) é
  * exercitado com os seus argumentos literais — um erro de nome de coluna aqui só
  * aparece contra o banco real.
  */

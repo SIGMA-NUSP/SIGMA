@@ -33,13 +33,13 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Contrato do {@link RetificacaoService} — que desde o C10 grava SEMPRE em LOTE
- * ({@code {"dias":[…]}}), numa única transação (F39).
+ * Contrato do {@link RetificacaoService} — grava SEMPRE em LOTE ({@code {"dias":[…]}}), numa única
+ * transação.
  *
- * <p>O que o unitário prova aqui: a validação por dia (as mesmas regras de antes, agora nomeando
- * o DIA na recusa), a leitura guardada do corpo (shape torto → 400, não 500) e o fato de que o
- * primeiro dia recusado INTERROMPE o lote. A atomicidade propriamente dita — o rollback dos dias
- * já gravados — é do container, e por isso vive no {@code PontoRetificacaoLoteIT} (Oracle real).
+ * <p>O que o unitário prova aqui: a validação por dia (nomeando o DIA na recusa), a leitura
+ * guardada do corpo (shape torto → 400, não 500) e o fato de que o primeiro dia recusado
+ * INTERROMPE o lote. A atomicidade propriamente dita — o rollback dos dias já gravados — é do
+ * container, e por isso vive no {@code PontoRetificacaoLoteIT} (Oracle real).
  */
 @ExtendWith(MockitoExtension.class)
 class RetificacaoServiceTest {
@@ -54,7 +54,7 @@ class RetificacaoServiceTest {
     private static final String PAG = "pag-1";
     private static final String LOTE = "lote-1";
     private static final String DONO = "op-1";
-    /** Período do lote de todas as folhas mockadas aqui — as bordas que a listagem tem de repassar (F32). */
+    /** Período do lote de todas as folhas mockadas aqui — as bordas que a listagem tem de repassar. */
     private static final LocalDate INICIO = LocalDate.of(2026, 6, 1);
     private static final LocalDate FIM = LocalDate.of(2026, 6, 30);
     private static final DateTimeFormatter BR = DateTimeFormatter.ofPattern("dd/MM/yyyy");
@@ -88,7 +88,7 @@ class RetificacaoServiceTest {
     }
 
     /**
-     * Stub da chave de LEITURA da listagem (F32): pessoa + tipo + período DA FOLHA CONSULTADA.
+     * Stub da chave de LEITURA da listagem: pessoa + tipo + período DA FOLHA CONSULTADA.
      * Os argumentos são EXATOS de propósito — se o service passar outra pessoa, outro pessoa_tipo ou
      * outro período, o stub não casa, o Mockito devolve lista vazia e o teste que espera conteúdo cai.
      */
@@ -133,7 +133,7 @@ class RetificacaoServiceTest {
         return r;
     }
 
-    /** Retificação ANCORADA EM OUTRA PÁGINA (outra folha publicada da mesma pessoa) — o caso do F32. */
+    /** Retificação ANCORADA EM OUTRA PÁGINA (outra folha publicada da mesma pessoa). */
     private static PontoRetificacao retificacaoDaPagina(String paginaId, LocalDate data,
                                                         String e1, String s1) {
         PontoRetificacao r = retificacao(data, e1, s1, null, null, null);
@@ -332,7 +332,7 @@ class RetificacaoServiceTest {
     }
 
     @Test
-    @DisplayName("1º par incompleto (entrada sem saída) e 2º par sem o 1º → 400 (as outras duas cláusulas do Q32)")
+    @DisplayName("1º par incompleto (entrada sem saída) e 2º par sem o 1º → 400")
     void paresIncompletos() {
         mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
 
@@ -350,7 +350,7 @@ class RetificacaoServiceTest {
     }
 
     @Test
-    @DisplayName("corrige F31 — zero horários → 400 nomeando o dia e o par exigido; NADA persiste")
+    @DisplayName("zero horários → 400 nomeando o dia e o par exigido; NADA persiste")
     void zeroHorariosRecusado() {
         // A regra 0/2/4 aceitava os 4 nulos (par de nulos é "completo" por vacuidade) e nascia uma
         // retificação VAZIA: a jusante ela vence a precedência da grade e da planilha da chefia, o
@@ -370,10 +370,10 @@ class RetificacaoServiceTest {
     }
 
     @Test
-    @DisplayName("corrige F31 — o par 2 sozinho continua recusado (Q32): o mínimo é o par 1, e as colunas são sequenciais")
+    @DisplayName("o par 2 sozinho continua recusado: o mínimo é o par 1, e as colunas são sequenciais")
     void parMinimoEhOPar1() {
-        // O "≥1 par completo" NÃO relaxou o Q32: ENT.2/SAÍ.2 são a SEGUNDA entrada/saída do dia,
-        // não "o turno da tarde" — um dia de duas marcações é sempre o par 1.
+        // O "≥1 par completo" NÃO relaxa a sequência: ENT.2/SAÍ.2 são a SEGUNDA entrada/saída do
+        // dia, não "o turno da tarde" — um dia de duas marcações é sempre o par 1.
         mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
@@ -385,11 +385,11 @@ class RetificacaoServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // corrige F33 — observação: teto de 300 caracteres (a coluna é VARCHAR2(2000) em BYTES)
+    // observação: teto de 300 caracteres (a coluna é VARCHAR2(2000) em BYTES)
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("corrige F33 — observação de 300 caracteres passa (o limite é inclusivo)")
+    @DisplayName("observação de 300 caracteres passa (o limite é inclusivo)")
     void observacaoNoLimitePassa() {
         mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
         when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(anyString(), anyString(), any()))
@@ -404,7 +404,7 @@ class RetificacaoServiceTest {
     }
 
     @Test
-    @DisplayName("corrige F33 — observação de 301 caracteres → 400 nomeando o CAMPO e o dia; nada persiste")
+    @DisplayName("observação de 301 caracteres → 400 nomeando o CAMPO e o dia; nada persiste")
     void observacaoAcimaDoLimiteRecusada() {
         // Antes: o texto ia cru ao banco, o ORA-12899 virava DataIntegrityViolationException e o catch
         // (escrito para a UK) respondia "O dia … já foi retificado." — o usuário ia embora convencido
@@ -530,7 +530,7 @@ class RetificacaoServiceTest {
     }
 
     @Test
-    @DisplayName("corrige F33 — violação de integridade que NÃO é a UK não é capturada: sobe (500 honesto), em vez de mentir 'já foi retificado'")
+    @DisplayName("violação de integridade que NÃO é a UK não é capturada: sobe (500 honesto), em vez de mentir 'já foi retificado'")
     void violacaoQueNaoEhAUkNaoViraJaRetificado() {
         // O catch antigo assumia que TODA DataIntegrityViolationException era a corrida da UK — e
         // respondia "O dia … já foi retificado.", mandando o usuário embora convencido de que gravou,
@@ -563,11 +563,11 @@ class RetificacaoServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // corrige F39 — a gravação é um LOTE só (contrato e interrupção)
+    // a gravação é um LOTE só (contrato e interrupção)
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("corrige F39 — lote de 3 dias válidos: os 3 são gravados na MESMA chamada, e a folha é resolvida UMA vez")
+    @DisplayName("lote de 3 dias válidos: os 3 são gravados na MESMA chamada, e a folha é resolvida UMA vez")
     void loteValidoGravaTodosOsDias() {
         mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
         when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(eq(DONO), eq("OPERADOR"), any()))
@@ -591,7 +591,7 @@ class RetificacaoServiceTest {
     }
 
     @Test
-    @DisplayName("corrige F39 — dia recusado NO MEIO do lote interrompe tudo: o 3º nem é tentado e a recusa nomeia o 2º")
+    @DisplayName("dia recusado NO MEIO do lote interrompe tudo: o 3º nem é tentado e a recusa nomeia o 2º")
     void diaRecusadoInterrompeOLote() {
         mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
         when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", LocalDate.of(2026, 6, 15)))
@@ -617,7 +617,7 @@ class RetificacaoServiceTest {
     }
 
     @Test
-    @DisplayName("corrige F39 — o mesmo dia repetido DENTRO do corpo é recusado (a UK só veria o 2º INSERT)")
+    @DisplayName("o mesmo dia repetido DENTRO do corpo é recusado (a UK só veria o 2º INSERT)")
     void diaRepetidoNoProprioLote() {
         mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
         when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", LocalDate.of(2026, 6, 15)))
@@ -749,17 +749,17 @@ class RetificacaoServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // corrige F32 — a listagem lê pela chave da UK (pessoa+tipo+dia), recortada pelo PERÍODO da folha
+    // a listagem lê pela chave da UK (pessoa+tipo+dia), recortada pelo PERÍODO da folha
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("corrige F32 — retificação ancorada em OUTRA folha da mesma pessoa APARECE na listagem, e o limite continua sendo o da folha consultada")
+    @DisplayName("retificação ancorada em OUTRA folha da mesma pessoa APARECE na listagem, e o limite continua sendo o da folha consultada")
     void retificacaoDeOutraFolhaAparece() {
         // O caso vivido: semanais cumulativas (01–05, 01–12…) dão à mesma pessoa 2 folhas publicadas
         // cobrindo o mesmo dia. A listagem filtrava por PAGINA_ID e a gravação valida pela UK
         // (pessoa+tipo+dia): na folha B o dia retificado pela folha A vinha LIVRE e habilitado, e o
         // envio levava 400 "já foi retificado" sem nenhuma retificação visível na tela — sem edição
-        // nem exclusão na v1 (Q1), o dia ficava congelado sem explicação.
+        // nem exclusão na v1, o dia ficava congelado sem explicação.
         LocalDateTime pub = LocalDateTime.now();
         mockFolha(DONO, pub, "PUBLICADO");
         mockListagem(DONO, "OPERADOR",
@@ -772,15 +772,15 @@ class RetificacaoServiceTest {
         assertEquals(1, lista.size(), "o dia retificado por OUTRA folha da mesma pessoa tem de aparecer aqui");
         assertEquals("2026-06-05", lista.get(0).get("data"));
         assertEquals("08:00", lista.get(0).get("ent1"));
-        // …e o prazo continua sendo o DESTA folha (§4.2: a janela é da folha consultada, não da que
-        // ancorou a retificação) — o shape da resposta não mudou.
+        // …e o prazo continua sendo o DESTA folha: a janela é da folha consultada, não da que
+        // ancorou a retificação.
         assertEquals(pub.toLocalDate().plusDays(5).toString(), out.get("limite"));
         assertEquals(pub.toLocalDate().plusDays(5).format(BR), out.get("limite_fmt"));
         assertEquals(Boolean.FALSE, out.get("prazo_expirado"));
     }
 
     @Test
-    @DisplayName("corrige F32 — a consulta usa as 4 chaves certas: dono + pessoa_tipo da página + as BORDAS EXATAS do período do lote")
+    @DisplayName("a consulta usa as 4 chaves certas: dono + pessoa_tipo da página + as BORDAS EXATAS do período do lote")
     void listagemConsultaPessoaTipoEPeriodoDoLote() {
         mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
         mockListagem(DONO, "OPERADOR");
@@ -803,7 +803,7 @@ class RetificacaoServiceTest {
     }
 
     @Test
-    @DisplayName("corrige F32 — o pessoa_tipo da CONSULTA também vem da página: a folha do técnico lista como TECNICO")
+    @DisplayName("o pessoa_tipo da CONSULTA também vem da página: a folha do técnico lista como TECNICO")
     void listagemUsaPessoaTipoDaPagina() {
         // O tipo hardcoded ("OPERADOR") passaria despercebido nas folhas de operador e devolveria
         // lista vazia para todo técnico — que veria seus dias já retificados como livres.

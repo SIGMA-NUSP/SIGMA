@@ -27,18 +27,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contrato HTTP do {@link MetabaseDashboardController} (T16).
+ * Contrato HTTP do {@link MetabaseDashboardController}.
  *
  * Segurança real (filtro + matcher /api/admin/**); {@link MetabaseEmbedService}
  * mockado — aqui NÃO se testa regra de negócio, só o contrato de resposta.
- * O RBAC papel×rota já está provado na matriz do T15 (este controller é o
- * representativo admin de lá) → não se duplica.
- *
- * Das famílias (a)–(f) do T16, este controller só exercita as aplicáveis: os
- * 2 endpoints são triviais e homogêneos (sem guard manual, sem 404 de detalhe,
- * sem binding tipado obrigatório além do path String, sem paginação). Cobre-se
- * o shape de cada um (200) e o mapeamento service→HTTP via
- * {@code GlobalExceptionHandler} (família c).
+ * Os 2 endpoints são triviais e homogêneos: cobre-se o shape de cada um (200)
+ * e o mapeamento service→HTTP via {@code GlobalExceptionHandler}.
  */
 @SigmaControllerTest(MetabaseDashboardController.class)
 class MetabaseDashboardControllerTest {

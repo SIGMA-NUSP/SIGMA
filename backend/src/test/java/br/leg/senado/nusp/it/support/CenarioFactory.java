@@ -33,7 +33,7 @@ import br.leg.senado.nusp.service.NativeQueryUtils;
 import jakarta.persistence.EntityManager;
 
 /**
- * Fixtures mínimas reutilizáveis dos testes de integração (FASE C).
+ * Fixtures mínimas reutilizáveis dos testes de integração.
  *
  * O clone NUSP_TEST vem vazio: cada teste semeia o próprio grafo e confia no
  * rollback do {@code @DataJpaTest}. Todo helper termina com {@code em.flush()}
@@ -449,7 +449,7 @@ public final class CenarioFactory {
         return lote;
     }
 
-    /** Lote de cartão-ponto JÁ PUBLICADO — a folha oficial que ancora o banco de horas da pessoa (E2). */
+    /** Lote de cartão-ponto JÁ PUBLICADO — a folha oficial que ancora o banco de horas da pessoa. */
     public static PontoLote novoLotePontoPublicado(EntityManager em, String tipo, LocalDate dataInicio,
             LocalDate dataFim, Administrador criadoPor) {
         PontoLote lote = novoLotePonto(em, tipo, dataInicio, dataFim, criadoPor);

@@ -28,8 +28,8 @@ import br.leg.senado.nusp.security.JwtTokenProvider;
  *
  * O post-processor user() do spring-security-test não funciona neste
  * backend — o filtro ignora SecurityContext pré-populado e os controllers
- * exigem {@code @AuthenticationPrincipal UserPrincipal} (decisão D6 do
- * plano de testes; request autenticada = token do {@link TokenFactory}).
+ * exigem {@code @AuthenticationPrincipal UserPrincipal} — request
+ * autenticada = token do {@link TokenFactory}.
  *
  * O filtro exige um bean {@link AuthSessionRepository}: o mock é registrado
  * aqui na meta-anotação ({@code @MockitoBean(types=...)}), mas o default do

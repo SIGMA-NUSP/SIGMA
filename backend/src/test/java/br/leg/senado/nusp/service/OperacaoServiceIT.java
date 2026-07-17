@@ -35,18 +35,16 @@ import br.leg.senado.nusp.repository.SuspensaoRepository;
 import jakarta.persistence.EntityManager;
 
 /**
- * ITs da SEMÂNTICA dos UPDATEs de {@link OperacaoService} contra Oracle real (§4.3) — o que o T6
- * travou só por contrato de chamada. Foco nos flags {@code *_EDITADO} sticky (CASE/NVL reais), na
- * propagação dos campos compartilhados da sessão, no NOME_DEMAIS_SALAS e no histórico obrigatório.
+ * ITs da SEMÂNTICA dos UPDATEs de {@link OperacaoService} contra Oracle real: flags
+ * {@code *_EDITADO} sticky (CASE/NVL reais), propagação dos campos compartilhados da sessão,
+ * NOME_DEMAIS_SALAS e histórico obrigatório.
  *
- * <p>O SUT é construído à mão (EntityManager + repositories reais do slice + ObjectMapper). O
- * {@code @Transactional} é inerte nesse arranjo (sem proxy — limitação da FASE C); o que se prova
- * aqui é o SQL/persistência dentro da transação do próprio teste. Toda releitura de
- * OPR_REGISTRO_AUDIO é por SQL nativo — contorno do F14 (a leitura JPA dos {@code Instant}
- * FECHADO_EM/CRIADO_EM morria com ORA-18716 até o C5 curar; mantido por escolha, não por
- * necessidade); as ENTRADAS ({@code LocalDateTime}) usam {@code em.find}.
- * {@code flush()} antes de {@code clear()} garante que o histórico (persist pendente) e os
- * dirty-checks materializem antes da releitura (gotcha 17).
+ * <p>O SUT é construído à mão (EntityManager + repositories reais do slice + ObjectMapper);
+ * nesse arranjo o {@code @Transactional} do service é inerte (sem proxy) — o que se prova é o
+ * SQL/persistência dentro da transação do próprio teste. A releitura de OPR_REGISTRO_AUDIO é
+ * por SQL nativo; as ENTRADAS ({@code LocalDateTime}) usam {@code em.find}. {@code flush()}
+ * antes de {@code clear()} garante que persists pendentes e dirty-checks materializem antes
+ * da releitura.
  */
 @OracleIT
 class OperacaoServiceIT {
@@ -103,7 +101,7 @@ class OperacaoServiceIT {
         e.setNomeEvento(nomeEvento);
         e.setHorarioInicio(horaInicio);
         e.setResponsavelEvento(responsavel);
-        // Invariante F73 (C19): toda entrada tem ≥1 término; os bodies de edição reenviam
+        // Invariante: toda entrada tem ≥1 término; os bodies de edição reenviam
         // o MESMO valor para a flag HORA_SAIDA_EDITADO não ligar (NVL(old) = NVL(new)).
         e.setHoraSaida("18:00:00");
         e.setTipoEvento(TipoEvento.OPERACAO);
@@ -147,7 +145,7 @@ class OperacaoServiceIT {
         return emReal().find(RegistroOperacaoOperador.class, id);
     }
 
-    /** [DATA, DATA_EDITADO, NOME_DEMAIS_SALAS] por SQL nativo — OPR_REGISTRO_AUDIO tem Instant (F14). */
+    /** [DATA, DATA_EDITADO, NOME_DEMAIS_SALAS] por SQL nativo — OPR_REGISTRO_AUDIO tem Instant. */
     private Object[] lerRegistroAudio(Long id) {
         emReal().flush();
         emReal().clear();
@@ -350,8 +348,8 @@ class OperacaoServiceIT {
     }
 
     @Nested
-    @DisplayName("corrige F73 (C19) — invariante de presença de término em Oracle real")
-    class PresencaDeTerminoF73 {
+    @DisplayName("invariante de presença de término em Oracle real")
+    class PresencaDeTermino {
 
         @Test
         @DisplayName("editarEntrada que RESULTARIA em nenhum término recusa 400 e nada muda no banco")
@@ -362,7 +360,7 @@ class OperacaoServiceIT {
             RegistroOperacaoOperador entrada = entradaEditavel(registro, dono, 1, "Evento", "09:00:00", "Resp");
 
             // body sem hora_fim e sem hora_saida: a edição sobrescreveria os DOIS términos com
-            // NULL — exatamente a entrada "sem fim" que degenerava a faxina (F17)
+            // NULL — exatamente a entrada "sem fim" que degenerava a faxina
             br.leg.senado.nusp.exception.ServiceValidationException ex = org.junit.jupiter.api.Assertions
                     .assertThrows(br.leg.senado.nusp.exception.ServiceValidationException.class,
                             () -> service.editarEntrada(entrada.getId(),

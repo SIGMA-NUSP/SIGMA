@@ -39,9 +39,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * Matriz RBAC — controllers MISTOS: sem @RequestMapping de classe, misturam
- * rotas /api/admin/... e comuns no MESMO arquivo (achado F2 do plano — a
- * única regra de papel é o matcher /api/admin/** do SecurityConfig; a matriz
- * vigia esse estado). O caso-chave: no mesmo controller, a rota admin exige
+ * rotas /api/admin/... e comuns no MESMO arquivo — a única regra de papel
+ * é o matcher /api/admin/** do SecurityConfig, e a matriz vigia esse
+ * estado. O caso-chave: no mesmo controller, a rota admin exige
  * ADMINISTRADOR e a rota comum aceita qualquer papel autenticado.
  *
  * Representativo desta classe de rota: EscalaSemanalController.
@@ -71,7 +71,7 @@ class RbacMatrixMistoTest {
                 .thenReturn(Map.of("data", List.of(), "meta", Map.of()));
         when(avisoService.listarTodosPaginado(1, 10, "", "data", "desc", null))
                 .thenReturn(new DashboardQueryHelper.PagedResult(List.of(), 0, Map.of()));
-        // /api/avisos/pendentes toleraria o default (lista vazia), mas o stub é explícito (§0.5).
+        // /api/avisos/pendentes toleraria o default (lista vazia), mas o stub é explícito.
         when(avisoService.buscarPendentes(anyString(), any(PapelPessoa.class), anyString()))
                 .thenReturn(List.of());
     }

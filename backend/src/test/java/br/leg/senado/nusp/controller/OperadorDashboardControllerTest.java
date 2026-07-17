@@ -34,14 +34,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contrato HTTP do {@link OperadorDashboardController} (T17).
+ * Contrato HTTP do {@link OperadorDashboardController}.
  *
- * Segurança real e services 100% mockados. O RBAC papel×rota já foi
- * provado no T15; aqui se cobre o repasse da identidade/paginação e o
- * mapeamento dos gates reais do {@link OperadorDashboardService}. Para cada
- * recurso, o service decide 404 antes de 403 e lança
- * {@link ServiceValidationException}; o retorno {@code null} tolerado pelo
- * controller não é usado para simular ausência, pois não é o contrato real.
+ * Segurança real e services 100% mockados. Cobre o repasse da
+ * identidade/paginação e o mapeamento dos gates reais do
+ * {@link OperadorDashboardService}. Para cada recurso, o service decide 404
+ * antes de 403 e lança {@link ServiceValidationException}; o retorno
+ * {@code null} tolerado pelo controller não é usado para simular ausência,
+ * pois não é o contrato real.
  */
 @SigmaControllerTest(OperadorDashboardController.class)
 class OperadorDashboardControllerTest {
@@ -223,11 +223,10 @@ class OperadorDashboardControllerTest {
     }
 
     @Test
-    @DisplayName("corrige F6 — binding inválido responde 400 no shape padrão de erro")
-    void bindingInvalido_corrigeF6_400() throws Exception {
+    @DisplayName("binding inválido responde 400 no shape padrão de erro")
+    void bindingInvalido_400() throws Exception {
         // checklist_id é @RequestParam obrigatório: ausente gera MissingServletRequestParameterException,
         // agora tratada pelo handler de requisição malformada do GlobalExceptionHandler → 400.
-        // Achado F6 da §5 do plano (test-implementation-plan-2026-07.md) — corrigido no C4.
         mockMvc.perform(Requests.get("/api/operador/checklist/detalhe")
                         .header("Authorization", operador))
                 .andExpect(status().isBadRequest())

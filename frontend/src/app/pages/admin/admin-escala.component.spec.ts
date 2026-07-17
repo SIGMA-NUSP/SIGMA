@@ -8,25 +8,14 @@ import { LookupService, LookupItem } from '../../core/services/lookup.service';
 import { ToastService } from '../../shared/components/toast.component';
 
 /**
- * T24 — AdminEscalaComponent (page, 613 LOC — editor de escala semanal; §A5).
- *
- * Estratégia (manual de PAGE do T22/T23): TestBed cria o componente (DI + signals) SEM
- * `detectChanges()`; a lógica é exercitada por chamada direta. Services mockados via
- * `useValue` (padrão T21); `LookupService` com signals writable (`salas`/`operadores`) que
- * os computeds leem direto. Prioridade na LÓGICA PURA (A5): rodízio, inversão de turno,
- * seleção com Map/Set.
- *
- * ⚠️ Mutação in-place vs `.set()` (D2 do estágio): `toggleOperador`/`inverterTurnoSala`/
- * `toggleOperadorFuncao` mutam a coleção interna e RE-EMITEM com `signal.set(new Map(map))` —
- * a referência EXTERNA muda (dispara reatividade); nenhum `computed` lê o Map interno
- * memoizado, então a mutação in-place NÃO quebra reatividade aqui. Caracterizamos o
- * comportamento REAL: asserção sobre o efeito (isSelected/turnoDe) + sobre a nova referência
- * externa do signal (`.not.toBe(antes)`). Caso de borda no-op (`inverterTurnoSala` sem
- * seleção) preserva a MESMA referência (o `return` precede o `.set`). Nenhum achado.
- *
- * Fake timers COMPLETOS (D5): `focarAreaSalas` usa `window.setTimeout` — instalados após
- * `compileComponents` (que precisa de timers reais), `vi.runAllTimers()` onde há agendamento,
- * `vi.useRealTimers()` em afterEach (zero timer real vazando).
+ * AdminEscalaComponent (editor de escala semanal). TestBed cria o componente SEM
+ * `detectChanges()`; lógica exercitada por chamada direta; services mockados via
+ * `useValue`, `LookupService` com signals writable. Foco na lógica pura: rodízio,
+ * inversão de turno, seleção com Map/Set. Os toggles mutam a coleção interna e
+ * re-emitem com `signal.set(new Map(map))` — assert no efeito + na nova referência
+ * externa (no-op preserva a MESMA referência). Fake timers instalados APÓS
+ * `compileComponents` (que exige timers reais); `vi.runAllTimers()` drena o setTimeout
+ * de `focarAreaSalas`; `useRealTimers` no afterEach.
  */
 describe('AdminEscalaComponent', () => {
   let apiGet: ReturnType<typeof vi.fn>;

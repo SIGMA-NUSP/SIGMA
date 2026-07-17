@@ -12,20 +12,17 @@ import jakarta.persistence.PreUpdate;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * F52 (C18): a {@link ChecklistSalaConfig} reimplementava {@code @PrePersist}/{@code @PreUpdate}
- * com {@code LocalDateTime.now()} próprios em vez de estender {@link AuditableEntity} — um ponto
- * de carimbo que escaparia de qualquer correção futura de relógio feita na base (a lição do C17:
- * o fuso virou contrato de dados, e a base é o lugar único de carimbar).
- *
- * <p>Este teste trava a FORMA da correção: herda da base e não redeclara nem callbacks nem os
- * campos de carimbo. O COMPORTAMENTO (carimbos preenchidos no INSERT, só {@code atualizadoEm}
- * mudando no UPDATE, linha legada com NULL continuando operável) está no IT
- * ({@code ChecklistSalaConfigAuditoriaIT}), contra Oracle real.
+ * Trava a FORMA da auditoria de {@link ChecklistSalaConfig}: a entidade estende
+ * {@link AuditableEntity} e não redeclara nem callbacks nem campos de carimbo —
+ * a base é o lugar único de carimbar. O COMPORTAMENTO (carimbos preenchidos no
+ * INSERT, só {@code atualizadoEm} mudando no UPDATE, linha legada com NULL
+ * continuando operável) está no IT {@code ChecklistSalaConfigAuditoriaIT},
+ * contra Oracle real.
  */
 class ChecklistSalaConfigTest {
 
     @Test
-    @DisplayName("corrige F52 — ChecklistSalaConfig estende AuditableEntity e NÃO redeclara callbacks nem campos de carimbo")
+    @DisplayName("ChecklistSalaConfig estende AuditableEntity e NÃO redeclara callbacks nem campos de carimbo")
     void herdaCarimboDaBase_semCallbacksProprios() {
         assertThat(AuditableEntity.class).isAssignableFrom(ChecklistSalaConfig.class);
 

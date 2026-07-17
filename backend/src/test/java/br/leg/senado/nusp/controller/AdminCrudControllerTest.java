@@ -39,17 +39,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contrato HTTP do {@link AdminCrudController} (T16).
- *
- * Segurança real; {@link AdminCrudService} mockado. RBAC papel×rota já provado
- * no T15. Famílias do T16 exercitadas aqui: contrato singular do MULTIPART de
- * foto (f) — o caso que só existe neste controller; o mapeamento
- * ServiceValidationException→HTTP (c), inclusive o guard "somente master" que
- * neste controller vive no SERVICE (via callerUsername) e chega ao cliente
- * como 403 pelo handler — não é guard manual do controller (família a fica no
- * AdminDashboard); o binding inválido respondendo 400 (d, F6 — corrigido no C4); e as
- * validações inline do próprio controller (senha curta, payload sem items,
- * rota deprecada). Não há família (b)/(e) aqui (sem detalhe-404 nem paginação).
+ * Contrato HTTP do {@link AdminCrudController}. Segurança real; {@link AdminCrudService}
+ * mockado (o RBAC papel×rota tem suíte própria). Cobre: o contrato MULTIPART de foto
+ * (singular deste controller); o mapeamento ServiceValidationException→HTTP — inclusive o
+ * guard "somente master", que aqui vive no SERVICE (via callerUsername) e chega ao cliente
+ * como 403 pelo handler, não como guard manual do controller; o binding inválido
+ * respondendo 400; e as validações inline do controller (senha curta, payload sem items,
+ * rota deprecada).
  */
 @SigmaControllerTest(AdminCrudController.class)
 class AdminCrudControllerTest {
@@ -102,17 +98,15 @@ class AdminCrudControllerTest {
         }
 
         /**
-         * O contraponto do F36, MEDIDO (C13): aqui a requisição não-multipart <b>não</b> produz
-         * {@code MultipartException}. A diferença é o {@code required}: no upload do Ponto o
-         * {@code MultipartFile} é obrigatório, e o resolver, ao não achar a parte numa requisição que
-         * nem é multipart, lança a exceção (que virava 500 e agora é 400). Aqui todas as partes são
-         * {@code required = false} — o resolver devolve {@code null}, o método é invocado com os campos
-         * nulos e quem recusa é o SERVICE (no slice ele é mock; em produção, a validação de campo
-         * obrigatório). Ou seja: o AdminCrud nunca teve o 500 do F36, e a correção do advice não muda
-         * uma linha do comportamento dele — este teste é a prova disso, não uma cura.
+         * Aqui a requisição não-multipart <b>não</b> produz {@code MultipartException}. A diferença
+         * é o {@code required}: no upload do Ponto o {@code MultipartFile} é obrigatório, e o
+         * resolver, ao não achar a parte numa requisição que nem é multipart, lança a exceção
+         * (mapeada para 400). Aqui todas as partes são {@code required = false} — o resolver
+         * devolve {@code null}, o método é invocado com os campos nulos e quem recusa é o SERVICE
+         * (no slice ele é mock; em produção, a validação de campo obrigatório).
          */
         @Test
-        @DisplayName("F36 (contraponto medido) — requisição não-multipart com partes OPCIONAIS não estoura: foto chega null ao service")
+        @DisplayName("requisição não-multipart com partes OPCIONAIS não estoura: foto chega null ao service")
         void naoMultipart_partesOpcionais_chegamNulasAoService() throws Exception {
             // Stub explícito: sem ele o 201 dependeria de o `criado()` tolerar um payload null — detalhe de
             // implementação alheio ao que se mede aqui (o destino da requisição não-multipart).
@@ -233,7 +227,7 @@ class AdminCrudControllerTest {
         }
 
         @Test
-        @DisplayName("corrige F29 — form-edit save com item que não é objeto → 400 PAYLOAD_INVALIDO (antes: ClassCastException → 500)")
+        @DisplayName("form-edit save com item que não é objeto → 400 PAYLOAD_INVALIDO (antes: ClassCastException → 500)")
         void formEditSave_itemNaoEhObjeto_400() throws Exception {
             // O instanceof List guardava só o container: a lista de textos passava e estourava no service.
             mockMvc.perform(Requests.post("/api/admin/form-edit/salas/save")
@@ -256,14 +250,13 @@ class AdminCrudControllerTest {
         }
     }
 
-    // ══ (d) Binding inválido — corrige F6 (400) ════════════════════════════
+    // ══ (d) Binding inválido → 400 ═════════════════════════════════════════
 
     @Test
-    @DisplayName("corrige F6 — binding inválido responde 400 no shape padrão de erro")
-    void bindingInvalido_corrigeF6_400() throws Exception {
-        // @RequestBody malformado → HttpMessageNotReadableException, agora tratada pelo handler
+    @DisplayName("binding inválido responde 400 no shape padrão de erro")
+    void bindingInvalido_400() throws Exception {
+        // @RequestBody malformado → HttpMessageNotReadableException, tratada pelo handler
         // de requisição malformada do GlobalExceptionHandler → 400.
-        // Achado F6 da §5 do plano — corrigido no C4.
         mockMvc.perform(Requests.post("/api/admin/operador/op-1/alterar-senha")
                         .header("Authorization", admin)
                         .contentType(MediaType.APPLICATION_JSON)

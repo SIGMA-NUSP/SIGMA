@@ -22,7 +22,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contrato HTTP das rotas públicas do {@link PasswordResetController} (T17).
+ * Contrato HTTP das rotas públicas do {@link PasswordResetController}.
  * O service é integralmente mockado; a segurança real prova que nenhuma rota
  * sob {@code /api/password/**} exige token.
  */
@@ -89,10 +89,10 @@ class PasswordResetControllerTest {
         }
 
         @Test
-        @DisplayName("corrige F6 — binding inválido responde 400 no shape padrão de erro")
-        void semParametro_corrigeF6_400() throws Exception {
-            // Achado F6 da §5 do plano: MissingServletRequestParameterException agora é tratada
-            // pelo handler de requisição malformada do GlobalExceptionHandler → 400 (C4).
+        @DisplayName("binding inválido responde 400 no shape padrão de erro")
+        void semParametro_400() throws Exception {
+            // MissingServletRequestParameterException é tratada pelo handler de requisição
+            // malformada do GlobalExceptionHandler → 400.
             mockMvc.perform(Requests.get("/api/password/validate-token"))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.ok").value(false))

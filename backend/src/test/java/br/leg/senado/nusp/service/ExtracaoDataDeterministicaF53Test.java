@@ -11,22 +11,15 @@ import java.util.TimeZone;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * corrige F53 — a extração de dia/mês/ano nos dois helpers de relatório não depende mais do fuso
- * default da JVM. Antes, o ramo {@code java.util.Date} usava {@code Calendar.getInstance()} (fuso
- * default), então o dia extraído variava com o {@code -Duser.timezone} — acoplamento implícito ao
- * fuso num ponto de relatório ({@link ReportConfig#fmtDate(Object)} e
- * {@link RdsXlsxService#extractDay(Object)}). A cura usa millis intrínsecos + zona EXPLÍCITA
- * America/Sao_Paulo ({@code Instant.ofEpochMilli(getTime()).atZone(BRT)}), determinística em
- * qualquer fuso.
+ * A extração de dia/mês/ano nos dois helpers de relatório ({@link ReportConfig#fmtDate(Object)}
+ * e {@link RdsXlsxService#extractDay(Object)}) usa millis intrínsecos + zona EXPLÍCITA
+ * America/Sao_Paulo ({@code Instant.ofEpochMilli(getTime()).atZone(BRT)}) — invariante ao fuso
+ * default da JVM. Os ramos {@code java.util.Date} exercitados são provavelmente mortos no
+ * runtime (os chamadores passam String ou {@code LocalDate}); a cobertura é defensiva.
  *
- * <p>⚠ Liveness: estes ramos {@code java.util.Date} são provavelmente MORTOS no runtime — o
- * DashboardQueryHelper converte a coluna de data para String antes de chegar aos relatórios
- * (levantamento §8f), e os demais chamadores passam {@code LocalDate} (entidades). A neutralização é
- * defensiva: mata o acoplamento implícito esteja o ramo vivo ou morto.
- *
- * <p>{@code @Isolated}: o teste MUTA a zona default da JVM ({@code TimeZone.setDefault}) para provar
- * a invariância — estado global do processo. O isolamento impede corromper a zona de testes
- * concorrentes (idioma do antigo ClockConfigTest / F56). O {@code try/finally} restaura a zona sempre.
+ * <p>{@code @Isolated}: o teste MUTA a zona default da JVM ({@code TimeZone.setDefault}) para
+ * provar a invariância — estado global do processo; o isolamento impede corromper a zona de
+ * testes concorrentes, e o {@code try/finally} a restaura sempre.
  */
 @Isolated
 class ExtracaoDataDeterministicaF53Test {
@@ -44,7 +37,7 @@ class ExtracaoDataDeterministicaF53Test {
     private static final String[] FUSOS = { "UTC", "Asia/Tokyo", "America/Los_Angeles" };
 
     @Test
-    @DisplayName("corrige F53 — ReportConfig.fmtDate extrai a data em BRT, invariante ao fuso default da JVM")
+    @DisplayName("ReportConfig.fmtDate extrai a data em BRT, invariante ao fuso default da JVM")
     void fmtDate_invarianteAoFusoDefault() {
         TimeZone original = TimeZone.getDefault();
         try {
@@ -63,7 +56,7 @@ class ExtracaoDataDeterministicaF53Test {
     }
 
     @Test
-    @DisplayName("corrige F53 — RdsXlsxService.extractDay extrai o dia em BRT, invariante ao fuso default da JVM")
+    @DisplayName("RdsXlsxService.extractDay extrai o dia em BRT, invariante ao fuso default da JVM")
     void extractDay_invarianteAoFusoDefault() {
         RdsXlsxService svc = new RdsXlsxService();
         TimeZone original = TimeZone.getDefault();

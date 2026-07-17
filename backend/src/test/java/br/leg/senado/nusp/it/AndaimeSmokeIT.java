@@ -15,7 +15,7 @@ import br.leg.senado.nusp.entity.Sala;
 import br.leg.senado.nusp.it.support.OracleIT;
 
 /**
- * Smoke test do andaime de integração (T1): prova que o slice sobe com
+ * Smoke test do andaime de integração: prova que o slice sobe com
  * ddl-auto=validate contra o clone NUSP_TEST, que as colunas IDENTITY
  * (sequences ISEQ$$ importadas no clone) geram ID, que o rollback do
  * {@code @DataJpaTest} isola os testes entre si e que a única sequence

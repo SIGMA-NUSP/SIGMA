@@ -28,18 +28,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Erros de PROTOCOLO ponta a ponta (corrige F26) — o que o F6 deixou de fora.
+ * Erros de PROTOCOLO ponta a ponta: verbo errado (405 + Allow), {@code Content-Type} que a rota
+ * não consome (415 + Accept) e caminho que não existe (404) — os três nascem no despacho, antes
+ * de qualquer método de controller. O {@code ExceptionHandlerExceptionResolver} (que consulta o
+ * advice) roda antes do {@code DefaultHandlerExceptionResolver}, que é quem conheceria o status
+ * certo — por isso o advice precisa mapeá-los explicitamente.
  *
- * <p>Estes três nascem no despacho, antes de qualquer método de controller: verbo errado,
- * {@code Content-Type} que a rota não consome e caminho que não existe. Todos caíam no
- * {@code @ExceptionHandler(Exception.class)} e viravam **500 "Erro interno do servidor"** — o
- * `ExceptionHandlerExceptionResolver` (que consulta o advice) roda antes do
- * `DefaultHandlerExceptionResolver`, que é quem conheceria o status certo.
- *
- * <p>Os outros dois casos do F26 ficam no {@code GlobalExceptionHandlerTest}, na unidade: o upload
- * acima do limite (imposto pelo resolver de multipart do contêiner — o MockMvc não o aplica) e o
- * {@code Accept} não atendível, cujo corpo não é escrevível quando o próprio {@code Accept} exclui
- * JSON (ver o javadoc do handler).
+ * <p>Dois casos vizinhos ficam no {@code GlobalExceptionHandlerTest}, na unidade: o upload acima
+ * do limite (imposto pelo resolver de multipart do contêiner — o MockMvc não o aplica) e o
+ * {@code Accept} não atendível, cujo corpo não é escrevível quando o próprio {@code Accept}
+ * exclui JSON (ver o javadoc do handler).
  *
  * <p>{@code AuthController} é o representante: {@code /api/login} é POST-only e público (o 405/415
  * é medido sem o ruído de token), e o service mockado prova que nada do domínio foi tocado.
@@ -62,7 +60,7 @@ class ProtocoloErroContratoTest {
     }
 
     @Test
-    @DisplayName("corrige F26 — verbo errado responde 405 (com Allow), não 500")
+    @DisplayName("verbo errado responde 405 (com Allow), não 500")
     void verboErrado_405() throws Exception {
         mockMvc.perform(Requests.get("/api/login")) // /api/login é POST-only
                 .andExpect(status().isMethodNotAllowed())
@@ -74,7 +72,7 @@ class ProtocoloErroContratoTest {
     }
 
     @Test
-    @DisplayName("corrige F26 — Content-Type não suportado responde 415, não 500")
+    @DisplayName("Content-Type não suportado responde 415, não 500")
     void contentTypeNaoSuportado_415() throws Exception {
         mockMvc.perform(Requests.post("/api/login")
                         .contentType(MediaType.TEXT_PLAIN)
@@ -90,7 +88,7 @@ class ProtocoloErroContratoTest {
     }
 
     @Test
-    @DisplayName("corrige F26 — rota inexistente responde 404, não 500")
+    @DisplayName("rota inexistente responde 404, não 500")
     void rotaInexistente_404() throws Exception {
         mockMvc.perform(Requests.get("/api/rota-que-nao-existe").header("Authorization", operador))
                 .andExpect(status().isNotFound())

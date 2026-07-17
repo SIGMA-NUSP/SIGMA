@@ -35,18 +35,17 @@ import br.leg.senado.nusp.security.JwtTokenProvider;
 import jakarta.persistence.EntityManager;
 
 /**
- * ITs dos 4 statements nativos de {@link AuthService} contra Oracle real — o
- * UNION ALL do login, a tabela interpolada por papel (isSenhaProvisoria /
- * changePassword) e o SERVIDOR_PUBLICO por trás do temFolhaPonto.
+ * ITs dos statements nativos de {@link AuthService} contra Oracle real — o UNION ALL
+ * do login, a tabela interpolada por papel (isSenhaProvisoria/changePassword) e o
+ * SERVIDOR_PUBLICO por trás do temFolhaPonto.
  *
  * O SUT é construído à mão (EntityManager e repositories reais do slice;
- * PasswordEncoder e JwtTokenProvider mockados — fora do alvo). Os campos
- * {@code @Value} ficam sem valor: nenhum dos métodos exercitados aqui os usa.
- *
- * SENHA_PROVISORIA existe nas 3 tabelas, mas só {@link Administrador} a mapeia —
- * em PES_OPERADOR/PES_TECNICO o valor é semeado por UPDATE nativo
- * ({@link #fixarSenhaProvisoria}). Toda releitura de verificação também é nativa:
- * ela precisa enxergar o que o SQL do SUT gravou, não o cache de 1º nível.
+ * PasswordEncoder e JwtTokenProvider mockados — fora do alvo). Os campos {@code @Value}
+ * ficam sem valor: nenhum dos métodos exercitados aqui os usa. SENHA_PROVISORIA existe
+ * nas 3 tabelas, mas só {@link Administrador} a mapeia — em PES_OPERADOR/PES_TECNICO o
+ * valor é semeado por UPDATE nativo ({@link #fixarSenhaProvisoria}); toda releitura de
+ * verificação também é nativa, para enxergar o que o SQL do SUT gravou e não o cache
+ * de 1º nível.
  */
 @OracleIT
 class AuthServiceIT {
@@ -136,7 +135,7 @@ class AuthServiceIT {
         }
 
         /**
-         * Guarda de comportamento do §3.3 (F30/C15). A colação da sessão passou a ser
+         * Guarda de comportamento: a colação da sessão é
          * {@code NLS_SORT=BINARY_AI} — mas SÓ o {@code NLS_SORT} (ordenação); o {@code NLS_COMP}
          * segue BINARY, e é ele quem governa este {@code =}. Se alguém "simplificar" o
          * {@code connection-init-sql} para {@code NLS_COMP=LINGUISTIC}, TODA igualdade de texto do
@@ -145,18 +144,18 @@ class AuthServiceIT {
          * {@code NLS_COMP=LINGUISTIC} deixou este IT inteiro verde).
          *
          * <p>A CAIXA não entra aqui de propósito: o login é case-insensitive por decisão antiga
-         * (F18 — o SQL usa {@code LOWER(USERNAME) = LOWER(:usuario)}), então "DOUGLAS" entrar já é o
+         * (o SQL usa {@code LOWER(USERNAME) = LOWER(:usuario)}), então "DOUGLAS" entrar já é o
          * comportamento correto. O que a colação não pode mudar é o ACENTO.
          */
         @Test
-        @DisplayName("findUserForLogin — o ACENTO segue distinguindo: 'dóuglas' NÃO entra como 'douglas' (§3.3)")
+        @DisplayName("findUserForLogin — o ACENTO segue distinguindo: 'dóuglas' NÃO entra como 'douglas'")
         void findUserForLogin_acentoNaoEhIgnoradoNaAutenticacao() {
             Operador operador = CenarioFactory.novoOperador(emReal(), "Douglas Antunes", "douglas");
             String username = operador.getUsername();          // "douglas.<n>"
 
             assertNotNull(service.findUserForLogin(username), "o próprio username tem de entrar");
             assertNotNull(service.findUserForLogin(username.toUpperCase(Locale.ROOT)),
-                    "a caixa é ignorada por decisão antiga (F18: LOWER = LOWER) — isto NÃO mudou");
+                    "a caixa é ignorada por decisão antiga (LOWER = LOWER) — isto NÃO mudou");
             assertNull(service.findUserForLogin(username.replace("douglas", "dóuglas")),
                     "mas o acento continua distinguindo — se este assert cair, o NLS_COMP virou"
                             + " LINGUISTIC e a identidade textual do sistema afrouxou junto com a busca");
@@ -242,9 +241,9 @@ class AuthServiceIT {
         }
 
         @Test
-        @DisplayName("corrige F18 — login é case-insensitive: username/email em maiúsculas encontram o mesmo usuário")
+        @DisplayName("login é case-insensitive: username/email em maiúsculas encontram o mesmo usuário")
         void findUserForLogin_caixaDiferenteEncontra() {
-            // §5 do plano, F18: as colunas eram citext no PostgreSQL legado; no port Oracle a
+            // As colunas eram citext no PostgreSQL legado; no port Oracle a
             // normalização sobrou só nos setters (escrita) e o SQL comparava com "=" puro — quem
             // digitasse maiúscula não logava. O SQL agora aplica LOWER() nos DOIS lados.
             Operador operador = CenarioFactory.novoOperador(emReal());

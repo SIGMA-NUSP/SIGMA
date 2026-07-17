@@ -42,12 +42,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contrato HTTP do {@link AuthController} (T17).
- *
- * <p>A segurança, o filtro e o provider JWT são reais; somente o
- * {@link AuthService} é mockado. A fixture de login é parametrizada por papel
- * para que o T18 possa acrescentar os smokes administrador/operador/técnico
- * neste mesmo arquivo sem duplicar a montagem fiel do usuário.</p>
+ * Contrato HTTP do {@link AuthController}. A segurança, o filtro e o provider JWT
+ * são reais; somente o {@link AuthService} é mockado. A fixture de login é
+ * parametrizada por papel, cobrindo os smokes administrador/operador/técnico
+ * sem duplicar a montagem fiel do usuário.
  */
 @SigmaControllerTest(AuthController.class)
 class AuthControllerTest {
@@ -149,14 +147,14 @@ class AuthControllerTest {
             verify(authService, never()).createSession(anyString());
         }
 
-        // ── Smokes de fluxo do T18 (B3): completam os 5 fluxos de login. ──────
+        // ── Smokes de fluxo: completam os 5 fluxos de login. ──────────────────
         // Os felizes por papel faltantes (admin, técnico) e o usuário inexistente;
         // o feliz-operador (sucesso_ptBrCookieECorpo, contrato completo) e a
-        // senha-errada já vêm do T17. Token ausente/adulterado são provados na
-        // matriz RBAC do T15 — aqui não se duplica.
+        // senha-errada já são cobertos acima. Token ausente/adulterado são provados
+        // na matriz RBAC — aqui não se duplica.
 
         @Test
-        @DisplayName("[T18] feliz administrador — smoke: 200, JWT e papel administrador no corpo")
+        @DisplayName("feliz administrador — smoke: 200, JWT e papel administrador no corpo")
         void sucessoAdmin_smoke() throws Exception {
             stubLoginFeliz(TokenFactory.ADMIN);
 
@@ -173,7 +171,7 @@ class AuthControllerTest {
         }
 
         @Test
-        @DisplayName("[T18] feliz técnico — smoke: 200, JWT e papel técnico no corpo")
+        @DisplayName("feliz técnico — smoke: 200, JWT e papel técnico no corpo")
         void sucessoTecnico_smoke() throws Exception {
             stubLoginFeliz(TokenFactory.TECNICO);
 
@@ -190,7 +188,7 @@ class AuthControllerTest {
         }
 
         @Test
-        @DisplayName("[T18] usuário inexistente — 401 genérico, sem verificar senha nem criar sessão")
+        @DisplayName("usuário inexistente — 401 genérico, sem verificar senha nem criar sessão")
         void usuarioInexistente_401() throws Exception {
             when(authService.findUserForLogin(LOGIN_USERNAME)).thenReturn(null);
 
@@ -207,10 +205,10 @@ class AuthControllerTest {
     }
 
     @Test
-    @DisplayName("corrige F6 — binding inválido responde 400 no shape padrão de erro")
-    void bindingInvalido_corrigeF6_400() throws Exception {
-        // @RequestBody malformado → HttpMessageNotReadableException, agora tratada pelo handler
-        // de requisição malformada do GlobalExceptionHandler → 400. Achado F6 da §5 (C4).
+    @DisplayName("binding inválido responde 400 no shape padrão de erro")
+    void bindingInvalido_400() throws Exception {
+        // @RequestBody malformado → HttpMessageNotReadableException, tratada pelo handler
+        // de requisição malformada do GlobalExceptionHandler → 400.
         mockMvc.perform(Requests.post("/api/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{"))
@@ -368,7 +366,7 @@ class AuthControllerTest {
         verify(authService).validarHtmlGuard("token-invalido");
     }
 
-    /** Fixture completa e reaproveitável pelos três papéis do smoke de T18. */
+    /** Fixture completa e reaproveitável pelos três papéis do smoke de login. */
     private void stubLoginFeliz(String perfil) {
         Map<String, String> user = usuarioLogin(perfil);
         when(authService.findUserForLogin(LOGIN_USERNAME)).thenReturn(user);

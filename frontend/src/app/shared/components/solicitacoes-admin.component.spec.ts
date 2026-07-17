@@ -7,32 +7,16 @@ import { SolicitacoesAdminComponent } from './solicitacoes-admin.component';
 import { ToastService } from './toast.component';
 
 /**
- * T29 — SolicitacoesAdminComponent (shared, 261 LOC — card "Banco de Horas" do /admin/ponto,
- * E8): fila de deliberação de todos os funcionários, aprovar (confirm nativo) / rejeitar
- * (modal com motivação), recarga pós-deliberação e relatório PDF/DOCX.
- *
- * Estratégia (manual de PAGE do T22/T23/T24 + padrões do módulo Ponto fixados no T28): TestBed
- * cria o componente (DI + signals) SEM `detectChanges()` — `ngOnInit` à mão, filhos nunca
- * instanciados; `ApiService`/`ToastService` mockados via `useValue`; `window.confirm` espionado
- * (o jsdom não o implementa de verdade). O spec trava LÓGICA e ESTADO, nunca DOM/CSS.
- *
- * Relógio congelado (`{toFake:['Date']}`) ANTES de `createComponent` — o SUT não lê `Date`
- * diretamente, mas `formatarDataExtensoBr` monta um `Date` local a partir do ISO. Sem
- * `setTimeout` no caminho testado (o debounce da busca é do `TableStateController`, já coberto
- * no T21) → falsificar só `Date` preserva os timers do scheduler zoneless (decisão 1 do T28).
- *
- * ⚠️ O `TableStateController` é REAL aqui (instanciado no field initializer com o `ApiService`
- * mockado): as recargas pós-deliberação são observadas pelas chamadas a `api.getList`.
- *
- * Nota de contrato (Q34/T-1.4): `pode_deliberar` só desabilita os botões no template — os
- * métodos `aprovar`/`abrirRejeicao` não o consultam. Quem barra de fato é o backend. Travado
- * abaixo como caracterização, não como achado (é defesa em profundidade no lado certo).
- *
- * C7 — F46 CORRIGIDO: os testes `corrige F46` exigem o canal de erro do `TableStateController`
- * (erro preenchido + `meta` limpo + retry), no lugar da equivalência silenciosa com "fila vazia".
- *
- * C11 — F47 CORRIGIDO: o motivo de rejeição tem teto de 300 caracteres (`maxlength` no textarea +
- * guarda no `BancoHorasService`), no lugar do texto cru que estourava a coluna.
+ * SolicitacoesAdminComponent (card "Banco de Horas" do /admin/ponto): fila de deliberação —
+ * aprovar (confirm nativo), rejeitar (modal com motivação obrigatória, teto de 300
+ * caracteres), canal de erro da fila com retry (distinto de "fila vazia", `meta` limpo),
+ * recarga pós-deliberação e relatório PDF/DOCX honrando sort/busca/filtros. TestBed sem
+ * `detectChanges()` por padrão — `ngOnInit` à mão; `ApiService`/`ToastService` via `useValue`;
+ * `window.confirm` espionado (o jsdom não o implementa). O `TableStateController` é REAL,
+ * instanciado no field initializer com o `ApiService` mockado — as recargas são observadas por
+ * `api.getList`. Falsifica-se só `Date` (nada de `setTimeout` no caminho testado; preserva os
+ * timers do scheduler zoneless); `formatarDataExtensoBr` monta um `Date` local a partir do ISO.
+ * Contrato: `pode_deliberar` só desabilita botões no template — quem barra é o backend.
  */
 
 /** Linha de `GET /api/admin/ponto/banco/solicitacoes`. */
@@ -114,8 +98,8 @@ describe('SolicitacoesAdminComponent', () => {
       expect(comp.ctrl.loading()).toBe(false);
     });
 
-    it('corrige F46 — falha na leitura da fila vira estado de ERRO (distinto de "fila vazia"), com o meta limpo', () => {
-      // C7 (F46 — canal de erro do `TableStateController`): a fila que falhou não pode se passar
+    it('falha na leitura da fila vira estado de ERRO (distinto de "fila vazia"), com o meta limpo', () => {
+      // Canal de erro do `TableStateController`: a fila que falhou não pode se passar
       // por fila vazia — o admin concluiria que não há nada a deliberar e pedidos de folga ficariam
       // sem resposta. O erro é preenchido (o template troca "Nenhuma solicitação registrada." pela
       // caixa com retry) e o `meta` é LIMPO (o rodapé não pode seguir exibindo o total anterior).
@@ -130,7 +114,7 @@ describe('SolicitacoesAdminComponent', () => {
       expect(comp.ctrl.meta()).toBeNull();                   // meta obsoleto não sobrevive ao erro
     });
 
-    it('corrige F46 — sem mensagem do backend, o canal traz a mensagem da própria fila', () => {
+    it('sem mensagem do backend, o canal traz a mensagem da própria fila', () => {
       const comp = criarCarregado();
       apiGetList.mockReturnValue(throwError(() => ({ status: 500 })));
 
@@ -140,7 +124,7 @@ describe('SolicitacoesAdminComponent', () => {
         'Não foi possível carregar as solicitações. A fila pode ter pedidos aguardando deliberação.');
     });
 
-    it('corrige F46 — o retry re-dispara a carga e o sucesso limpa o erro e repovoa a fila', () => {
+    it('o retry re-dispara a carga e o sucesso limpa o erro e repovoa a fila', () => {
       const comp = criarCarregado();
       apiGetList.mockReturnValue(throwError(() => ({ status: 502 })));
       comp.ctrl.load();
@@ -163,10 +147,10 @@ describe('SolicitacoesAdminComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // O que a TELA mostra no erro (C7) — exceção de render deliberada
+  // O que a TELA mostra no erro — exceção de render deliberada
   // ═══════════════════════════════════════════════════════════════════
-  describe('render do estado de erro (F46)', () => {
-    // O canal de erro só cumpre a decisão do estágio se o TEMPLATE o consumir: sem estes testes,
+  describe('render do estado de erro', () => {
+    // O canal de erro só cumpre seu papel se o TEMPLATE o consumir: sem estes testes,
     // apagar o ramo `@else if (ctrl.erro())` deixaria a suíte verde e a tela voltaria a afirmar
     // "Nenhuma solicitação registrada." numa falha de leitura. Mesma família das exceções de render
     // já autorizadas no módulo (presença/ausência de um estado, não disposição/CSS).
@@ -213,7 +197,7 @@ describe('SolicitacoesAdminComponent', () => {
       expect(textoDaTabela(fixture)).toContain('Maria Souza');                        // fila de volta
     });
 
-    it('busca e relatórios continuam na tela durante o erro (não repetir o F44)', () => {
+    it('busca e relatórios continuam na tela durante o erro', () => {
       apiGetList.mockReturnValue(throwError(() => ({ status: 500 })));
       const fixture = renderizar();
       expect(fixture.debugElement.query(By.css('.search-input'))).not.toBeNull();
@@ -404,12 +388,12 @@ describe('SolicitacoesAdminComponent', () => {
       expect(apiPost).toHaveBeenCalledTimes(1);
     });
 
-    it('corrige F47 — o textarea do motivo tem maxlength="300" (render)', () => {
+    it('o textarea do motivo tem maxlength="300" (render)', () => {
       // `MOTIVO_REJEICAO` é VARCHAR2(1000) em BYTES (changelog 036) e NADA limitava o texto — nem o
       // textarea, nem o componente, nem o service. Um motivo colado de um e-mail/norma estourava a
       // coluna → ORA-12899 → 500 com um toast genérico, e a rejeição ficava impossível sem que o
       // admin descobrisse que a causa era o tamanho. O teto vive no template: sem este render, apagar
-      // o atributo deixaria a suíte verde e devolveria o defeito. Mesma correção do F33.
+      // o atributo deixaria a suíte verde e devolveria o defeito.
       vi.useFakeTimers({ toFake: ['Date'] });
       vi.setSystemTime(new Date('2026-07-12T10:00:00-03:00'));
       const fixture = TestBed.createComponent(SolicitacoesAdminComponent);
@@ -421,7 +405,7 @@ describe('SolicitacoesAdminComponent', () => {
       expect(textarea.getAttribute('maxlength')).toBe('300');
     });
 
-    it('corrige F47 — o 400 do backend (motivo longo) chega ao admin com a causa, e o modal fica aberto', () => {
+    it('o 400 do backend (motivo longo) chega ao admin com a causa, e o modal fica aberto', () => {
       // O backend agora recusa antes de tocar o banco; o admin precisa LER a causa para encurtar o
       // texto — o toast genérico de 500 não dizia nada.
       apiPost.mockReturnValue(throwError(() => ({

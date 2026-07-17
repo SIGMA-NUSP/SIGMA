@@ -21,14 +21,14 @@ import br.leg.senado.nusp.it.support.OracleIT;
 import jakarta.persistence.EntityManager;
 
 /**
- * F52 (C18) — o COMPORTAMENTO do carimbo herdado da {@code AuditableEntity}, contra Oracle real
+ * COMPORTAMENTO do carimbo herdado da {@code AuditableEntity}, contra Oracle real
  * (a forma — herança sem callbacks próprios — está no unit {@code ChecklistSalaConfigTest}).
  *
- * <p>Nuance verificada no estágio: as colunas CRIADO_EM/ATUALIZADO_EM são <b>nullable</b> nesta
- * tabela (herança do PG), enquanto a superclasse mapeia {@code nullable=false} (+
- * {@code updatable=false} no CRIADO_EM). O {@code ddl-auto: validate} não confere nullability e o
- * classpath tem Bean Validation (que assume o check de nulidade do Hibernate — e a entidade não
- * tem {@code @NotNull}), então nada muda em runtime; o teste da linha legada com NULL é a prova.
+ * <p>Nuance: as colunas CRIADO_EM/ATUALIZADO_EM são <b>nullable</b> nesta tabela (linhas
+ * legadas da migração do PostgreSQL têm NULL), enquanto a superclasse mapeia
+ * {@code nullable=false} (+ {@code updatable=false} no CRIADO_EM). O {@code ddl-auto: validate}
+ * não confere nullability e o classpath tem Bean Validation (que assume o check de nulidade do
+ * Hibernate — e a entidade não tem {@code @NotNull}), então nada muda em runtime.
  */
 @OracleIT
 class ChecklistSalaConfigAuditoriaIT {
@@ -44,7 +44,7 @@ class ChecklistSalaConfigAuditoriaIT {
     }
 
     @Test
-    @DisplayName("corrige F52 — INSERT carimba criadoEm/atualizadoEm; UPDATE muda só o atualizadoEm")
+    @DisplayName("INSERT carimba criadoEm/atualizadoEm; UPDATE muda só o atualizadoEm")
     void carimboHerdado_insertEUpdate() {
         Sala sala = CenarioFactory.novaSala(emReal());
         ChecklistItemTipo tipo = CenarioFactory.novoItemTipo(emReal());
@@ -65,7 +65,7 @@ class ChecklistSalaConfigAuditoriaIT {
     }
 
     @Test
-    @DisplayName("corrige F52 — linha legada com carimbos NULL (herança do PG) segue legível e atualizável")
+    @DisplayName("linha legada com carimbos NULL (herança do PG) segue legível e atualizável")
     void linhaLegadaComCarimboNull_legivelEAtualizavel() {
         Sala sala = CenarioFactory.novaSala(emReal());
         ChecklistItemTipo tipo = CenarioFactory.novoItemTipo(emReal());

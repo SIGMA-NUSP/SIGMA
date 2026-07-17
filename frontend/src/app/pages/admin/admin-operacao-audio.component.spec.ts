@@ -9,40 +9,18 @@ import { ToastService } from '../../shared/components/toast.component';
 import { AdminOperacaoAudioComponent } from './admin-operacao-audio.component';
 
 /**
- * C13b — AdminOperacaoAudioComponent (/admin/operacao-audio): a tela mais densa do painel, com
- * TRÊS listagens server-side independentes, cada uma no seu `TableStateController`:
- *   • opCtrl   → endpoint DINÂMICO: `/api/admin/dashboard/operacoes` (agrupado por local, default)
- *                ou `/api/admin/dashboard/operacoes/entradas` (lista plana, checkbox desmarcado);
- *   • anomCtrl → `/api/admin/dashboard/anormalidades/lista`;
- *   • chkCtrl  → `/api/admin/dashboard/checklists`.
- *
- * O que este spec trava é o CANAL DE ERRO (C7) instalado nas três tabelas. Antes dele, a tela
- * preenchia o `erro` do controlador e não o exibia: uma leitura que falhava caía no ramo de lista
- * vazia e a tela AFIRMAVA "Nenhuma sessão." / "Nenhuma anormalidade." / "Nenhum checklist
- * encontrado." — o admin concluiria que não houve operação nem anormalidade no período (e um RDS
- * ou um relatório sairia dessa leitura falsa), sem nada na tela indicando falha nem como tentar
- * de novo.
- *
- * Por isso os testes são de RENDER (exceção deliberada à regra "só lógica"): o canal só cumpre a
- * decisão do estágio se o TEMPLATE o consumir. Travar apenas o signal deixaria a suíte verde com
- * o ramo `@if (X.erro())` apagado e o defeito de volta na tela. O motor em si (rows/meta/loading/
- * erro/recência) já está coberto no T21 (`table-state.controller.spec.ts`); aqui prova-se a
- * INSTALAÇÃO por tabela: caixa presente, mensagem certa, retry que re-pede o endpoint CERTO,
- * vazio legítimo intacto, isolamento entre as três tabelas e rodapé que não mente.
- *
- * ⚠️ O `opCtrl` aparece em DOIS pontos do template (modo agrupado × modo lista plana) — o canal foi
- * posto nos dois; ambos são exercidos abaixo.
- *
- * C18 (F66/F68): os acordeões drill-down (entradas da sessão, itens do checklist) ganharam erro
- * POR LINHA sem cache sticky (no erro nada é gravado → reabrir refaz o GET), e o RDS ganhou canal:
- * toast no download (`gerarRds`) e caixa com retry nas cargas dos selects (anos/meses). Os
- * describes "acordeões (C18/F66)" e "RDS (C18/F68)" cobrem isso.
- *
- * Estratégia: TestBed com `ApiService` mockado por `useValue` e `getList` roteado POR ENDPOINT (é
- * o que distingue as três tabelas — e o que permite derrubar uma sem tocar nas outras). Os
- * `TableStateController` são REAIS. Sem fake timers: nada no caminho testado depende de `Date` e o
- * debounce da busca (400 ms) não é exercido. Como o template tem `ngModel` (busca, checkbox de
- * agrupar, selects de RDS/relatório), todo render passa por `await fixture.whenStable()`.
+ * Testes de RENDER de /admin/operacao-audio: três listagens server-side independentes
+ * (opCtrl com endpoint dinâmico — agrupado × lista plana, os DOIS ramos do template —,
+ * anomCtrl e chkCtrl), cada uma com canal de erro próprio: caixa presente com a mensagem
+ * certa, retry que re-pede o endpoint certo, vazio legítimo intacto, isolamento entre as
+ * três tabelas e rodapé coerente. Cobre também os acordeões drill-down (erro POR LINHA sem
+ * cache sticky — reabrir refaz o GET) e o RDS (toast na falha do download; caixa com retry
+ * nas cargas dos selects de anos/meses).
+ * ApiService mockado por useValue com `getList`/`get` roteados POR ENDPOINT (é o que permite
+ * derrubar uma tabela sem tocar nas outras); os `TableStateController` são REAIS; Router real
+ * via provideRouter([]) — o template usa RouterLink. Sem fake timers: nada no caminho testado
+ * depende de `Date` e o debounce da busca não é exercido. Como o template tem `ngModel`,
+ * todo render passa por `await fixture.whenStable()`.
  */
 
 // ── Endpoints das 4 listagens (o `opCtrl` tem dois, um por modo) ──
@@ -88,7 +66,7 @@ const EP_CHK_DETALHE = '/api/admin/checklist/detalhe';
 const EP_RDS_ANOS = '/api/admin/operacoes/rds/anos';
 const EP_RDS_MESES = '/api/admin/operacoes/rds/meses';
 
-describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b)', () => {
+describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens', () => {
   let apiGetList: ReturnType<typeof vi.fn>;
   let apiGet: ReturnType<typeof vi.fn>;
   let getBlob: ReturnType<typeof vi.fn>;
@@ -117,7 +95,7 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
     };
     // Roteia por endpoint: é assim que o spec distingue as três tabelas (e o modo do `opCtrl`).
     apiGetList = vi.fn((endpoint: string) => respostas[endpoint]());
-    // O `api.get` também é roteado por URL (C18): anos/meses do RDS e os dois drill-downs.
+    // O `api.get` também é roteado por URL: anos/meses do RDS e os dois drill-downs.
     respostasGet = {};
     apiGet = vi.fn((url: string, params?: any) =>
       (respostasGet[url] ?? (() => of({ data: [] })))(params));
@@ -483,7 +461,7 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Controles da tela durante o erro (não repetir o F44: perder a saída junto com os dados)
+  // Controles da tela durante o erro (não perder a saída junto com os dados)
   // ═══════════════════════════════════════════════════════════════════
   it('com as 3 listagens em erro, busca, "Agrupar por local", RDS e relatórios continuam na tela', async () => {
     respostas[EP_OP_AGRUPADO] = falha();
@@ -498,14 +476,14 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Acordeões drill-down (C18/F66) — erro POR LINHA, sem cache sticky
+  // Acordeões drill-down — erro POR LINHA, sem cache sticky
   //
   // Os dois acordeões mentiam "vazio" num 500 (o das sessões de forma auto-contraditória: a linha
   // só está na lista porque HÁ entradas) e o `[]` gravado no erro era truthy para o guard de
   // refetch — reabrir NÃO refazia o GET. Agora: caixa com retry NA LINHA, nada gravado no erro
   // (reabrir tenta de novo) e o erro de uma linha não contamina as outras.
   // ═══════════════════════════════════════════════════════════════════
-  describe('acordeões (C18/F66)', () => {
+  describe('acordeões', () => {
     /** Entradas de uma sessão de plenário numerado (o ramo NÃO-principal da sub-tabela). */
     const ENTRADAS_OK = () => of({
       data: [{ id: 101, ordem: 1, operador: 'Maria Souza', hora_entrada: '09:00:00',
@@ -529,7 +507,7 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
     }
 
     describe('entradas da sessão (modo agrupado)', () => {
-      it('corrige F66 — falha do drill-down: caixa NA LINHA com a guia, SEM "Nenhuma entrada registrada nesta sessão."', async () => {
+      it('falha do drill-down: caixa NA LINHA com a guia, SEM "Nenhuma entrada registrada nesta sessão."', async () => {
         respostasGet[EP_ENTRADAS_SESSAO] = () => throwError(() => ERRO_500);
         const fixture = await renderizar();
 
@@ -542,7 +520,7 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
         expect(textoDaTabela(tabOp(fixture))).not.toContain('Nenhuma entrada registrada nesta sessão.');
       });
 
-      it('corrige F66 — o sticky morreu: fechar e reabrir REFAZ o GET; o sucesso renderiza as entradas', async () => {
+      it('o sticky morreu: fechar e reabrir REFAZ o GET; o sucesso renderiza as entradas', async () => {
         respostasGet[EP_ENTRADAS_SESSAO] = () => throwError(() => ERRO_500);
         const fixture = await renderizar();
 
@@ -561,7 +539,7 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
         expect(textoDaTabela(tabOp(fixture))).toContain('Maria Souza');
       });
 
-      it('corrige F66 — o retry da caixa refaz o GET da linha e o sucesso renderiza as entradas', async () => {
+      it('o retry da caixa refaz o GET da linha e o sucesso renderiza as entradas', async () => {
         respostasGet[EP_ENTRADAS_SESSAO] = () => throwError(() => ERRO_500);
         const fixture = await renderizar();
         clicarSessao(fixture);
@@ -577,7 +555,7 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
         expect(chamadas(EP_OP_AGRUPADO)).toBe(1);                // a LISTAGEM não recarrega junto
       });
 
-      it('corrige F66 — o erro de uma sessão NÃO contamina a outra (nem as tabelas vizinhas)', async () => {
+      it('o erro de uma sessão NÃO contamina a outra (nem as tabelas vizinhas)', async () => {
         respostas[EP_OP_AGRUPADO] = () => of({ data: [{ ...SESSAO }, { ...SESSAO, id: 2, sala_nome: 'Plenário 9' }], meta: { ...META } });
         respostasGet[EP_ENTRADAS_SESSAO] = params =>
           params?.registro_id === 1 ? throwError(() => ERRO_500) : ENTRADAS_OK();
@@ -607,7 +585,7 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
     });
 
     describe('itens do checklist (Verificação de Plenários)', () => {
-      it('corrige F66 — falha do detalhe: caixa NA LINHA com a guia, SEM "Nenhum item encontrado."', async () => {
+      it('falha do detalhe: caixa NA LINHA com a guia, SEM "Nenhum item encontrado."', async () => {
         respostasGet[EP_CHK_DETALHE] = () => throwError(() => ERRO_500);
         const fixture = await renderizar();
 
@@ -620,7 +598,7 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
         expect(textoDaTabela(tabChk(fixture))).not.toContain('Nenhum item encontrado.');
       });
 
-      it('corrige F66 — o sticky morreu: fechar e reabrir REFAZ o GET; o sucesso renderiza os itens', async () => {
+      it('o sticky morreu: fechar e reabrir REFAZ o GET; o sucesso renderiza os itens', async () => {
         respostasGet[EP_CHK_DETALHE] = () => throwError(() => ERRO_500);
         const fixture = await renderizar();
 
@@ -639,7 +617,7 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
         expect(textoDaTabela(tabChk(fixture))).toContain('Mesa de som');
       });
 
-      it('corrige F66 — o retry da caixa refaz o GET da linha; o erro de um checklist não contamina o outro', async () => {
+      it('o retry da caixa refaz o GET da linha; o erro de um checklist não contamina o outro', async () => {
         respostas[EP_CHK] = () => of({ data: [{ ...CHECKLIST }, { ...CHECKLIST, id: 32, operador_nome: 'Beto Reis' }], meta: { ...META } });
         respostasGet[EP_CHK_DETALHE] = params =>
           params?.checklist_id === 31 ? throwError(() => ERRO_500) : ITENS_OK();
@@ -674,14 +652,14 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // RDS (C18/F68) — o download e os selects deixam de falhar sem sinal
+  // RDS — o download e os selects deixam de falhar sem sinal
   // ═══════════════════════════════════════════════════════════════════
-  describe('RDS (C18/F68)', () => {
+  describe('RDS', () => {
     const chamadasGet = (url: string) => apiGet.mock.calls.filter(c => c[0] === url).length;
     const caixaRds = (f: ComponentFixture<AdminOperacaoAudioComponent>) =>
       f.debugElement.query(By.directive(ErroCargaComponent));
 
-    it('corrige F68 — gerarRds com falha do blob: toast com a guia, e baixarBlob NÃO é chamado', async () => {
+    it('gerarRds com falha do blob: toast com a guia, e baixarBlob NÃO é chamado', async () => {
       // Antes era um unhandled do RxJS: nada na tela, e o admin reclicava achando que não pegou.
       getBlob.mockReturnValue(throwError(() => ERRO_500));
       const fixture = await renderizar();
@@ -708,7 +686,7 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
       expect(toastError).not.toHaveBeenCalled();
     });
 
-    it('corrige F68 — falha dos ANOS: caixa com retry que refaz loadRdsAnos(); o sucesso limpa e povoa o select', async () => {
+    it('falha dos ANOS: caixa com retry que refaz loadRdsAnos(); o sucesso limpa e povoa o select', async () => {
       respostasGet[EP_RDS_ANOS] = () => throwError(() => ERRO_500);
       const fixture = await renderizar();
 
@@ -726,7 +704,7 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
       expect(fixture.componentInstance.rdsAnos()).toEqual([2025, 2026]);
     });
 
-    it('corrige F68 — falha dos MESES: caixa com retry que refaz o onAnoChange() (não os anos)', async () => {
+    it('falha dos MESES: caixa com retry que refaz o onAnoChange() (não os anos)', async () => {
       respostasGet[EP_RDS_ANOS] = () => of({ data: [2026] });
       respostasGet[EP_RDS_MESES] = () => throwError(() => ERRO_500);
       const fixture = await renderizar();
@@ -750,10 +728,10 @@ describe('AdminOperacaoAudioComponent — canal de erro das 3 listagens (C7/C13b
       expect(comp.rdsMeses()).toEqual([5, 6]);
     });
 
-    it('corrige F68 — voltar o ano ao PLACEHOLDER invalida a carga de meses em voo (sem caixa órfã)', async () => {
-      // Achado da revisão adversarial do C18: com o bump do token depois do early-return, a
-      // resposta do ano abandonado passava no guard — no erro, pintava uma caixa sem contexto
-      // (nenhum ano selecionado) cujo retry era um no-op; no sucesso, populava meses de ano nenhum.
+    it('voltar o ano ao PLACEHOLDER invalida a carga de meses em voo (sem caixa órfã)', async () => {
+      // Com o bump do token depois do early-return, a resposta do ano abandonado passava no
+      // guard — no erro, pintava uma caixa sem contexto (nenhum ano selecionado) cujo retry
+      // era um no-op; no sucesso, populava meses de ano nenhum.
       respostasGet[EP_RDS_ANOS] = () => of({ data: [2026] });
       const emVoo = new Subject<any>();
       respostasGet[EP_RDS_MESES] = () => emVoo;

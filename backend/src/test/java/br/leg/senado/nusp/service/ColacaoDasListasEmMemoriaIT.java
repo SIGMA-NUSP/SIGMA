@@ -26,20 +26,14 @@ import br.leg.senado.nusp.repository.TecnicoRepository;
 import jakarta.persistence.EntityManager;
 
 /**
- * As listas de pessoas que o Ponto ordena <b>em memória</b> — e não pelo banco — obedecem à mesma
- * colação pt-BR das listagens (F30/C15).
+ * As listas de pessoas que o Ponto ordena <b>em memória</b> — a grade de retificações (e o XLSX
+ * que sai dela) e o seletor de pessoas — seguem a mesma colação pt-BR das listagens ordenadas
+ * pelo banco, via {@link NativeQueryUtils#ORDEM_TEXTO_PT_BR}; um {@code toUpperCase()} binário
+ * faria as duas pontas discordarem.
  *
- * <p><b>Por que este IT existe.</b> O C15 fixou {@code NLS_SORT=BINARY_AI} na sessão: tudo que vem
- * ORDENADO DO BANCO passou a ignorar acento e caixa. Mas estas duas listas são montadas e ordenadas
- * em Java, e ordenavam por {@code toUpperCase()} — ordem binária, onde "Á" (0xC1) vem depois de "Z".
- * Enquanto o banco ordenava igual (produção rodava em BINARY), ninguém percebia; ao curar o banco, as
- * duas pontas passaram a discordar, e a MESMA equipe aparecia em ordens diferentes conforme a tela:
- * a grade de retificações (e o XLSX exportado dela) dizia "Katiane, Kátia", a listagem de pessoas
- * dizia "Kátia, Katiane". A correção foi apontar as duas para {@link NativeQueryUtils#ORDEM_TEXTO_PT_BR}.
- *
- * <p>O cenário usa nomes reais do espelho de produção — {@code Kátia Mayara} e {@code Katiane} são o
- * par que de fato inverte: sob a ordem binária, {@code Katiane} vem antes ({@code 'a'} = 0x61 &lt;
- * {@code 'á'}); sob a colação pt-BR, {@code Kátia} vem antes ({@code katia} &lt; {@code katiane}).
+ * <p>O cenário usa o par que de fato inverte: sob a ordem binária, {@code Katiane} vem antes
+ * ({@code 'a'} = 0x61 &lt; {@code 'á'}); sob a colação pt-BR, {@code Kátia} vem antes
+ * ({@code katia} &lt; {@code katiane}).
  */
 @OracleIT
 class ColacaoDasListasEmMemoriaIT {
@@ -89,7 +83,7 @@ class ColacaoDasListasEmMemoriaIT {
             "Ana Beatriz", "Ângela Costa", "Kátia Mayara", "Katiane dos Santos");
 
     @Test
-    @DisplayName("corrige F30 — a grade de retificações (e o XLSX que sai dela) ordena em pt-BR, como as listagens")
+    @DisplayName("a grade de retificações (e o XLSX que sai dela) ordena em pt-BR, como as listagens")
     void gradeDeRetificacoes_ordenaEmPtBr() {
         semearNomesDoEspelhoDeProducao();
         GradeRetificacaoService grade = new GradeRetificacaoService(retificacaoRepo, folgaRepo,
@@ -104,7 +98,7 @@ class ColacaoDasListasEmMemoriaIT {
     }
 
     @Test
-    @DisplayName("corrige F30 — o seletor de pessoas do Ponto ordena em pt-BR, como as listagens")
+    @DisplayName("o seletor de pessoas do Ponto ordena em pt-BR, como as listagens")
     void seletorDePessoas_ordenaEmPtBr() {
         semearNomesDoEspelhoDeProducao();
         PontoService ponto = new PontoService(loteRepo, paginaRepo, operadorRepo, tecnicoRepo,

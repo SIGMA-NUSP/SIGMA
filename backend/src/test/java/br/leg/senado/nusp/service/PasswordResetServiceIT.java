@@ -35,14 +35,12 @@ import jakarta.persistence.EntityManager;
 
 /**
  * IT do lookup do "esqueci minha senha" ({@code findUserByUsername}, via {@code requestReset})
- * contra Oracle real — criado no C2b, correção do F24.
- *
- * <p>O {@code PasswordResetServiceTest} (T18/C2) casa o SQL por fragmento em mocks: ele prova que a
- * query MENCIONA as três tabelas, não que o Oracle ENCONTRA o usuário. Quem responde isso é o banco
- * — e é o banco que decide se a comparação distingue caixa. Daí este IT.
+ * contra Oracle real. O {@link PasswordResetServiceTest} casa o SQL por fragmento em mocks: prova
+ * que a query MENCIONA as três tabelas, não que o Oracle ENCONTRA o usuário — nem se a comparação
+ * distingue caixa; quem responde isso é o banco, daí este IT.
  *
  * <p>O SUT é construído à mão (EntityManager real do slice; repositório de token, encoder e
- * mailSender mockados — fora do alvo), como já faz o {@link AuthServiceIT}.
+ * mailSender mockados — fora do alvo).
  */
 @OracleIT
 class PasswordResetServiceIT {
@@ -72,7 +70,7 @@ class PasswordResetServiceIT {
         when(mailSender.createMimeMessage()).thenReturn(new MimeMessage((Session) null));
     }
 
-    /** Perfil gravado no token do reset — é ele que decide, depois, a tabela do UPDATE do hash (F1). */
+    /** Perfil gravado no token do reset — é ele que decide, depois, a tabela do UPDATE do hash. */
     private String perfilDoTokenGerado() {
         ArgumentCaptor<PasswordResetToken> captor = ArgumentCaptor.forClass(PasswordResetToken.class);
         verify(tokenRepository).save(captor.capture());
@@ -80,10 +78,9 @@ class PasswordResetServiceIT {
     }
 
     @Test
-    @DisplayName("corrige F24 — requestReset acha o usuário com o username digitado em MAIÚSCULAS, nos 3 papéis")
+    @DisplayName("requestReset acha o usuário com o username digitado em MAIÚSCULAS, nos 3 papéis")
     void requestReset_caixaDiferenteEncontra() {
-        // F24 (§5 do plano): o lookup do reset comparava USERNAME com igualdade binária — era o F18
-        // sobrevivendo em outro endpoint. Com o login já case-insensitive (C2), quem entrasse com
+        // O lookup do reset precisa ser case-insensitive como o login: sem isso, quem entrasse com
         // "Fulano.Silva" logava e, no "esqueci minha senha", ouvia "Username não encontrado".
         // Os usernames são gravados sempre em minúsculas (setters das 3 entidades).
         Operador operador = CenarioFactory.novoOperador(emReal());
@@ -97,7 +94,7 @@ class PasswordResetServiceIT {
     }
 
     @Test
-    @DisplayName("corrige F24 — o administrador em maiúsculas também é encontrado (1º ramo do UNION ALL)")
+    @DisplayName("o administrador em maiúsculas também é encontrado (1º ramo do UNION ALL)")
     void requestReset_administradorCaixaDiferente() {
         Administrador admin = CenarioFactory.novoAdministrador(emReal());
         emReal().flush();
@@ -107,13 +104,13 @@ class PasswordResetServiceIT {
     }
 
     @Test
-    @DisplayName("corrige F24 + F1 — o técnico em maiúsculas é encontrado (3º ramo, que o C2 acrescentou)")
+    @DisplayName("o técnico em maiúsculas é encontrado (3º ramo do UNION ALL)")
     void requestReset_tecnicoCaixaDiferente() {
         Tecnico tecnico = CenarioFactory.novoTecnico(emReal());
         emReal().flush();
 
         assertNotNull(service.requestReset(tecnico.getUsername().toUpperCase()),
-                "antes do C2 o técnico não era encontrado nem com a caixa certa (F1)");
+                "antes da correção o técnico não era encontrado nem com a caixa certa");
         assertEquals("tecnico", perfilDoTokenGerado(),
                 "o perfil do token decide a tabela do UPDATE do hash — tem de ser 'tecnico'");
     }

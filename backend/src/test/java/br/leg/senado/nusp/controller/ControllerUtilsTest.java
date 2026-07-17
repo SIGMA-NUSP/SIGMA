@@ -16,16 +16,14 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
- * Ramos dos leitores TIPADOS de corpo cru do {@link ControllerUtils} — os helpers que o F35 acrescentou
- * ao lado dos do F27 ({@code reqTexto}, {@code optLong}, {@code listaDeTextos}).
+ * Ramos dos leitores tipados de corpo cru do {@link ControllerUtils} ({@code optTexto},
+ * {@code optBooleano}): matriz completa <b>ausente</b> / {@code null} / <b>tipo certo</b> /
+ * <b>tipo errado</b>, inclusive o ramo {@code padrao = false} do booleano, sem consumidor
+ * em produção. Os vizinhos ({@code reqTexto}, {@code optLong}, {@code listaDeTextos}) são
+ * cobertos pelos slices que os consomem (Escala, AdminCrud).
  *
- * <p>Os vizinhos do F27 são provados pelos slices que os consomem (Escala, AdminCrud), e o contrato HTTP
- * destes dois também é ({@code PontoControllerTest}). O que só um unitário alcança é a matriz completa —
- * <b>ausente</b> / {@code null} / <b>tipo certo</b> / <b>tipo errado</b> — inclusive o ramo
- * {@code padrao = false} do booleano, que hoje não tem consumidor e sem este teste nasceria sem cobertura.
- *
- * <p>A distinção que estes helpers existem para manter: <b>ausência não é erro</b> (é o desvincular da
- * página do ponto e o default do {@code emitir_aviso}), mas <b>tipo errado é</b> — e o 400 nomeia o campo.
+ * <p>Distinção mantida pelos helpers: <b>ausência não é erro</b> (cai no default),
+ * mas <b>tipo errado é</b> — e o 400 nomeia o campo.
  */
 class ControllerUtilsTest {
 

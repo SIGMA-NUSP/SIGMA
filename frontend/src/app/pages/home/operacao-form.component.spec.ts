@@ -10,26 +10,17 @@ import { ToastService } from '../../shared/components/toast.component';
 import { toISODate } from '../../core/helpers/date.helpers';
 
 /**
- * T22 — OperacaoFormComponent (page, 966 LOC — o maior formulário do app; §A5).
- *
- * Estratégia (plano T22): privilegiar CHAMADA DIRETA dos métodos de instância
- * (validadores/computeds/buildPayload) sobre interação de template — o TestBed cria
- * o componente (DI + signals) mas NUNCA chamamos `detectChanges()` (o template importa
- * RouterLink/ngModel e dispararia ngOnInit); o wiring de rota é exercitado chamando
- * `ngOnInit()` diretamente com o ActivatedRoute mockado. Services mockados via useValue
- * (padrão T21 — mais barato que HttpTestingController, o SUT injeta ApiService).
- *
- * Relógio congelado SEMPRE (§C1): `dataOperacao = toISODate(new Date())` (l.382) lê o relógio
- * — fake timers `{toFake:['Date']}` congelados ANTES de `createComponent` (preserva
- * setTimeout/rAF reais do compileComponents), `vi.useRealTimers()` em afterEach.
- * A cadeia de horários NÃO depende do relógio (só de HH:MM); o único ponto sensível é a
- * inicialização de `dataOperacao` — verificada nas duas datas do flanco 21h BRT (§C2).
- *
- * F19 (corrigido no C4): o componente inicializava `dataOperacao` com
- * `new Date().toISOString().split('T')[0]` (dia UTC) em vez do helper `toISODate` (dia local,
- * criado justamente p/ evitar o shift — auditoria §5.6), e entre 21h e 00h BRT o "hoje" do
- * formulário adiantava um dia. Era o análogo frontend do F7 (containers UTC). Os testes abaixo
- * travam o dia LOCAL nos dois lados do flanco, no campo e no payload.
+ * OperacaoFormComponent (page — o maior formulário do app): cadeia de validação de
+ * horários, regras de UI derivadas, buildPayload, submit novo/edição, onSalaChange e
+ * wiring de rota. Estratégia: CHAMADA DIRETA dos métodos de instância
+ * (validadores/computeds/buildPayload) — o TestBed cria o componente mas NUNCA chama
+ * `detectChanges()` (o template importa RouterLink/ngModel e dispararia ngOnInit);
+ * `ngOnInit()` é chamado diretamente com o ActivatedRoute mockado; services mockados via
+ * `useValue` (o SUT injeta ApiService). Relógio congelado SEMPRE: `dataOperacao =
+ * toISODate(new Date())` lê o relógio — fake timers `{toFake:['Date']}` ligados após
+ * `compileComponents` e antes de `createComponent` (preserva setTimeout/rAF reais). A
+ * cadeia de horários não depende do relógio (só de HH:MM); o dia LOCAL (não UTC) de
+ * `dataOperacao` é travado nos dois lados do flanco 21h BRT, no campo e no payload.
  */
 describe('OperacaoFormComponent', () => {
   let apiGet: ReturnType<typeof vi.fn>;
@@ -101,7 +92,7 @@ describe('OperacaoFormComponent', () => {
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // dataOperacao — relógio congelado, dia LOCAL (corrige F19) — §C1/§C2
+  // dataOperacao — relógio congelado, dia LOCAL
   // ═══════════════════════════════════════════════════════════════════
   describe('dataOperacao (relógio congelado — flanco 21h BRT)', () => {
     it('antes das 21h BRT coincide com o dia local', () => {
@@ -110,7 +101,7 @@ describe('OperacaoFormComponent', () => {
       expect(comp.dataOperacao).toBe('2026-07-15');
     });
 
-    it('depois das 21h BRT mantém o dia LOCAL (corrige F19 — usa toISODate, não o dia UTC)', () => {
+    it('depois das 21h BRT mantém o dia LOCAL (usa toISODate, não o dia UTC)', () => {
       vi.setSystemTime(new Date('2026-07-15T22:30:00-03:00')); // 01:30Z do dia 16
       const comp = criar();
       // O contraste é com o dia UTC, não com o helper: repetir `toISODate(new Date())` aqui só
@@ -684,7 +675,7 @@ describe('OperacaoFormComponent', () => {
       expect((comp as any).buildPayload().nome_demais_salas).toBeNull();
     });
 
-    it('data_operacao herda o dia LOCAL pós-21h BRT (corrige F19 no payload)', () => {
+    it('data_operacao herda o dia LOCAL pós-21h BRT no payload', () => {
       vi.setSystemTime(new Date('2026-07-15T22:30:00-03:00'));
       const comp = criar();
       salasSignal.set([{ id: 2, nome: 'Plenário' }]);

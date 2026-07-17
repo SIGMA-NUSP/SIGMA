@@ -25,15 +25,12 @@ import jakarta.persistence.EntityManager;
  * {@code FECHADO_EM} nasce de {@code TO_DSINTERVAL} sobre o VARCHAR2 'HH:MI:SS'.
  * Por isso as DATAs das linhas são ancoradas no relógio do BANCO
  * ({@link CenarioFactory#fixarDataRelativa}) e as asserções olham o estado final
- * das linhas — o método devolve void.
+ * das linhas — o método devolve void. A releitura de OPR_REGISTRO_AUDIO é sempre
+ * por SQL nativo, sem passar pela entidade.
  *
- * O {@code @Transactional} do job é inerte no arranjo da FASE C (service construído
- * à mão, sem proxy): estes testes provam a semântica dos dois UPDATEs dentro da
- * transação do próprio teste, não a demarcação transacional em produção.
- *
- * Releitura de OPR_REGISTRO_AUDIO sempre por SQL nativo: era o contorno do F14 (§5 do
- * plano) — a leitura JPA de FECHADO_EM (Instant) morria com ORA-18716 até o C5 curar.
- * Mantido por escolha: continua correto, e a limpeza não é escopo do C5.
+ * O {@code @Transactional} do job é inerte neste arranjo (service construído à mão,
+ * sem proxy): estes testes provam a semântica dos dois UPDATEs dentro da transação
+ * do próprio teste, não a demarcação transacional em produção.
  *
  * Toda sessão aberta ocupa uma sala distinta — a FBI única UQ_OPR_REGAUDIO_SALA_ABERTA
  * admite no máximo 1 registro aberto por sala.
@@ -80,7 +77,7 @@ class SessaoSchedulerServiceIT {
                 .getSingleResult();
     }
 
-    /** Estado do registro sem passar pela entidade (F14): [EM_ABERTO, FECHADO_POR, FECHADO_EM formatado]. */
+    /** Estado do registro sem passar pela entidade: [EM_ABERTO, FECHADO_POR, FECHADO_EM formatado]. */
     private Object[] lerRegistro(Long id) {
         return (Object[]) emReal().createNativeQuery("""
                 SELECT EM_ABERTO, FECHADO_POR, TO_CHAR(FECHADO_EM, 'YYYY-MM-DD HH24:MI:SS')
@@ -204,9 +201,9 @@ class SessaoSchedulerServiceIT {
     }
 
     @Test
-    @DisplayName("corrige F17 — sessão de dia anterior sem nenhuma HORA_SAIDA fecha com FECHADO_EM nulo, e a sessão saudável do mesmo lote fecha normalmente")
+    @DisplayName("sessão de dia anterior sem nenhuma HORA_SAIDA fecha com FECHADO_EM nulo, e a sessão saudável do mesmo lote fecha normalmente")
     void fecharSessoesAbertas_sessaoSemHoraSaidaFechaComFechadoEmNuloSemDerrubarOLote() {
-        // §5 do plano, F17: MAX(HORA_SAIDA) sobre conjunto vazio é NULL, e '0 ' || NULL = '0 '
+        // MAX(HORA_SAIDA) sobre conjunto vazio é NULL, e '0 ' || NULL = '0 '
         // — TO_DSINTERVAL('0 ') estourava ORA-01867. Como a Query 2 é um único UPDATE sobre TODAS
         // as sessões de dias anteriores, o erro abortava o statement inteiro: nenhuma sessão fechava
         // naquele dia (o @Transactional é inerte neste arranjo — a prova certa é "a saudável fechou",
@@ -233,10 +230,10 @@ class SessaoSchedulerServiceIT {
     }
 
     @Test
-    @DisplayName("corrige F73 — HORA_SAIDA = '24:00:00' fecha a sessão como 23:59:59 (fim visível): "
+    @DisplayName("HORA_SAIDA = '24:00:00' fecha a sessão como 23:59:59 (fim visível): "
             + "Query 1 copia 23:59:59 e FECHADO_EM = DATA + 23:59:59")
     void fecharSessoesAbertas_vinteEQuatroHorasViraUmMinutoAntes() {
-        // A escrita recusa 24:00:00 na porta desde o C19; este é o lixo pré-existente que a
+        // A escrita recusa 24:00:00 na porta; este é o lixo pré-existente que a
         // faxina TOLERA. Antes: TO_DSINTERVAL('0 24:00:00') → ORA-01850 abortava o UPDATE.
         RegistroOperacaoAudio ontem = sessaoAberta(1);
         Operador operador = CenarioFactory.novoOperador(emReal());
@@ -254,7 +251,7 @@ class SessaoSchedulerServiceIT {
     }
 
     @Test
-    @DisplayName("corrige F73 — HORA_SAIDA torta ('xx:yy:zz' / '25:00:00') fecha com carimbo em branco: "
+    @DisplayName("HORA_SAIDA torta ('xx:yy:zz' / '25:00:00') fecha com carimbo em branco: "
             + "HORARIO_TERMINO fica nulo, FECHADO_EM/POR nulos, EM_ABERTO = 0, e a torta permanece intacta")
     void fecharSessoesAbertas_horaTortaFechaComCarimboEmBranco() {
         RegistroOperacaoAudio comLixo = sessaoAberta(1);
@@ -270,7 +267,7 @@ class SessaoSchedulerServiceIT {
                 java.util.Map.entry(comLixo, tortaTexto), java.util.Map.entry(comHoraImpossivel, tortaHora))) {
             Object[] registro = lerRegistro(caso.getKey().getId());
             assertEquals(0, ((Number) registro[0]).intValue(), "a sala libera mesmo com lixo");
-            assertNull(registro[2], "torta não gera carimbo: FECHADO_EM nulo (caminho degenerado do C16)");
+            assertNull(registro[2], "torta não gera carimbo: FECHADO_EM nulo (caminho degenerado)");
             assertNull(registro[1], "FECHADO_POR nulo — nenhuma saída válida a apontar");
             assertNull(lerHorarioTermino(caso.getValue().getId()),
                     "Query 1 NÃO copia a torta → relatório mostra 'Evento não encerrado'");
@@ -280,10 +277,10 @@ class SessaoSchedulerServiceIT {
     }
 
     @Test
-    @DisplayName("corrige F73 — lote misto: a sessão torta não envenena o UPDATE e a saudável fecha com carimbo normal")
+    @DisplayName("lote misto: a sessão torta não envenena o UPDATE e a saudável fecha com carimbo normal")
     void fecharSessoesAbertas_loteMistoTortaNaoEnvenenaASaudavel() {
-        // A prova central do C19: hoje este cenário estoura ORA-01850/01867 e NENHUMA sessão
-        // fecha (salas presas em "operação") — a prova-irmã da degenerada do C16/F17.
+        // Sem a tolerância da faxina, este cenário estoura ORA-01850/01867 e NENHUMA sessão
+        // fecha (salas presas em "operação").
         RegistroOperacaoAudio torta = sessaoAberta(1);
         entrada(torta, CenarioFactory.novoOperador(emReal()), 1, "99:99:99", null);
         RegistroOperacaoAudio saudavel = sessaoAberta(1);
@@ -300,7 +297,7 @@ class SessaoSchedulerServiceIT {
     }
 
     @Test
-    @DisplayName("corrige F73 — entrada torta e entrada válida na MESMA sessão: MAX e FECHADO_POR vêm da válida")
+    @DisplayName("entrada torta e entrada válida na MESMA sessão: MAX e FECHADO_POR vêm da válida")
     void fecharSessoesAbertas_tortaNaMesmaSessaoNaoVenceOMax() {
         // 'xx:yy:zz' é lexicograficamente maior que qualquer hora numérica: sem o filtro de
         // validade, venceria o MAX e o ORDER BY — carimbo torto e autor errado.
@@ -320,7 +317,7 @@ class SessaoSchedulerServiceIT {
     }
 
     @Test
-    @DisplayName("corrige F17 — sessão de dia anterior sem nenhuma entrada fecha com FECHADO_EM e FECHADO_POR nulos")
+    @DisplayName("sessão de dia anterior sem nenhuma entrada fecha com FECHADO_EM e FECHADO_POR nulos")
     void fecharSessoesAbertas_sessaoSemEntradasFechaComFechadoEmNulo() {
         // Mesmo cenário pelo outro caminho: registro órfão de entradas (a subquery escalar não
         // encontra linha alguma e MAX devolve NULL).

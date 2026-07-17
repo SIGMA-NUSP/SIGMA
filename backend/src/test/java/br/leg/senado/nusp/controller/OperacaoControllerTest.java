@@ -32,7 +32,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contrato HTTP representativo do {@link OperacaoController} (T17).
+ * Contrato HTTP representativo do {@link OperacaoController}.
  *
  * <p>Segurança real e service mockado. Cobre o status condicional singular de
  * salvar-entrada, a validação inline e o contrato real de edição 404/403. Os
@@ -210,7 +210,7 @@ class OperacaoControllerTest {
         @Test
         @DisplayName("operador adicional — contrato real de edição continua 403 forbidden")
         void operadorAdicional_403() throws Exception {
-            // T6: o gate de titular roda antes da junction; adicional não ganha escrita.
+            // O gate de titular roda antes da junction; adicional não ganha escrita.
             Map<String, Object> body = Map.of("entrada_id", 43);
             when(operacaoService.editarEntrada(43L, body, TokenFactory.USER_ID))
                     .thenThrow(new ServiceValidationException("forbidden", HttpStatus.FORBIDDEN));
@@ -228,10 +228,10 @@ class OperacaoControllerTest {
     }
 
     @Test
-    @DisplayName("corrige F6 — binding inválido responde 400 no shape padrão de erro")
-    void bindingInvalido_corrigeF6_400() throws Exception {
-        // @RequestBody malformado → HttpMessageNotReadableException, agora tratada pelo handler
-        // de requisição malformada do GlobalExceptionHandler → 400. Achado F6 da §5 (C4).
+    @DisplayName("binding inválido responde 400 no shape padrão de erro")
+    void bindingInvalido_400() throws Exception {
+        // @RequestBody malformado → HttpMessageNotReadableException, tratada pelo handler
+        // de requisição malformada do GlobalExceptionHandler → 400.
         mockMvc.perform(Requests.post("/api/operacao/audio/salvar-entrada")
                         .header("Authorization", operador)
                         .contentType(MediaType.APPLICATION_JSON)

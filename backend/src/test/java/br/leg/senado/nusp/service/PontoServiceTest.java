@@ -36,15 +36,15 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Unitários de {@link PontoService#publicar} — as duas guardas do estágio C6.
+ * Unitários de {@link PontoService#publicar} — as duas guardas da publicação.
  *
- * <p><b>F49</b> (concorrência): aqui se prova apenas que a publicação lê o lote pelo caminho que
- * SEGURA a linha ({@code lockPorId} → {@code SELECT ... FOR UPDATE}), nunca pelo {@code findById}
- * solto. Que o lock de fato serializa duas transações só o Oracle real pode dizer — é o
+ * <p><b>Concorrência:</b> aqui se prova apenas que a publicação lê o lote pelo caminho que SEGURA a
+ * linha ({@code lockPorId} → {@code SELECT ... FOR UPDATE}), nunca pelo {@code findById} solto. Que
+ * o lock de fato serializa duas transações só o Oracle real pode dizer — é o
  * {@code PontoPublicacaoConcorrenteIT}.
  *
- * <p><b>F32</b> (folha mensal): a MENSAL é única por pessoa+competência e FECHA o mês. Sobreposição
- * entre SEMANAIS continua livre — elas são cumulativas por desenho, e o que NÃO deve existir (uma
+ * <p><b>Folha mensal:</b> a MENSAL é única por pessoa+competência e FECHA o mês. Sobreposição entre
+ * SEMANAIS continua livre — elas são cumulativas por desenho, e o que NÃO deve existir (uma
  * validação genérica de sobreposição de período) é provado pelas contraprovas.
  */
 @ExtendWith(MockitoExtension.class)
@@ -58,7 +58,7 @@ class PontoServiceTest {
     @Mock private AvisoService avisoService;
     @Mock private SaldoAberturaService saldoAberturaService;
     @Mock private RetificacaoService retificacaoService;
-    /** Desde o F34, "a pessoa existe?" é uma pergunta só — o service não faz mais o switch por repositório. */
+    /** "A pessoa existe?" é uma pergunta só — o service não faz mais o switch por repositório. */
     @Mock private PessoaCadastroLookup pessoaCadastro;
 
     @InjectMocks
@@ -144,17 +144,17 @@ class PontoServiceTest {
         verifyNoInteractions(avisoService, saldoAberturaService);
     }
 
-    /** A frase que o admin lê na tela vai em {@code message} (o botão Publicar não lê {@code error} — F57). */
+    /** A frase que o admin lê na tela vai em {@code message} (o botão Publicar não lê {@code error}). */
     private static String mensagemDoAdmin(ServiceValidationException ex) {
         return String.valueOf(ex.getExtraFields().get("message"));
     }
 
     // ══════════════════════════════════════════════════════════════
-    // F49 — a leitura do lote na publicação segura a linha
+    // A leitura do lote na publicação segura a linha
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("corrige F49 — publicar lê o lote com lock de linha (lockPorId), nunca com findById solto")
+    @DisplayName("publicar lê o lote com lock de linha (lockPorId), nunca com findById solto")
     void publicarSeguraALinhaDoLote() {
         cenario(emRevisao("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)),
                 pagina(1, OP, "OPERADOR"));
@@ -169,11 +169,11 @@ class PontoServiceTest {
     }
 
     @Test
-    @DisplayName("corrige F49 — o SELECT do lote na publicação é FOR UPDATE: lockPorId carrega @Lock(PESSIMISTIC_WRITE)")
+    @DisplayName("o SELECT do lote na publicação é FOR UPDATE: lockPorId carrega @Lock(PESSIMISTIC_WRITE)")
     void lockPorIdCarregaLockPessimista() throws NoSuchMethodException {
         // Sem esta trava, apagar a anotação (um merge malfeito, um refactor que "limpa" imports) deixaria
         // o método com o mesmo nome e a mesma assinatura: o unitário acima e a suíte inteira seguiriam
-        // verdes, e o lock — a correção do F49 — teria evaporado em silêncio.
+        // verdes, e o lock teria evaporado em silêncio.
         Lock lock = PontoLoteRepository.class.getMethod("lockPorId", String.class).getAnnotation(Lock.class);
 
         assertNotNull(lock, "lockPorId sem @Lock não segura a linha: o SELECT vira uma leitura comum");
@@ -181,7 +181,7 @@ class PontoServiceTest {
     }
 
     @Test
-    @DisplayName("corrige F49 — lote já PUBLICADO (o que a 2ª transação vê depois do lock) → 400 e nada gravado")
+    @DisplayName("lote já PUBLICADO (o que a 2ª transação vê depois do lock) → 400 e nada gravado")
     void publicarLoteJaPublicado() {
         when(loteRepo.lockPorId(LOTE))
                 .thenReturn(Optional.of(lote("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30), "PUBLICADO")));
@@ -191,7 +191,7 @@ class PontoServiceTest {
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertEquals("Lote já está publicado.", ex.getMessage());
-        // A recusa da corrida também precisa aparecer na tela do admin, não só no corpo do erro (F57).
+        // A recusa da corrida também precisa aparecer na tela do admin, não só no corpo do erro.
         assertEquals("Lote já está publicado.", mensagemDoAdmin(ex));
         assertNadaGravado();
         verifyNoInteractions(paginaRepo);   // nem chega a olhar as páginas
@@ -233,15 +233,15 @@ class PontoServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // F58 — a alteração de vínculo serializa com a publicação
+    // A alteração de vínculo serializa com a publicação
     // ══════════════════════════════════════════════════════════════
 
     @Nested
-    @DisplayName("F58 — atualizarVinculo passa pelo mesmo portão da publicação")
+    @DisplayName("atualizarVinculo passa pelo mesmo portão da publicação")
     class VinculoSobLock {
 
         @Test
-        @DisplayName("corrige F58 — atualizarVinculo lê o lote com lock de linha (lockPorId), nunca com findById solto")
+        @DisplayName("atualizarVinculo lê o lote com lock de linha (lockPorId), nunca com findById solto")
         void vinculoSeguraALinhaDoLote() {
             PontoLotePagina pendente = pagina(1, null, null);
             when(loteRepo.lockPorId(LOTE))
@@ -263,7 +263,7 @@ class PontoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F58 — lote já PUBLICADO (o que o vínculo vê depois de esperar o lock) → 400 e nada gravado")
+        @DisplayName("lote já PUBLICADO (o que o vínculo vê depois de esperar o lock) → 400 e nada gravado")
         void vinculoEmLoteJaPublicado() {
             when(loteRepo.lockPorId(LOTE)).thenReturn(Optional.of(
                     lote("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30), "PUBLICADO")));
@@ -291,14 +291,14 @@ class PontoServiceTest {
         }
 
         /**
-         * O ramo NEGATIVO do vínculo — a recusa que existia desde o E1 e nunca teve teste (a frase aparecia
+         * O ramo NEGATIVO do vínculo — a recusa que existia desde o início e nunca teve teste (a frase aparecia
          * zero vezes na suíte). Ele passa a ser a sentinela do consumo do lookup no {@code PontoService}:
          * quem responde "não existe" é o {@link PessoaCadastroLookup} (provado à parte, no
          * {@code PessoaCadastroLookupTest}); aqui trava-se o que o service FAZ com esse não — 400 com a
          * mensagem do módulo, e a página intocada.
          */
         @Test
-        @DisplayName("corrige F34 — pessoa inexistente (ou par trocado) no vínculo → 400 e a página não é salva")
+        @DisplayName("pessoa inexistente (ou par trocado) no vínculo → 400 e a página não é salva")
         void vinculoComPessoaInexistente() {
             PontoLotePagina pendente = pagina(1, null, null);
             when(loteRepo.lockPorId(LOTE))
@@ -317,11 +317,11 @@ class PontoServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // F60 — as re-âncoras do lote acontecem em ordem determinística
+    // As re-âncoras do lote acontecem em ordem determinística
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("corrige F60 — a publicação re-ancora as pessoas em ordem determinística (tipo, id), não na ordem das páginas")
+    @DisplayName("a publicação re-ancora as pessoas em ordem determinística (tipo, id), não na ordem das páginas")
     void reancoraNaOrdemDeterminista() {
         // As páginas chegam na ordem INVERSA da ordem do lock: se o laço seguisse a ordem das páginas,
         // dois lotes com as mesmas pessoas em ordens diferentes travariam as linhas de PNT_BANCO_SALDO
@@ -347,7 +347,7 @@ class PontoServiceTest {
     }
 
     @Test
-    @DisplayName("corrige F60 — o backfill (reprocessarBanco) re-ancora na MESMA ordem determinística da publicação")
+    @DisplayName("o backfill (reprocessarBanco) re-ancora na MESMA ordem determinística da publicação")
     void backfillReancoraNaMesmaOrdem() {
         when(paginaRepo.findPublicadasSemBancoFinal()).thenReturn(List.of());
         when(paginaRepo.findPessoasComFolhaPublicada()).thenReturn(List.<Object[]>of(
@@ -368,15 +368,15 @@ class PontoServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // F32 — recusas
+    // Guarda da mensal — recusas
     // ══════════════════════════════════════════════════════════════
 
     @Nested
-    @DisplayName("F32 — a folha MENSAL é única por pessoa+competência e fecha o mês")
+    @DisplayName("a folha MENSAL é única por pessoa+competência e fecha o mês")
     class GuardaDaMensal {
 
         @Test
-        @DisplayName("corrige F32 — 2ª mensal da pessoa no mês (já publicada no banco) → 400 nomeando a pessoa, nada gravado")
+        @DisplayName("2ª mensal da pessoa no mês (já publicada no banco) → 400 nomeando a pessoa, nada gravado")
         void mensalDuplicadaNoBanco() {
             cenario(emRevisao("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)),
                     pagina(1, OP, "OPERADOR"));
@@ -387,14 +387,14 @@ class PontoServiceTest {
 
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             String msg = mensagemDoAdmin(ex);
-            assertEquals(ex.getMessage(), msg, "a frase tem de estar nos dois campos do erro (F57)");
+            assertEquals(ex.getMessage(), msg, "a frase tem de estar nos dois campos do erro");
             assertTrue(msg.contains(NOME_OP), () -> "a recusa precisa NOMEAR a pessoa: " + msg);
             assertTrue(msg.contains("06/2026"), () -> "e dizer a competência já ocupada: " + msg);
             assertNadaGravado();
         }
 
         @Test
-        @DisplayName("corrige F32 — duas folhas mensais da mesma pessoa DENTRO do próprio lote → 400 nomeando a pessoa, nada gravado")
+        @DisplayName("duas folhas mensais da mesma pessoa DENTRO do próprio lote → 400 nomeando a pessoa, nada gravado")
         void mensalDuplicadaNoProprioLote() {
             cenario(emRevisao("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)),
                     pagina(1, OP, "OPERADOR"),
@@ -413,7 +413,7 @@ class PontoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F32 — semanal atrasada de mês já fechado por mensal publicada → 400 nomeando a pessoa, nada gravado")
+        @DisplayName("semanal atrasada de mês já fechado por mensal publicada → 400 nomeando a pessoa, nada gravado")
         void semanalDeMesFechado() {
             cenario(emRevisao("SEMANAL", LocalDate.of(2026, 6, 22), LocalDate.of(2026, 6, 28)),
                     pagina(1, OP, "OPERADOR"));
@@ -433,7 +433,7 @@ class PontoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F32 — a recusa cita o mês REALMENTE fechado, mesmo quando o lote cruza a virada")
+        @DisplayName("a recusa cita o mês REALMENTE fechado, mesmo quando o lote cruza a virada")
         void semanalQueCruzaAViradaCitaOMesFechado() {
             // Semanal 29/06–05/07: a janela consultada abrange junho E julho, mas só junho está fechado.
             cenario(emRevisao("SEMANAL", LocalDate.of(2026, 6, 29), LocalDate.of(2026, 7, 5)),
@@ -453,15 +453,15 @@ class PontoServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // F32 — contraprovas: o que a guarda NÃO pode barrar
+    // Contraprovas: o que a guarda NÃO pode barrar
     // ══════════════════════════════════════════════════════════════
 
     @Nested
-    @DisplayName("F32 — contraprovas")
+    @DisplayName("guarda da mensal — contraprovas")
     class ContraprovasDaMensal {
 
         @Test
-        @DisplayName("corrige F32 — 1ª mensal da pessoa no mês publica normalmente (aviso e re-âncora, uma vez)")
+        @DisplayName("1ª mensal da pessoa no mês publica normalmente (aviso e re-âncora, uma vez)")
         void primeiraMensalDoMesPublica() {
             PontoLote lote = emRevisao("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
             cenario(lote, pagina(1, OP, "OPERADOR"));
@@ -474,13 +474,13 @@ class PontoServiceTest {
             assertNotNull(lote.getPublicadoEm());
             verify(loteRepo).save(lote);
             verify(saldoAberturaService, times(1)).reancorar(OP, "OPERADOR");
-            // O 4º argumento é a PROVENIÊNCIA (F59): o aviso nasce marcado com o lote que o criou, e é
+            // O 4º argumento é a PROVENIÊNCIA: o aviso nasce marcado com o lote que o criou, e é
             // só por essa marca que a exclusão daquele lote sabe reconhecê-lo depois.
             verify(avisoService, times(1)).criarPessoalIndividual(anyList(), anyString(), eq(ADMIN), eq(LOTE));
         }
 
         @Test
-        @DisplayName("corrige F59 — o aviso da publicação nasce com ORIGEM = o lote publicado (é a chave da exclusão)")
+        @DisplayName("o aviso da publicação nasce com ORIGEM = o lote publicado (é a chave da exclusão)")
         void avisoDaPublicacaoLevaAOrigemDoLote() {
             PontoLote lote = emRevisao("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5));
             cenario(lote, pagina(1, OP, "OPERADOR"));
@@ -495,7 +495,7 @@ class PontoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F32 — semanais cumulativas com período sobreposto publicam (a guarda NÃO é de sobreposição)")
+        @DisplayName("semanais cumulativas com período sobreposto publicam (a guarda NÃO é de sobreposição)")
         void semanalCumulativaSobrepostaPublica() {
             // A 2ª semanal do mês cobre 01–12 e reengloba os dias da 1ª (01–05): sobrepor é o normal.
             cenario(emRevisao("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 12)),
@@ -510,7 +510,7 @@ class PontoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F32 — mensal de OUTRO mês da mesma pessoa publica (a janela consultada é a do lote)")
+        @DisplayName("mensal de OUTRO mês da mesma pessoa publica (a janela consultada é a do lote)")
         void mensalDeOutroMesPublica() {
             cenario(emRevisao("MENSAL", LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31)),
                     pagina(1, OP, "OPERADOR"));
@@ -525,7 +525,7 @@ class PontoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F32 — duas páginas da mesma pessoa num lote SEMANAL publicam (o veto intra-lote é só da mensal)")
+        @DisplayName("duas páginas da mesma pessoa num lote SEMANAL publicam (o veto intra-lote é só da mensal)")
         void duasPaginasDaMesmaPessoaEmLoteSemanalPublicam() {
             cenario(emRevisao("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5)),
                     pagina(1, OP, "OPERADOR"),
@@ -540,7 +540,7 @@ class PontoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F32 — lote sem nenhuma página vinculada não consulta a guarda e publica")
+        @DisplayName("lote sem nenhuma página vinculada não consulta a guarda e publica")
         void loteSoComPaginasPendentesPublica() {
             cenario(emRevisao("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)),
                     pagina(1, null, null));

@@ -54,9 +54,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * (permitAll). Segurança real, services/repositories mockados (só contrato
  * papel × rota → status; nenhuma regra de negócio).
  *
- * Representativo desta classe de rota: LookupController — inclusive o ⚠ da
- * tabela do plano: o javadoc da classe diz "públicos", mas NÃO há permitAll
- * para /api/forms/lookup/** → sem token é 401 (cai no anyRequest().authenticated()).
+ * Representativo desta classe de rota: LookupController — ⚠ o javadoc da
+ * classe diz "públicos", mas NÃO há permitAll para /api/forms/lookup/** →
+ * sem token é 401 (cai no anyRequest().authenticated()).
  */
 @SigmaControllerTest({LookupController.class, AgendaLegislativaController.class,
         AnormalidadeController.class, AuthController.class, ChecklistController.class,
@@ -93,8 +93,8 @@ class RbacMatrixComumTest {
         when(authSessionRepository.touchSession(anyLong(), anyString(), anyInt())).thenReturn(1);
         // Stubs mínimos p/ 2xx (default null do mock viraria NPE→500 nos handlers).
         // Para /api/whoami e /api/password/validate-token o default do mock JÁ dá 200
-        // (booleans primitivos e getFotoUrl null tolerado) — sem stub, por decisão da
-        // tabela do T15; o valor asserido aqui é o STATUS, nunca o default do mock.
+        // (booleans primitivos e getFotoUrl null tolerado) — sem stub;
+        // o valor asserido aqui é o STATUS, nunca o default do mock.
         when(salaRepository.findAtivasOrdenadas()).thenReturn(List.of());
         when(agendaLegislativaService.getAgendaParaData(any(LocalDate.class), isNull())).thenReturn(List.of());
         when(anormalidadeService.buscarPorEntrada(1L)).thenReturn(Map.of());
@@ -147,7 +147,7 @@ class RbacMatrixComumTest {
                 Arguments.of("/api/health", TokenFactory.OPERADOR, 200),
                 Arguments.of("/api/health", TokenFactory.TECNICO, 200),
                 Arguments.of("/api/health", SEM_TOKEN, 200),
-                // permitAll: /api/password/** (com ?token= — sem o param obrigatório seria o 500 do F6)
+                // permitAll: /api/password/** (com ?token= — sem o param obrigatório seria 400 de binding)
                 Arguments.of("/api/password/validate-token?token=x", TokenFactory.ADMIN, 200),
                 Arguments.of("/api/password/validate-token?token=x", TokenFactory.OPERADOR, 200),
                 Arguments.of("/api/password/validate-token?token=x", TokenFactory.TECNICO, 200),

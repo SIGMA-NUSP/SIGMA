@@ -7,16 +7,14 @@ import { AuthService } from './auth.service';
 import { User, LoginResponse } from '../models/user.model';
 
 /**
- * T18 (§5.5 — escopo MÍNIMO) — AuthService.
- *
- * O construtor executa `loadFromStorage()` + `trackActivity()`, então
- * `localStorage` é limpo e os fake timers instalados ANTES de instanciar (o
- * service só é criado dentro de cada teste, via `criar()`, depois de semear o
- * storage). Cobre `parseJwt`, os computeds a partir de estado semeado e o
- * `login` (HttpTestingController + `verify()` no afterEach — padrão T21).
- * FORA (briefing): refresh, inatividade e ciclo de vida do timer.
+ * AuthService — escopo mínimo: `parseJwt`, computeds a partir de estado semeado no
+ * storage e `login` (HttpTestingController + `verify()` no afterEach). Fora do
+ * escopo: refresh, inatividade e ciclo de vida do timer.
+ * O construtor executa `loadFromStorage()` + `trackActivity()`, então `localStorage`
+ * é limpo e os fake timers instalados ANTES de instanciar (o service só é criado
+ * dentro de cada teste, via `criar()`, depois de semear o storage).
  */
-const BASE = environment.apiBaseUrl; // 'http://localhost:8000' (tracked/limpo — obs. T19+T20)
+const BASE = environment.apiBaseUrl; // 'http://localhost:8000'
 
 /** JWT sintético: header.payload.assinatura, ambos em base64url (- e _). */
 function fakeJwt(payload: Record<string, unknown>): string {

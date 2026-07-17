@@ -32,8 +32,8 @@ import jakarta.persistence.EntityManager;
  * ({@link ChecklistItemTipoRepository#findItensPorSala},
  * {@link ChecklistSalaConfigRepository#findConfigItemsBySalaId},
  * {@link ChecklistRespostaRepository#findByChecklistIdNative}) e do único
- * {@code @Modifying} JPQL da suíte ({@link ChecklistSalaConfigRepository#deactivateAllBySalaId}
- * — exceção D12 do plano) contra Oracle real.
+ * {@code @Modifying} JPQL da suíte ({@link ChecklistSalaConfigRepository#deactivateAllBySalaId})
+ * contra Oracle real.
  */
 @OracleIT
 class ChecklistRepositoriesIT {

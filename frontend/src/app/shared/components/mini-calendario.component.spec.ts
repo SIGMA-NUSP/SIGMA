@@ -2,16 +2,12 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { DiaEstado, MiniCalendarioComponent } from './mini-calendario.component';
 
 /**
- * T20 — MiniCalendarioComponent (§5.4; §C7). A API real (prevMes/nextMes/selecionar/
- * dias/tituloMes) é `protected`/`private` → testamos por COMPORTAMENTO via DOM
- * (renderização + `emit`), nunca por chamada direta. O "hoje" e o mês default vêm de
- * `new Date()`, então congelamos o relógio com `vi.setSystemTime`.
- *
- * Só o relógio é falsificado (`toFake: ['Date']`) — setTimeout/rAF ficam reais para
- * não interferir com o `compileComponents()` async nem com o scheduler zoneless do
- * Angular. §C1: `vi.useRealTimers()` em afterEach. O "pronto quando" do T20 exige a
- * classe verde do "hoje" com o relógio congelado em DUAS datas distintas (meio e fim
- * de mês) — cobertas abaixo.
+ * MiniCalendarioComponent. A API real (prevMes/nextMes/selecionar/dias/tituloMes) é
+ * `protected`/`private` → testa-se por COMPORTAMENTO via DOM (renderização + `emit`),
+ * nunca por chamada direta. O "hoje" e o mês default vêm de `new Date()` → relógio
+ * congelado com `vi.setSystemTime`. Só o relógio é falsificado (`toFake: ['Date']`) —
+ * setTimeout/rAF ficam reais para não interferir com o `compileComponents()` async
+ * nem com o scheduler zoneless do Angular; `vi.useRealTimers()` em afterEach.
  */
 describe('MiniCalendarioComponent', () => {
   let fixture: ComponentFixture<MiniCalendarioComponent>;

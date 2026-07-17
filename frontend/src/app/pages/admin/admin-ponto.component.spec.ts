@@ -10,40 +10,18 @@ import { ToastService } from '../../shared/components/toast.component';
 import { AdminPontoComponent } from './admin-ponto.component';
 
 /**
- * T29 — AdminPontoComponent (page — `/admin/ponto`: upload/split/match/publicação das folhas de
- * ponto, mais os cards Retificações e Banco de Horas).
- *
- * ⚠️ **ESCOPO RESTRITO PELO GATE (§ do estágio): só LÓGICA NÃO-VISUAL.** A reforma de layout desta
- * página está decidida e pendente, então o spec não assere disposição/seções/CSS. O que ele trava —
- * e que sobrevive a qualquer reforma — é: o upload (validações, `FormData`, estados, erros), o ciclo
- * dos lotes (carga, acordeão, vínculo de página, publicação), a paginação client-side e os
- * formatadores.
- *
- * Estratégia (manual de PAGE do T22/T23/T24 + padrões do módulo Ponto do T28): TestBed cria o
- * componente SEM `detectChanges()` — `ngOnInit` à mão, filhos (`app-solicitacoes-admin`,
- * `app-grade-retificacoes`) nunca instanciados; `ApiService` mockado despachando por URL (decisão 2
- * do T28 — a página faz 4 GETs distintos pelo mesmo `api.get`); `window.confirm` espionado (o gate
- * destrutivo da publicação continua sendo uma PERGUNTA — toast não substitui pergunta).
- *
- * Sem render, o `@ViewChild('fileInput')` fica `undefined` — o próprio SUT já se protege com
- * `if (this.fileInput)`. Relógio congelado por disciplina do estágio (o SUT não lê `Date`).
- *
- * **Exceções de render, deliberadas** (`renderizarAberto`): o feature-gate do card "Meu Ponto e
- * Banco" (presença de acesso, não disposição) e os controles DESTRUTIVOS da revisão do lote — o
- * `disabled` do `<select>` de vínculo (C7/F50), o VALOR que o `<select>` exibe (C9/F48) e o
- * `disabled` do botão "Publicar lote" (C9/F49). Todos vivem só no template: sem estes testes,
- * apagar um binding deixaria a suíte verde e devolveria o defeito na sua forma pior.
- *
- * **C9 — F48/F49/F51/F57 CORRIGIDOS** (a tela fecha aqui):
- * - `corrige F48` — o `<select>` reverte ao vínculo real quando o PATCH falha, e reescolher a MESMA
- *   pessoa volta a disparar request (não é mais um beco sem saída).
- * - `corrige F49` (frontend) — trava de publicação POR LOTE: a resposta de um lote não destrava o
- *   botão de outro ainda em voo. Com o lock pessimista do C6 (backend), o achado fecha por inteiro.
- * - `corrige F51` — a resposta do PATCH aplica só a página respondida, com recência por página:
- *   nenhuma resposta atrasada desfaz estado mais novo.
- * - `corrige F57` — a frase da recusa do backend (`{ok:false, error:"…"}`) chega ao admin.
- * - Carona autorizada: os `alert()` informativos viraram `ToastService` (o `confirm()` do gate
- *   destrutivo permanece).
+ * AdminPontoComponent (`/admin/ponto`): upload/split/match/publicação das folhas de ponto.
+ * Cobre LÓGICA NÃO-VISUAL: upload (validações, `FormData`, estados, erros), ciclo dos lotes
+ * (carga, acordeão, vínculo de página com recência por página, publicação com trava POR
+ * LOTE), reconciliação por id nas recargas, paginação client-side e formatadores — mais
+ * exceções de render deliberadas (`renderizarAberto`): o feature-gate do card "Meu Ponto e
+ * Banco" e os controles destrutivos da revisão do lote (`disabled` e VALOR do `<select>` de
+ * vínculo, `disabled` do "Publicar lote"), que vivem só no template.
+ * Componente criado SEM `detectChanges()` — `ngOnInit` à mão, filhos nunca instanciados;
+ * `ApiService` mockado por useValue despachando por URL; `window.confirm` espionado (o gate
+ * destrutivo da publicação é uma PERGUNTA — toast não substitui pergunta). Sem render, o
+ * `@ViewChild('fileInput')` fica `undefined` — o SUT se protege com `if (this.fileInput)`.
+ * Fake timers só para `Date` (relógio congelado).
  */
 
 interface PaginaFix {
@@ -101,7 +79,7 @@ function comVinculo(base: PaginaFix[], paginaId: string, pessoa: { id: string; t
 /**
  * Resposta de `/lote/{id}` (GET) e do PATCH de vínculo: o backend devolve o **LOTE INTEIRO**
  * (`PontoService.detalheLote`) — todas as páginas + `pendentes` contado por `status_match=PENDENTE`.
- * É esse shape que torna honesto o teste do F51: o SUT recebe o lote todo e deve aplicar só a página
+ * É esse shape que torna honesto o teste de recência por página: o SUT recebe o lote todo e deve aplicar só a página
  * que ele mesmo alterou.
  */
 function respostaLote(paginas: PaginaFix[], over: Record<string, unknown> = {}) {
@@ -116,7 +94,7 @@ function respostaLote(paginas: PaginaFix[], over: Record<string, unknown> = {}) 
 }
 
 /**
- * Preview da exclusão (F59) — o shape REAL do backend (`PontoExclusaoService.preview`). É ele que o
+ * Preview da exclusão — o shape REAL do backend (`PontoExclusaoService.preview`). É ele que o
  * modal renderiza: nada de texto genérico, porque o que morre muda de item para item.
  */
 function preview(over: Record<string, unknown> = {}) {
@@ -157,7 +135,7 @@ describe('AdminPontoComponent', () => {
 
   /** Lista de lotes devolvida pelo GET /lotes (recriada a cada chamada — o SUT muta os objetos). */
   let lotesResposta: () => any[];
-  /** A flag `pode_excluir` do envelope da listagem (F59) — quem manda no X é o backend. */
+  /** A flag `pode_excluir` do envelope da listagem — quem manda no X é o backend. */
   let podeExcluirResposta: boolean;
   /** Resposta do GET de preview da exclusão. */
   let previewResposta: () => any;
@@ -271,8 +249,8 @@ describe('AdminPontoComponent', () => {
       expect(comp.administradores().map(p => p.id)).toEqual(['adm-1']);
     });
 
-    it('corrige F50 — erro ao carregar pessoas é SINALIZADO e bloqueia o vínculo (não convida à desvinculação)', () => {
-      // C7 (F50): antes, o handler descartava a lista e não avisava ninguém — os selects de vínculo
+    it('erro ao carregar pessoas é SINALIZADO e bloqueia o vínculo (não convida à desvinculação)', () => {
+      // Antes, o handler descartava a lista e não avisava ninguém — os selects de vínculo
       // ficavam sem nenhuma opção, e uma página já vinculada exibia valor sem `<option>`
       // correspondente (select em branco), convidando o admin a "corrigir" escolhendo a única opção
       // restante ("— pendente —") → PATCH que DESVINCULA uma página que estava certa. Agora a falha
@@ -291,14 +269,14 @@ describe('AdminPontoComponent', () => {
       expect(comp.vinculoBloqueado()).toBe(true);                    // <select> desabilitado
     });
 
-    it('corrige F50 — erro de pessoas sem mensagem do backend cai no fallback', () => {
+    it('erro de pessoas sem mensagem do backend cai no fallback', () => {
       apiGet.mockImplementation(() => throwError(() => ({ status: 503 })));
       const comp = criarCarregado();
       expect(comp.erroPessoas()).toBe(
         'Não foi possível carregar a lista de pessoas. O vínculo das páginas fica indisponível até recarregar.');
     });
 
-    it('corrige F50 — o retry das pessoas re-dispara a carga, limpa o erro e destrava o vínculo', () => {
+    it('o retry das pessoas re-dispara a carga, limpa o erro e destrava o vínculo', () => {
       apiGet.mockImplementation(() => throwError(() => ({ status: 500 })));
       const comp = criarCarregado();
       expect(comp.vinculoBloqueado()).toBe(true);
@@ -312,7 +290,7 @@ describe('AdminPontoComponent', () => {
       expect(comp.vinculoBloqueado()).toBe(false);
     });
 
-    it('corrige F50 — erro ao carregar lotes é SINALIZADO (a tela não afirma "nenhum lote enviado")', () => {
+    it('erro ao carregar lotes é SINALIZADO (a tela não afirma "nenhum lote enviado")', () => {
       // Sem sinal, "Nenhum lote enviado ainda." induzia ao reenvio de um PDF já processado (lote duplicado).
       const comp = criarCarregado();
       expect(comp.lotes()).toHaveLength(1);
@@ -325,7 +303,7 @@ describe('AdminPontoComponent', () => {
       expect(comp.erroLotes()).toContain('Serviço indisponível.');
     });
 
-    it('corrige F50 — erro de lotes sem mensagem do backend adverte contra o reenvio', () => {
+    it('erro de lotes sem mensagem do backend adverte contra o reenvio', () => {
       apiGet.mockImplementation((url: string) =>
         url === '/api/admin/ponto/lotes' ? throwError(() => ({ status: 500 })) : of({ ok: true, data: [] }));
       const comp = criarCarregado();
@@ -334,7 +312,7 @@ describe('AdminPontoComponent', () => {
         + 'Não reenvie o PDF antes de recarregar — o lote pode já ter sido processado.');
     });
 
-    it('corrige F50 — o retry dos lotes limpa o erro e repovoa a lista', () => {
+    it('o retry dos lotes limpa o erro e repovoa a lista', () => {
       apiGet.mockImplementation(() => throwError(() => ({ status: 500 })));
       const comp = criarCarregado();
       expect(comp.erroLotes()).not.toBe('');
@@ -617,7 +595,7 @@ describe('AdminPontoComponent', () => {
     });
 
     it('a recusa no shape real do backend ({ok:false, error}) também chega ao toast', () => {
-      // Mesmo defeito do F57 (lista fixa `['message']`), aqui no GET do detalhe: sem os dois campos,
+      // Mesmo defeito (lista fixa `['message']`), aqui no GET do detalhe: sem os dois campos,
       // toda recusa do backend virava o fallback genérico.
       const comp = criarCarregado();
       const l: any = comp.lotes()[0];
@@ -631,7 +609,7 @@ describe('AdminPontoComponent', () => {
 
   // ═══════════════════════════════════════════════════════════════════
   // Vínculo página → pessoa (PATCH .../lote/{id}/pagina/{id})
-  // A máquina de estado do C9: valor exibido (F48) + recência por página (F51)
+  // A máquina de estado do vínculo: valor exibido + recência por página
   // ═══════════════════════════════════════════════════════════════════
   describe('valorPessoa', () => {
     it('página vinculada vira "TIPO:id" (valor do <option>)', () => {
@@ -644,11 +622,11 @@ describe('AdminPontoComponent', () => {
       expect(comp.valorPessoa({ id: 'pag-2' } as any)).toBe('');
     });
 
-    it('corrige F48 — durante o PATCH exibe a ESCOLHA; quando ele falha, VOLTA ao vínculo salvo', () => {
+    it('durante o PATCH exibe a ESCOLHA; quando ele falha, VOLTA ao vínculo salvo', () => {
       // O select tinha como fonte de verdade o objeto da página (que só muda com a resposta do
       // servidor): no erro, o valor bindado não mudava, o Angular não via mudança de input e o DOM
       // seguia exibindo a pessoa escolhida — um vínculo inexistente. Agora o valor sobe para a
-      // escolha no disparo e cai de volta na resposta (o render deste mesmo achado prova no DOM).
+      // escolha no disparo e cai de volta na resposta (o bloco de render prova o mesmo no DOM).
       const emVoo = new Subject<any>();
       apiPatch.mockReturnValue(emVoo);
       const { comp, l } = criarComLoteAberto();
@@ -663,11 +641,11 @@ describe('AdminPontoComponent', () => {
       expect(toastError).toHaveBeenCalledWith(expect.stringContaining('Não foi possível vincular a página'));
     });
 
-    it('corrige F48 — no sucesso o valor volta a derivar do SERVIDOR, não da escolha', () => {
+    it('no sucesso o valor volta a derivar do SERVIDOR, não da escolha', () => {
       // Discrimina de propósito: o backend responde com uma pessoa DIFERENTE da escolhida (é o que
       // acontece quando outra aba mexeu no lote no meio do caminho). Se o valor escolhido ficasse
       // "pinado" no `valorEmVoo`, o select mentiria para sempre — e reescolher a mesma pessoa não
-      // emitiria `change`: o beco sem saída do F48 de volta, agora pelo caminho do SUCESSO.
+      // emitiria `change`: o beco sem saída de volta, agora pelo caminho do SUCESSO.
       apiPatch.mockReturnValue(of(respostaLote(comVinculo(PAGINAS, 'pag-2', OP1))));
       const { comp, l } = criarComLoteAberto();
 
@@ -696,7 +674,7 @@ describe('AdminPontoComponent', () => {
       // desvinculada volta SEM `pessoa_id`/`pessoa_tipo`/`pessoa_nome`. Aplicar a resposta com um
       // `Object.assign` (mesclar) deixaria o vínculo antigo intacto no objeto local — e o `<select>`
       // voltaria a exibir a pessoa que o admin acabou de remover, sobre um servidor que já desvinculou.
-      // Por isso a página é SUBSTITUÍDA. (Regressão pega na revisão adversarial do C9.)
+      // Por isso a página é SUBSTITUÍDA.
       apiPatch.mockReturnValue(of(respostaLote(comVinculo(PAGINAS, 'pag-1', null))));
       const { comp, l } = criarComLoteAberto();
 
@@ -727,7 +705,7 @@ describe('AdminPontoComponent', () => {
     it('erro 500: a GUIA da tela vem na frente (o corpo genérico do backend não substitui o contexto)', () => {
       // O `GlobalExceptionHandler` responde `{ok:false, error:"Erro interno do servidor"}` em TODO 500.
       // Com o helper cru (que prioriza o corpo), o admin leria só "Erro interno do servidor" — sem saber
-      // que a escolha dele foi desfeita. É a mesma lição do C7 (`erroCargaMsg`).
+      // que a escolha dele foi desfeita. É a mesma lição do `erroCargaMsg`.
       apiPatch.mockReturnValue(throwError(() => ({ status: 500, error: { ok: false, error: 'Erro interno do servidor' } })));
       const { comp, l } = criarComLoteAberto();
 
@@ -737,8 +715,8 @@ describe('AdminPontoComponent', () => {
         'Não foi possível vincular a página — a escolha foi desfeita. (Erro interno do servidor)');
     });
 
-    it('corrige F48 (faceta recarregarLote) — a falha do GET de recuperação é SINALIZADA, sem unhandled', () => {
-      // C7 (F48, faceta silenciosa): `recarregarLote` — o GET disparado quando o PATCH falha — não
+    it('faceta recarregarLote — a falha do GET de recuperação é SINALIZADA, sem unhandled', () => {
+      // Faceta silenciosa: `recarregarLote` — o GET disparado quando o PATCH falha — não
       // tinha handler de erro. Se ele também falhasse (a rede caiu: as duas chamadas falham juntas),
       // nada era restaurado, nada avisava o admin e o erro subia como unhandled rejection.
       apiPatch.mockReturnValue(throwError(() => ({ status: 502 })));
@@ -751,10 +729,10 @@ describe('AdminPontoComponent', () => {
       expect(toastError).toHaveBeenCalledWith(expect.stringContaining('Bad gateway'));                          // a recuperação
       // O "sem unhandled" não é asserido aqui (o RxJS reporta fora do stack): quem o prova é o
       // PRÓPRIO Vitest — removendo o handler de `recarregarLote`, o run acusa "caught 2 unhandled
-      // errors" e falha. Verificado por mutação no C7.
+      // errors" e falha. Verificado por mutação.
     });
 
-    it('corrige F48 (faceta recarregarLote) — sem mensagem do backend, o toast adverte que a tela ficou desatualizada', () => {
+    it('faceta recarregarLote — sem mensagem do backend, o toast adverte que a tela ficou desatualizada', () => {
       apiPatch.mockReturnValue(throwError(() => ({ status: 500 })));
       const { comp, l } = criarComLoteAberto();
       apiGet.mockImplementation(() => throwError(() => ({ status: 500 })));
@@ -766,7 +744,7 @@ describe('AdminPontoComponent', () => {
         + 'Os vínculos exibidos podem estar desatualizados — recarregue a página.');   // sem corpo → só a guia
     });
 
-    it('corrige F51 — a resposta atrasada de uma página NÃO desfaz o vínculo já salvo de outra', () => {
+    it('a resposta atrasada de uma página NÃO desfaz o vínculo já salvo de outra', () => {
       // Cada PATCH devolve o LOTE INTEIRO, e o `Object.assign(l, data)` fazia vencer a última
       // resposta a CHEGAR (não a mais nova): o snapshot atrasado da 1ª página revertia a 2ª — a
       // página voltava a "— pendente —" e o contador subia. Como `toggleLote` só busca quando
@@ -793,7 +771,7 @@ describe('AdminPontoComponent', () => {
       expect(l.pendentes).toBe(0);                      // o contador também não volta atrás
     });
 
-    it('corrige F51 — dois PATCHes da MESMA página fora de ordem: vence o mais novo, não o último a chegar', () => {
+    it('dois PATCHes da MESMA página fora de ordem: vence o mais novo, não o último a chegar', () => {
       const primeiro = new Subject<any>();
       const segundo = new Subject<any>();
       apiPatch.mockReturnValueOnce(primeiro).mockReturnValueOnce(segundo);
@@ -812,7 +790,7 @@ describe('AdminPontoComponent', () => {
       expect(comp.valorPessoa(pag2())).toBe('OPERADOR:op-2');    // e o select segue exibindo o vínculo real
     });
 
-    it('corrige F51 — a resposta obsoleta também não devolve o select ao estado velho no ERRO', () => {
+    it('a resposta obsoleta também não devolve o select ao estado velho no ERRO', () => {
       // A 1ª tentativa falha DEPOIS de a 2ª ter sido disparada: sem recência, o handler de erro da
       // velha reverteria o select (e recarregaria o lote) por cima de um PATCH que ainda está em voo.
       const primeiro = new Subject<any>();
@@ -834,11 +812,11 @@ describe('AdminPontoComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // O OUTRO lado do F51: o GET do detalhe (recarregarLote/toggleLote) também devolve o lote
+  // O OUTRO lado da recência: o GET do detalhe (recarregarLote/toggleLote) também devolve o lote
   // inteiro — e pode ter lido o banco ANTES do commit de uma escrita que já chegou à tela.
   // ═══════════════════════════════════════════════════════════════════
   describe('snapshot obsoleto do GET de detalhe', () => {
-    it('corrige F51 — o GET atrasado NÃO desfaz o vínculo que um PATCH mais novo já salvou', () => {
+    it('o GET atrasado NÃO desfaz o vínculo que um PATCH mais novo já salvou', () => {
       // (1) o PATCH da pag-3 falha → dispara o GET de recuperação, que sai com o servidor ainda sem
       // nada da pag-2; (2) o admin vincula a pag-2 e ESSE PATCH responde OK; (3) o GET chega por
       // último, com o snapshot velho. Sem descarte, `Object.assign` devolvia a pag-2 a "— pendente —".
@@ -863,7 +841,7 @@ describe('AdminPontoComponent', () => {
       expect(l.pendentes).toBe(1);                                       // e o contador não volta atrás
     });
 
-    it('corrige F51 — o GET atrasado NÃO ressuscita o botão "Publicar" de um lote já publicado', () => {
+    it('o GET atrasado NÃO ressuscita o botão "Publicar" de um lote já publicado', () => {
       const getRecuperacao = new Subject<any>();
       apiPatch.mockReturnValue(throwError(() => ({ status: 400 })));
       const { comp, l } = criarComLoteAberto();
@@ -937,16 +915,16 @@ describe('AdminPontoComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // C18/F62 — loadLotes reconcilia por ID: a resposta em voo chega ao lote VIVO
+  // loadLotes reconcilia por ID: a resposta em voo chega ao lote VIVO
   //
   // A identidade do lote na tela é a REFERÊNCIA do objeto (`_exp`, `paginas`, `emitirAviso` e os
   // closures de publicar/onAssign/toggleLote a capturam), mas o `loadLotes` trocava a lista por
   // objetos NOVOS do backend: a resposta de uma publicação em voo mutava um lote ÓRFÃO e o lote
   // publicado seguia exibido "Em revisão" — com o botão destrutivo — até nova carga.
   // ═══════════════════════════════════════════════════════════════════
-  describe('reconciliação por id (C18/F62)', () => {
-    it('corrige F62 — POST de publicação em voo + recarga da lista: a resposta aplica no lote DA LISTA (estado de UI preservado)', () => {
-      // O gatilho real do achado: o admin publica e, sem esperar, envia outro PDF — o `onUpload`
+  describe('reconciliação por id', () => {
+    it('POST de publicação em voo + recarga da lista: a resposta aplica no lote DA LISTA (estado de UI preservado)', () => {
+      // O gatilho real: o admin publica e, sem esperar, envia outro PDF — o `onUpload`
       // recarrega a lista; quando o POST responde, o lote publicado não pode continuar "Em revisão".
       const post = new Subject<any>();
       apiPost.mockReturnValue(post);
@@ -968,8 +946,8 @@ describe('AdminPontoComponent', () => {
       expect(naLista.paginas).toHaveLength(3);             // e as páginas carregadas
     });
 
-    it('corrige F62 — o mesmo pelo RETRY da caixa de erro: a lista zerada pelo erro não deixa a resposta órfã', () => {
-      // O error handler zera a lista (contrato do F50); as referências vivas sobrevivem por id e o
+    it('o mesmo pelo RETRY da caixa de erro: a lista zerada pelo erro não deixa a resposta órfã', () => {
+      // O error handler zera a lista (contrato do canal de erro); as referências vivas sobrevivem por id e o
       // retry as devolve à lista — a resposta da escrita em voo continua chegando ao objeto VIVO.
       const post = new Subject<any>();
       apiPost.mockReturnValue(post);
@@ -993,7 +971,7 @@ describe('AdminPontoComponent', () => {
       expect(comp.publicando('lote-1')).toBe(false);
     });
 
-    it('corrige F62 — a recarga preserva a REFERÊNCIA por id (com _exp/paginas); lote que sumiu sai, lote novo entra', () => {
+    it('a recarga preserva a REFERÊNCIA por id (com _exp/paginas); lote que sumiu sai, lote novo entra', () => {
       const comp = criarCarregado();
       const l: any = comp.lotes()[0];
       comp.toggleLote(l);
@@ -1027,8 +1005,8 @@ describe('AdminPontoComponent', () => {
       expect(aberto.paginas).toHaveLength(3);
     });
 
-    it('corrige F62 — o snapshot VELHO da lista (lido antes do commit de uma escrita) não regride o lote vivo', () => {
-      // O outro lado da mesma moeda (achado da revisão adversarial do C18): sem o guard de
+    it('o snapshot VELHO da lista (lido antes do commit de uma escrita) não regride o lote vivo', () => {
+      // O outro lado da mesma moeda: sem o guard de
       // seqEscrita no merge, a listagem que saiu ANTES da publicação e chegou DEPOIS devolvia o
       // lote publicado a "Em revisão" — com o botão destrutivo de volta (a mesma justificativa do
       // descarte no carregarDetalhe, agora aplicada ao merge do loadLotes).
@@ -1161,11 +1139,11 @@ describe('AdminPontoComponent', () => {
       expect(toastError).toHaveBeenCalledWith('Não foi possível publicar o lote.');
     });
 
-    it('corrige F57 — a razão da recusa chega ao admin (shape REAL do backend: {ok:false, error})', () => {
+    it('a razão da recusa chega ao admin (shape REAL do backend: {ok:false, error})', () => {
       // O front pedia só `['message']`, mas o `GlobalExceptionHandler` serializa a
       // `ServiceValidationException` como `{ok:false, error:"<frase>"}` — sem `message`. Resultado:
       // TODA recusa virava "Erro ao publicar." e o admin não sabia o que remover do lote. As frases
-      // da folha mensal (C6) existem justamente para NOMEAR a pessoa em conflito.
+      // da folha mensal existem justamente para NOMEAR a pessoa em conflito.
       apiPost.mockReturnValue(throwError(() => ({
         status: 400,
         error: { ok: false, error: 'Maria Souza já tem uma folha MENSAL publicada para 06/2026.' },
@@ -1178,7 +1156,7 @@ describe('AdminPontoComponent', () => {
         expect.stringContaining('Maria Souza já tem uma folha MENSAL publicada para 06/2026.'));
     });
 
-    it('corrige F57 — a recusa FICA na tela (é uma tarefa: quais páginas remover), não só num toast de 12 s', () => {
+    it('a recusa FICA na tela (é uma tarefa: quais páginas remover), não só num toast de 12 s', () => {
       apiPost.mockReturnValue(throwError(() => ({
         status: 400,
         error: { ok: false, error: 'Já existe folha MENSAL de Maria Souza (06/2026).' },
@@ -1196,7 +1174,7 @@ describe('AdminPontoComponent', () => {
       expect(comp.erroPublicacao()['lote-1']).toBeUndefined();   // a recusa velha sai da tela
     });
 
-    it('corrige F57 — o contorno do C6 (frase nos DOIS campos) segue funcionando', () => {
+    it('a defesa em profundidade (frase nos DOIS campos) segue funcionando', () => {
       // Defesa em profundidade: o backend repete a frase em `message` e em `error`; a ordem do
       // helper (`message` primeiro) mantém o mesmo texto na tela.
       apiPost.mockReturnValue(throwError(() => ({
@@ -1210,11 +1188,11 @@ describe('AdminPontoComponent', () => {
       expect(toastError).toHaveBeenCalledWith('Não foi possível publicar o lote. (Lote já está publicado.)');
     });
 
-    it('corrige F49 — a resposta de um lote NÃO destrava a publicação de OUTRO ainda em voo', () => {
+    it('a resposta de um lote NÃO destrava a publicação de OUTRO ainda em voo', () => {
       // `publicandoId` era um slot único e QUALQUER resposta o zerava: com dois lotes em revisão
       // (situação normal — eles se acumulam), a resposta do lote A reabilitava o botão do lote B
       // cujo POST ainda estava em voo → o admin reclicava → segunda publicação concorrente do MESMO
-      // lote (avisos pessoais duplicados; hoje o C6 recusa a 2ª com 400, mas a trava é aqui).
+      // lote (avisos pessoais duplicados; hoje o backend recusa a 2ª com 400, mas a trava é aqui).
       lotesResposta = () => [lote({ id: 'lote-A' }), lote({ id: 'lote-B' })];
       const postA = new Subject<any>();
       const postB = new Subject<any>();
@@ -1238,7 +1216,7 @@ describe('AdminPontoComponent', () => {
       expect(confirmSpy).toHaveBeenCalledTimes(2);   // nem chega a perguntar de novo
     });
 
-    it('corrige F49 — publicado o lote, ele volta a ser publicável só depois da resposta (a trava é por lote, não global)', () => {
+    it('publicado o lote, ele volta a ser publicável só depois da resposta (a trava é por lote, não global)', () => {
       const emVoo = new Subject<any>();
       apiPost.mockReturnValueOnce(emVoo);
       lotesResposta = () => [lote({ id: 'lote-A' }), lote({ id: 'lote-B' })];
@@ -1259,7 +1237,7 @@ describe('AdminPontoComponent', () => {
   // RENDER (exceções deliberadas ao GATE) — controles destrutivos no DOM
   // ═══════════════════════════════════════════════════════════════════
   describe('render da revisão do lote (select de vínculo e botão Publicar)', () => {
-    // ⚠️ Exceção ao GATE ("só lógica não-visual"), na mesma família da autorizada no C7: o que se
+    // ⚠️ Exceção ao GATE ("só lógica não-visual"): o que se
     // assere é o estado de controles DESTRUTIVOS — se estão habilitados, e QUE VALOR exibem —,
     // comportamento que vive só no template. Sem estes testes, apagar um binding deixaria a suíte
     // verde e devolveria o defeito na forma pior (o admin desvinculando uma página correta, ou
@@ -1319,7 +1297,7 @@ describe('AdminPontoComponent', () => {
 
     /**
      * Escolha REAL no `<select>`: o navegador só emite `change` quando o valor MUDA — reescolher a
-     * opção já selecionada não dispara nada. É essa regra que fazia do F48 um beco sem saída, e é
+     * opção já selecionada não dispara nada. É essa regra que criava o beco sem saída, e é
      * por isso que o helper a respeita em vez de despachar o evento à força.
      */
     function escolher(select: HTMLSelectElement, valor: string): void {
@@ -1336,7 +1314,7 @@ describe('AdminPontoComponent', () => {
       expect(fixture.debugElement.query(By.directive(ErroCargaComponent))).toBeNull();
     });
 
-    it('corrige F50 — erro ao carregar pessoas: os selects ficam DESABILITADOS e a caixa de erro aparece', async () => {
+    it('erro ao carregar pessoas: os selects ficam DESABILITADOS e a caixa de erro aparece', async () => {
       const fixture = await renderizarAberto({ pessoasOk: false });
       const ss = selects(fixture);
       expect(ss.length).toBeGreaterThan(0);
@@ -1344,7 +1322,7 @@ describe('AdminPontoComponent', () => {
       expect(fixture.debugElement.query(By.directive(ErroCargaComponent))).not.toBeNull();
     });
 
-    it('corrige F50 — durante o retry EM VOO o select segue desabilitado (a lista ainda está vazia)', async () => {
+    it('durante o retry EM VOO o select segue desabilitado (a lista ainda está vazia)', async () => {
       // O retry limpa `erroPessoas` no disparo; sem `loadingPessoas` no guard, o select voltaria a
       // ficar interativo durante todo o request — com "— pendente —" como única opção.
       const fixture = await renderizarAberto({ pessoasOk: false });
@@ -1365,7 +1343,7 @@ describe('AdminPontoComponent', () => {
       expect(selects(fixture).some(s => s.disabled)).toBe(false);
     });
 
-    it('corrige F48 — o PATCH que falha REVERTE o <select> ao vínculo real do servidor', async () => {
+    it('o PATCH que falha REVERTE o <select> ao vínculo real do servidor', async () => {
       const emVoo = new Subject<any>();
       apiPatch.mockReturnValue(emVoo);
       const fixture = await renderizarAberto();
@@ -1384,7 +1362,7 @@ describe('AdminPontoComponent', () => {
       expect(fixture.componentInstance.lotes()[0].paginas![1].pessoa_id).toBeUndefined();
     });
 
-    it('corrige F48 — depois do erro, reescolher a MESMA pessoa dispara um novo PATCH (fim do beco sem saída)', async () => {
+    it('depois do erro, reescolher a MESMA pessoa dispara um novo PATCH (fim do beco sem saída)', async () => {
       const primeiro = new Subject<any>();
       const doLote = PAGINAS.map(p => ({ ...p, id: `lote-1-${p.id}` }));   // ids como a fixture de render os cria
       apiPatch.mockReturnValueOnce(primeiro).mockReturnValue(of(respostaLote(comVinculo(doLote, 'lote-1-pag-2', OP2))));
@@ -1405,7 +1383,7 @@ describe('AdminPontoComponent', () => {
       expect(fixture.componentInstance.lotes()[0].paginas![1].pessoa_id).toBe('op-2');
     });
 
-    it('corrige F49 — com A e B em voo, a resposta de A NÃO reabilita o botão "Publicar" de B', async () => {
+    it('com A e B em voo, a resposta de A NÃO reabilita o botão "Publicar" de B', async () => {
       const postA = new Subject<any>();
       const postB = new Subject<any>();
       apiPost.mockReturnValueOnce(postA).mockReturnValueOnce(postB);
@@ -1430,7 +1408,7 @@ describe('AdminPontoComponent', () => {
       expect(botoesPublicar(fixture)).toHaveLength(0);           // os dois lotes agora estão publicados
     });
 
-    it('corrige F57 — a recusa da publicação aparece NA TELA, junto do botão (não só no toast)', async () => {
+    it('a recusa da publicação aparece NA TELA, junto do botão (não só no toast)', async () => {
       apiPost.mockReturnValue(throwError(() => ({
         status: 400,
         error: { ok: false, error: 'Já existe folha MENSAL de Maria Souza (06/2026). Remova a página dela do lote.' },
@@ -1447,7 +1425,7 @@ describe('AdminPontoComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Feature-gate do card pessoal do admin (Q35/E9) — presença, não layout
+  // Feature-gate do card pessoal do admin — presença, não layout
   // ═══════════════════════════════════════════════════════════════════
   describe('card "Meu Ponto e Banco" (admin com folha)', () => {
     /** Renderiza a página com `activeCard` nulo: os três `@if` de conteúdo ficam fechados
@@ -1521,9 +1499,9 @@ describe('AdminPontoComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // F59 — exclusão de publicações (X → preview → modal dinâmico → DELETE)
+  // Exclusão de publicações (X → preview → modal dinâmico → DELETE)
   // ═══════════════════════════════════════════════════════════════════
-  describe('exclusão de publicações (F59)', () => {
+  describe('exclusão de publicações', () => {
 
     /** Componente carregado COM a flag do master (o backend a manda no envelope da listagem). */
     function criarComoMaster(): AdminPontoComponent {
@@ -1531,7 +1509,7 @@ describe('AdminPontoComponent', () => {
       return criarCarregado();
     }
 
-    it('corrige F59 — a permissão de excluir vem do BACKEND (flag da listagem), nunca de um username no front', () => {
+    it('a permissão de excluir vem do BACKEND (flag da listagem), nunca de um username no front', () => {
       const comum = criarCarregado();
       expect(comum.podeExcluir()).toBe(false);   // flag ausente/false → sem X
 
@@ -1624,7 +1602,7 @@ describe('AdminPontoComponent', () => {
       expect(apiGet).not.toHaveBeenCalled();
     });
 
-    it('corrige F59 — o 403 do backend (não-master que chamou o endpoint) chega NO MODAL, que continua aberto', () => {
+    it('o 403 do backend (não-master que chamou o endpoint) chega NO MODAL, que continua aberto', () => {
       apiDelete.mockReturnValue(throwError(() => ({ status: 403, error: { ok: false, error: 'forbidden' } })));
       const comp = criarComoMaster();
       comp.abrirExclusaoLote(comp.lotes()[0] as any);
@@ -1646,7 +1624,7 @@ describe('AdminPontoComponent', () => {
       expect(comp.erroExclusao()).toBe('Não foi possível excluir.');
     });
 
-    it('corrige F59 — trava POR ITEM: o X de um lote em voo não trava o do outro, e o reclique não redispara', () => {
+    it('trava POR ITEM: o X de um lote em voo não trava o do outro, e o reclique não redispara', () => {
       lotesResposta = () => [lote({ id: 'lote-A' }), lote({ id: 'lote-B' })];
       const previewEmVoo = new Subject<any>();
       podeExcluirResposta = true;
@@ -1693,7 +1671,7 @@ describe('AdminPontoComponent', () => {
     // O X é o gesto mais destrutivo da tela e o modal é a ÚNICA barreira antes dele. Os dois vivem só
     // no template: sem estes testes, apagar o `@if (podeExcluir())` daria o X a qualquer admin (com o
     // 403 aparecendo como erro misterioso), e um modal que não consumisse o preview viraria de novo o
-    // "tem certeza?" genérico que este estágio existe para eliminar.
+    // "tem certeza?" genérico que a feature existe para eliminar.
 
     async function renderizarComExclusao(opts: { master?: boolean } = {}) {
       podeExcluirResposta = opts.master !== false;
@@ -1727,21 +1705,21 @@ describe('AdminPontoComponent', () => {
     const modal = (f: ComponentFixture<AdminPontoComponent>) =>
       f.debugElement.query(By.css('.modal-card'));
 
-    it('corrige F59 — sem a flag do backend, NENHUM X é renderizado (nem no lote, nem nas folhas)', async () => {
+    it('sem a flag do backend, NENHUM X é renderizado (nem no lote, nem nas folhas)', async () => {
       const fixture = await renderizarComExclusao({ master: false });
 
       expect(xDeLote(fixture)).toHaveLength(0);
       expect(xDePagina(fixture)).toHaveLength(0);
     });
 
-    it('corrige F59 — com a flag, o X aparece nas DUAS tabelas (o lote e cada folha dele)', async () => {
+    it('com a flag, o X aparece nas DUAS tabelas (o lote e cada folha dele)', async () => {
       const fixture = await renderizarComExclusao();
 
       expect(xDeLote(fixture)).toHaveLength(1);       // 1 lote
       expect(xDePagina(fixture)).toHaveLength(3);     // 3 páginas
     });
 
-    it('corrige F59 — o X do lote NÃO expande/contrai a linha (stopPropagation): ele abre o modal', async () => {
+    it('o X do lote NÃO expande/contrai a linha (stopPropagation): ele abre o modal', async () => {
       const fixture = await renderizarComExclusao();
       const comp = fixture.componentInstance;
       const expandidoAntes = (comp.lotes()[0] as any)._exp;
@@ -1753,7 +1731,7 @@ describe('AdminPontoComponent', () => {
       expect(modal(fixture)).not.toBeNull();
     });
 
-    it('corrige F59 — o modal RENDERIZA o preview: pessoas, re-âncora, contagens, destinatários e o mês reaberto', async () => {
+    it('o modal RENDERIZA o preview: pessoas, re-âncora, contagens, destinatários e o mês reaberto', async () => {
       const fixture = await renderizarComExclusao();
 
       xDeLote(fixture)[0].click();
@@ -1771,7 +1749,7 @@ describe('AdminPontoComponent', () => {
       expect(texto).toContain('Esta ação é irreversível.');
     });
 
-    it('corrige F59 — o modal de uma FOLHA nomeia a folha e mostra os números DELA (o texto não é fixo)', async () => {
+    it('o modal de uma FOLHA nomeia a folha e mostra os números DELA (o texto não é fixo)', async () => {
       previewResposta = () => preview({
         escopo: 'PAGINA',
         pagina: { id: 'pag-1', numero_pagina: 1, pessoa_nome: 'Maria Souza' },
@@ -1796,7 +1774,7 @@ describe('AdminPontoComponent', () => {
       expect(texto).not.toContain('volta a aceitar publicação');   // nenhuma competência reabre aqui
     });
 
-    it('corrige F59 — durante o DELETE em voo, "Excluir definitivamente" e "Cancelar" ficam DESABILITADOS', async () => {
+    it('durante o DELETE em voo, "Excluir definitivamente" e "Cancelar" ficam DESABILITADOS', async () => {
       const deleteEmVoo = new Subject<any>();
       apiDelete.mockReturnValue(deleteEmVoo);
       const fixture = await renderizarComExclusao();
@@ -1819,7 +1797,7 @@ describe('AdminPontoComponent', () => {
       expect(modal(fixture)).toBeNull();   // fechou
     });
 
-    it('corrige F59 — o erro do backend aparece DENTRO do modal (não só num toast que some)', async () => {
+    it('o erro do backend aparece DENTRO do modal (não só num toast que some)', async () => {
       apiDelete.mockReturnValue(throwError(() => ({ status: 403, error: { ok: false, error: 'forbidden' } })));
       const fixture = await renderizarComExclusao();
 

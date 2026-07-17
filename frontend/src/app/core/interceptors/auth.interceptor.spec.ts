@@ -5,12 +5,11 @@ import { authInterceptor } from './auth.interceptor';
 import { AuthService } from '../services/auth.service';
 
 /**
- * T18 (§5.7) — authInterceptor (HttpInterceptorFn funcional).
- *
- * Com token: clona a request adicionando Authorization Bearer + cabeçalhos
- * anti-cache. Sem token: repassa a MESMA referência (assert por identidade,
- * `toBe`). Executado dentro de `runInInjectionContext` (o interceptor usa
- * `inject(AuthService)`); `next` é um espião que captura a request repassada.
+ * authInterceptor (HttpInterceptorFn funcional). Com token: clona a request
+ * adicionando Authorization Bearer + cabeçalhos anti-cache. Sem token: repassa a
+ * MESMA referência (assert por identidade, `toBe`). Executado dentro de
+ * `runInInjectionContext` (o interceptor usa `inject(AuthService)`); `next` é um
+ * espião que captura a request repassada.
  */
 describe('authInterceptor', () => {
   const auth = { getToken: vi.fn() };

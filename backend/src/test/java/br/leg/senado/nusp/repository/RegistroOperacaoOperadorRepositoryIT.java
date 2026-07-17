@@ -30,10 +30,9 @@ import jakarta.persistence.EntityManager;
  * ITs dos 7 statements nativos de {@link RegistroOperacaoOperadorRepository} contra
  * Oracle real — as entradas da sessão (OPR_REGISTRO_ENTRADA) e seus vínculos.
  *
- * A releitura das ENTRADAS sempre pôde usar em.find(): AuditableEntity mapeia
- * CRIADO_EM/ATUALIZADO_EM como LocalDateTime, que o ORA-18716 (F14) nunca atingiu — ele
- * só valia para campos Instant (OPR_REGISTRO_AUDIO), e o C5 o curou. ATUALIZADO_EM é conferido por SQL
- * nativo apenas onde a comparação é entre carimbos do banco (ancoragem).
+ * A releitura das ENTRADAS usa em.find(): AuditableEntity mapeia CRIADO_EM/ATUALIZADO_EM
+ * como LocalDateTime, imune ao ORA-18716 dos campos Instant. ATUALIZADO_EM é conferido
+ * por SQL nativo apenas onde a comparação é entre carimbos do banco (ancoragem).
  */
 @OracleIT
 class RegistroOperacaoOperadorRepositoryIT {
@@ -438,7 +437,7 @@ class RegistroOperacaoOperadorRepositoryIT {
         }
 
         @Test
-        @DisplayName("corrige F15 — a junção da entrada é correlacionada ao registro: entrada de OUTRO registro "
+        @DisplayName("a junção da entrada é correlacionada ao registro: entrada de OUTRO registro "
                 + "não vaza para o lookup (colunas de entrada nulas, como no entrada_id inexistente)")
         void findDadosParaAnormalidade_entradaDeOutroRegistroNaoPreenche() {
             Sala sala = CenarioFactory.novaSala(emReal());
@@ -448,17 +447,17 @@ class RegistroOperacaoOperadorRepositoryIT {
             RegistroOperacaoOperador entradaAlheia = CenarioFactory.novaEntradaCompleta(emReal(), outroRegistro,
                     operador, 1, null);
 
-            // F15 (§5 do plano): o ON era apenas e.ID = :entradaId, sem e.REGISTRO_ID = r.ID — o port
-            // perdeu a correlação que a query legada fazia (get_registro_operacao_audio_for_anormalidade)
-            // e a entrada de outro registro pré-preenchia evento/responsável. O LEFT JOIN foi MANTIDO
-            // (decisão do C2): o par incoerente devolve linha com nulos, não vazio como o legado.
+            // O ON era apenas e.ID = :entradaId, sem e.REGISTRO_ID = r.ID — o port perdeu a
+            // correlação que a query legada fazia (get_registro_operacao_audio_for_anormalidade)
+            // e a entrada de outro registro pré-preenchia evento/responsável. O LEFT JOIN foi
+            // MANTIDO: o par incoerente devolve linha com nulos, não vazio como o legado.
             List<Object[]> rows = repo.findDadosParaAnormalidade(consultado.getId(), entradaAlheia.getId());
 
             assertEquals(1, rows.size(), "o LEFT JOIN preserva o registro consultado");
             Object[] r = rows.get(0);
             assertEquals(consultado.getId().longValue(), ((Number) r[0]).longValue(),
                     "o registro é o consultado...");
-            assertNull(r[3], "...e o NOME_EVENTO da entrada alheia NÃO vaza (F15 corrigido)");
+            assertNull(r[3], "...e o NOME_EVENTO da entrada alheia NÃO vaza");
             assertNull(r[4], "idem RESPONSAVEL_EVENTO");
             // A contraprova (entrada do PRÓPRIO registro segue pré-preenchendo) é o teste
             // findDadosParaAnormalidade_preenchimentoCompleto, acima — a correlação não o quebra.

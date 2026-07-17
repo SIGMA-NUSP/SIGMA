@@ -3,10 +3,11 @@ import { By } from '@angular/platform-browser';
 import { ErroCargaComponent } from './erro-carga.component';
 
 /**
- * C7 — ErroCargaComponent (shared): a caixa de erro com retry que dá corpo ao canal de erro
- * (F42/F46/F50). É o único ponto da correção que RENDERIZA — os specs das telas provam o estado
- * (signal `erro` preenchido, retry re-dispara a carga) chamando os métodos direto, e sem este spec
- * ninguém provaria que o botão "Tentar novamente" de fato emite o evento que aciona aquele retry.
+ * ErroCargaComponent (shared): a caixa de erro com retry que dá corpo ao canal de erro das
+ * telas. É o ponto do canal que RENDERIZA — os specs das telas provam o estado (signal de
+ * erro preenchido, retry re-dispara a carga) chamando os métodos direto; este spec prova que
+ * o botão "Tentar novamente" de fato emite o evento que aciona aquele retry, e que a caixa
+ * se anuncia com role="alert".
  */
 describe('ErroCargaComponent', () => {
   beforeEach(async () => {

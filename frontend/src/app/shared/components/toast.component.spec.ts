@@ -1,10 +1,10 @@
 import { ToastService } from './toast.component';
 
 /**
- * T19 — ToastService: `new ToastService()` (§5.4: instanciável direto) + fake timers
- * para o auto-dismiss por `setTimeout`. §C1: `vi.useRealTimers()` em `afterEach` em
- * TODO spec com fake timers; §C2: durações default por tipo (success 8s, error 12s,
- * warning 10s) assertadas com o relógio virtual, nunca com esperas reais.
+ * ToastService: `new ToastService()` direto (sem TestBed) + fake timers para o
+ * auto-dismiss por `setTimeout` — durações default por tipo (success 8s, error 12s,
+ * warning 10s) assertadas com o relógio virtual, nunca com esperas reais;
+ * `vi.useRealTimers()` em `afterEach`.
  */
 describe('ToastService', () => {
   let svc: ToastService;

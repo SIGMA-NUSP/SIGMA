@@ -15,13 +15,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * Unitário de {@link JwtTokenProvider} (T18 — §4.15). Classe isolada, sem I/O:
- * o único colaborador é o {@link JwtConfig} (POJO de configuração), instanciado
- * de verdade — não há Mockito aqui.
+ * Unitário de {@link JwtTokenProvider}. Classe isolada, sem I/O: o único colaborador
+ * é o {@link JwtConfig} (POJO de configuração), instanciado de verdade — não há
+ * Mockito aqui.
  *
- * <p>Invariante central da §4.15: {@code parseToken} <b>nunca</b> devolve
- * {@code null} nem um boolean em falha — sempre lança {@link JwtException}
- * (é o {@code AuthService.validarHtmlGuard} quem captura e traduz para 401).</p>
+ * <p>Invariante coberta: {@code parseToken} <b>nunca</b> devolve {@code null} nem um
+ * boolean em falha — sempre lança {@link JwtException} (é o {@code AuthService} quem
+ * captura e traduz para 401).</p>
  */
 class JwtTokenProviderTest {
 
@@ -67,7 +67,7 @@ class JwtTokenProviderTest {
     }
 
     @Test
-    @DisplayName("parseToken — token expirado lança JwtException (nunca retorna null — §4.15)")
+    @DisplayName("parseToken — token expirado lança JwtException (nunca retorna null)")
     void parseToken_expirado_lancaJwtException() {
         JwtTokenProvider provider = provider();
 

@@ -14,12 +14,6 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
  * por default → o filtro nunca se reconhece isento e responde 401 nas rotas
  * permitAll sem token. Setar o servletPath no builder (com pathInfo nulo,
  * derivado pelo próprio MockMvc) reproduz o contêiner real.
- *
- * <p>{@code get}/{@code post} nasceram com o T15 (matriz RBAC). {@code patch},
- * {@code delete} e {@code multipart} foram acrescentados pelo T16 (controllers
- * admin: toggles PATCH do AdminCrud, DELETE de escala e upload multipart de
- * foto). {@code put} foi acrescentado pelo T17 (edição de operação/checklist)
- * — todos com a mesma disciplina de servletPath.
  */
 public final class Requests {
 

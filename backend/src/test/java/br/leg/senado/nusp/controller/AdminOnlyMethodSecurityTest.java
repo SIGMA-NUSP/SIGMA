@@ -48,30 +48,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Prova da camada NOVA do F2 — {@link AdminOnly} (method security) barra sozinha.
- *
- * <p>A matriz do T15 ({@code RbacMatrixMistoTest}) mede o sistema inteiro, onde quem
- * nega é o matcher {@code /api/admin/**} do {@code SecurityConfig}: com ele no caminho,
- * a anotação nunca chega a ser avaliada para um não-admin e a matriz não distingue as
- * duas camadas. Aqui o matcher é tirado do caminho — {@code addFilters = false} desliga
- * a cadeia de filtros de segurança (a técnica complementar prevista em §6-R1) — e a
- * requisição chega ao controller com um {@link UserPrincipal} não-admin no
- * {@code SecurityContext}. O 403 que sobra é mérito exclusivo da anotação.
- *
- * <p>Sem os filtros, o {@code SecurityContext} tem de ser posto na mão: o post-processor
+ * Prova que {@link AdminOnly} (method security) barra sozinha: {@code addFilters = false}
+ * desliga a cadeia de filtros e tira do caminho o matcher {@code /api/admin/**} do
+ * {@code SecurityConfig} — com a cadeia real, a anotação nunca chega a ser avaliada para um
+ * não-admin e as duas camadas não se distinguem. Sem os filtros, o {@code SecurityContext} é
+ * populado na mão (como o {@code JwtAuthenticationFilter} faz em produção): o post-processor
  * {@code authentication()} do spring-security-test depende do {@code SecurityContextHolderFilter}
- * da cadeia para carregá-lo — sem ele a method security acusa
- * {@code AuthenticationCredentialsNotFoundException}. Popular o {@code SecurityContextHolder}
- * direto é o que o {@code JwtAuthenticationFilter} faz em produção após validar o token.
- *
- * <p>É o cenário da rota administrativa que nasce FORA do prefixo {@code /api/admin}
- * (o risco que o F2 descreve): sem {@code @AdminOnly} ela seria apenas
- * {@code authenticated()} e responderia 200 a qualquer papel.
- *
- * <p>O 403 (e não 500) depende do handler de {@code AccessDeniedException} do
- * {@code GlobalExceptionHandler}: a negação da method security nasce dentro do dispatch,
- * onde o {@code @ExceptionHandler(Exception.class)} a capturaria antes do
- * {@code ExceptionTranslationFilter}.
+ * e sem ele a method security acusa {@code AuthenticationCredentialsNotFoundException}.
+ * O 403 (e não 500) vem do handler de {@code AccessDeniedException} do
+ * {@code GlobalExceptionHandler}: a negação nasce dentro do dispatch, onde o
+ * {@code @ExceptionHandler(Exception.class)} a capturaria antes do {@code ExceptionTranslationFilter}.
  */
 @SigmaControllerTest({EscalaSemanalController.class, AvisoController.class, PontoController.class,
         MetabaseDashboardController.class})
@@ -85,7 +71,7 @@ class AdminOnlyMethodSecurityTest {
     @MockitoBean private OperadorRepository operadorRepository;
     @MockitoBean private AvisoService avisoService;
     @MockitoBean private PontoService pontoService;
-    @MockitoBean private PontoExclusaoService pontoExclusaoService;   // F59: dependência nova do PontoController
+    @MockitoBean private PontoExclusaoService pontoExclusaoService;
     @MockitoBean private RetificacaoService retificacaoService;
     @MockitoBean private MarcacaoService marcacaoService;
     @MockitoBean private GradeRetificacaoService gradeRetificacaoService;
@@ -97,7 +83,7 @@ class AdminOnlyMethodSecurityTest {
 
     @BeforeEach
     void setUp() {
-        // Stubs explícitos (§0.5): o que as rotas de sucesso deste teste chamam.
+        // Stubs explícitos: o que as rotas de sucesso deste teste chamam.
         when(escalaSemanalService.listarEscalasPaginado(1, 10))
                 .thenReturn(Map.of("data", List.of(), "meta", Map.of()));
         when(avisoService.listarTodosPaginado(1, 10, "", "data", "desc", null))
@@ -113,7 +99,7 @@ class AdminOnlyMethodSecurityTest {
         SecurityContextHolder.clearContext();
     }
 
-    /** Uma rota admin (anotada) de cada um dos 3 controllers mistos do F2. */
+    /** Uma rota admin (anotada) de cada um dos 3 controllers mistos. */
     static Stream<Arguments> rotasAdminAnotadas() {
         return Stream.of(
                 Arguments.of("/api/admin/escala/list", TokenFactory.OPERADOR),
@@ -147,7 +133,7 @@ class AdminOnlyMethodSecurityTest {
      * As rotas comuns dos MESMOS controllers NÃO herdaram a anotação.
      *
      * <p>Com os filtros desligados nenhuma autorização de ROTA é avaliada, então isto não prova
-     * "aberta a qualquer papel" — quem prova isso é a matriz do T15, com a cadeia real. O que
+     * "aberta a qualquer papel" — quem prova isso é a matriz de autorização com a cadeia real. O que
      * estes casos provam é o oposto do risco: a anotação ficou nos métodos admin e não subiu para
      * a classe nem escorregou para uma rota de operador/técnico, o que os fecharia em produção.
      */
@@ -171,8 +157,8 @@ class AdminOnlyMethodSecurityTest {
     }
 
     /**
-     * Controller 100% administrativo: o {@code @AdminOnly} está na CLASSE (extensão autorizada pelo
-     * Douglas) e vale para todos os métodos — o Metabase é o representante (2 rotas, 1 dependência).
+     * Controller 100% administrativo: o {@code @AdminOnly} está na CLASSE e vale para todos os
+     * métodos — o Metabase é o representante (2 rotas, 1 dependência).
      */
     @ParameterizedTest(name = "[{index}] {0} em /api/admin/metabase/dashboards → 403 (anotação de classe)")
     @MethodSource("papeisNaoAdmin")

@@ -38,27 +38,22 @@ import ch.qos.logback.core.read.ListAppender;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Contrato de erro do advice global, na unidade — um caso por ramo (F6, F26, F2 e o 500 genérico).
+ * Contrato de erro do advice global, na unidade — um caso por ramo.
  *
- * <p>Os testes de MVC ({@code ProtocoloErroContratoTest} e os contratos do T16/T17) provam os ramos
- * ponta a ponta, mas só alcançam o que uma rota real consegue provocar. TRÊS ramos ficam fora do
- * alcance deles:
- * <ul>
- *   <li>{@code MissingServletRequestPartException} — as partes de foto do AdminCrud são opcionais, e a
- *       única obrigatória é o upload do módulo Ponto, que o C4 não podia tocar além das anotações;</li>
- *   <li>{@code MaxUploadSizeExceededException} — o limite é imposto pelo resolver de multipart do
- *       contêiner, e o MockMvc não o aplica;</li>
- *   <li>{@code HttpMediaTypeNotAcceptableException} — quando o {@code Accept} exclui JSON, o corpo
- *       {@code {ok,error}} não pode sequer ser escrito (ver o javadoc do handler); o que se pode fixar
- *       é o contrato do método, aqui.</li>
- * </ul>
- * Cada ramo é exercitado direto: é o teste que quebra se alguém tirar um tipo da lista.
+ * <p>Os testes de MVC (ex.: {@code ProtocoloErroContratoTest}) provam os ramos ponta a ponta,
+ * mas só alcançam o que uma rota real consegue provocar. Três ramos ficam fora do alcance deles:
+ * {@code MissingServletRequestPartException} (as partes multipart opcionais das rotas testáveis
+ * não a disparam), {@code MaxUploadSizeExceededException} (o limite é imposto pelo resolver de
+ * multipart do contêiner — o MockMvc não o aplica) e {@code HttpMediaTypeNotAcceptableException}
+ * (quando o {@code Accept} exclui JSON, o corpo {@code {ok,error}} não pode sequer ser escrito;
+ * ver o javadoc do handler). Cada ramo é exercitado direto: é o teste que quebra se alguém tirar
+ * um tipo da lista.
  */
 class GlobalExceptionHandlerTest {
 
     private final GlobalExceptionHandler handler = new GlobalExceptionHandler();
 
-    /** Os seis tipos de requisição malformada que o handler do F6 (+ o F36) mapeia para 400. */
+    /** Os seis tipos de requisição malformada que o handler mapeia para 400. */
     static Stream<Arguments> requisicoesMalformadas() throws Exception {
         MethodParameter param = new MethodParameter(Alvo.class.getDeclaredMethod("metodo", String.class), 0);
         return Stream.of(
@@ -68,7 +63,7 @@ class GlobalExceptionHandlerTest {
                         new MissingServletRequestParameterException("checklist_id", "long")),
                 Arguments.of("parte multipart ausente",
                         new MissingServletRequestPartException("arquivo")),
-                Arguments.of("corrige F36 — requisição que deveria ser multipart e não é",
+                Arguments.of("requisição que deveria ser multipart e não é",
                         new MultipartException("Current request is not a multipart request")),
                 Arguments.of("corpo JSON ilegível",
                         new HttpMessageNotReadableException("json torto", new MockHttpInputMessage(new byte[0]))),
@@ -78,7 +73,7 @@ class GlobalExceptionHandlerTest {
 
     @ParameterizedTest(name = "[{index}] {0} → 400 no shape padrão")
     @MethodSource("requisicoesMalformadas")
-    @DisplayName("corrige F6 — requisição malformada vira 400, não 500")
+    @DisplayName("requisição malformada vira 400, não 500")
     void requisicaoMalformada_400(String cenario, Exception ex) {
         ResponseEntity<Map<String, Object>> r = handler.handleBadRequest(ex);
 
@@ -88,7 +83,7 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    @DisplayName("corrige F26 — rota inexistente vira 404, não 500")
+    @DisplayName("rota inexistente vira 404, não 500")
     void rotaInexistente_404() {
         ResponseEntity<Map<String, Object>> r = handler.handleRotaInexistente(
                 new NoResourceFoundException(HttpMethod.GET, "/api/rota-que-nao-existe"));
@@ -99,7 +94,7 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    @DisplayName("corrige F26 — verbo errado vira 405 com o cabeçalho Allow, não 500")
+    @DisplayName("verbo errado vira 405 com o cabeçalho Allow, não 500")
     void metodoNaoSuportado_405ComAllow() {
         ResponseEntity<Map<String, Object>> r = handler.handleMetodoNaoSuportado(
                 new HttpRequestMethodNotSupportedException("GET", List.of("POST")));
@@ -111,7 +106,7 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    @DisplayName("corrige F26 — Content-Type não suportado vira 415 com o Accept dos tipos aceitos, não 500")
+    @DisplayName("Content-Type não suportado vira 415 com o Accept dos tipos aceitos, não 500")
     void mediaTypeNaoSuportado_415ComAccept() {
         ResponseEntity<Map<String, Object>> r = handler.handleMediaTypeNaoSuportado(
                 new HttpMediaTypeNotSupportedException(MediaType.TEXT_PLAIN, List.of(MediaType.APPLICATION_JSON)));
@@ -125,7 +120,7 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    @DisplayName("corrige F26 — Accept não atendível vira 406, não 500")
+    @DisplayName("Accept não atendível vira 406, não 500")
     void mediaTypeNaoAceitavel_406() {
         ResponseEntity<Map<String, Object>> r = handler.handleMediaTypeNaoAceitavel(
                 new HttpMediaTypeNotAcceptableException(List.of(MediaType.APPLICATION_JSON)));
@@ -136,12 +131,12 @@ class GlobalExceptionHandlerTest {
     }
 
     /**
-     * O caso mais visível do F26 e o único que nenhum teste de MVC alcança: o limite de upload é
+     * O único caso que nenhum teste de MVC alcança: o limite de upload é
      * imposto pelo resolver de multipart do contêiner, não pelo controller — o MockMvc não o aplica.
      * O admin subia um cartão-ponto acima de 25 MB e recebia "Erro interno do servidor".
      */
     @Test
-    @DisplayName("corrige F26 — upload acima do limite vira 413, não 500")
+    @DisplayName("upload acima do limite vira 413, não 500")
     void uploadAcimaDoLimite_413() {
         ResponseEntity<Map<String, Object>> r = handler.handleUploadGrande(
                 new MaxUploadSizeExceededException(25L * 1024 * 1024));
@@ -158,10 +153,10 @@ class GlobalExceptionHandlerTest {
      * <p>O {@link ExceptionHandlerMethodResolver} é exatamente o componente que o
      * {@code ExceptionHandlerExceptionResolver} usa no dispatch — perguntar a ele é perguntar ao Spring.
      * A regra é "o mais específico vence": {@code MaxUploadSizeExceededException} continua indo para o
-     * 413, e a genérica para o 400. Sem esta prova, o F36 poderia ter roubado o 413 do F26 em silêncio.
+     * 413, e a genérica para o 400. Sem esta prova, o handler do 400 poderia ter roubado o 413 em silêncio.
      */
     @Test
-    @DisplayName("corrige F36 — a precedência do 413 se mantém: o Spring escolhe o handler mais específico")
+    @DisplayName("a precedência do 413 se mantém: o Spring escolhe o handler mais específico")
     void precedenciaDoHandlerMaisEspecifico() {
         ExceptionHandlerMethodResolver resolver = new ExceptionHandlerMethodResolver(GlobalExceptionHandler.class);
 
@@ -172,12 +167,12 @@ class GlobalExceptionHandlerTest {
     }
 
     /**
-     * O SEGUNDO dano do F36 (o primeiro é o status): erro do cliente virava {@code log.error} com
+     * O SEGUNDO dano (o primeiro é o status): erro do cliente virava {@code log.error} com
      * stacktrace — um scanner de rotas, ou um cliente com o Content-Type errado, enchia o log de ERRO.
      * O handler do 400 loga WARN, sem stacktrace; é isso que se trava aqui.
      */
     @Test
-    @DisplayName("corrige F36 — o erro do cliente loga WARN (não ERROR com stacktrace)")
+    @DisplayName("o erro do cliente loga WARN (não ERROR com stacktrace)")
     void requisicaoNaoMultipart_logaWarn() {
         Logger logger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -197,14 +192,14 @@ class GlobalExceptionHandlerTest {
     }
 
     /**
-     * F64 (C18): a {@code MultipartException} da lista do 400 também é a exceção de falha de
+     * A {@code MultipartException} da lista do 400 também é a exceção de falha de
      * <b>parse</b> do multipart (tmpdir cheio, conexão abortada, {@code IOException} do contêiner)
      * — e o {@code log.warn} sem o throwable apagava o diagnóstico de infra. Com causa anexada, o
      * WARN carrega a exceção; o contrato visível (400, corpo, precedência do 413 — travada em
      * {@link #precedenciaDoHandlerMaisEspecifico}) não muda.
      */
     @Test
-    @DisplayName("corrige F64 — multipart COM causa (falha de parse): mesmo 400, e o log PRESERVA a causa")
+    @DisplayName("multipart COM causa (falha de parse): mesmo 400, e o log PRESERVA a causa")
     void multipartComCausa_logPreservaACausa() {
         Logger logger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -231,14 +226,14 @@ class GlobalExceptionHandlerTest {
     }
 
     /**
-     * O critério do F64 é RESTRITO à {@code MultipartException} de propósito: as demais exceções
+     * O log com causa é RESTRITO à {@code MultipartException} de propósito: as demais exceções
      * da lista do 400 carregam causa TAMBÉM no erro puro de cliente ({@code ?page=abc} →
      * {@code ConversionFailedException}/{@code NumberFormatException}; JSON torto →
-     * {@code JsonParseException}) — logar o throwable nelas devolveria o ruído que o F36 eliminou
-     * (verificado no MVC real pela revisão adversarial do C18).
+     * {@code JsonParseException}) — logar o throwable nelas devolveria o ruído ao log
+     * (verificado no MVC real).
      */
     @Test
-    @DisplayName("corrige F64 — tipo errado de parâmetro COM causa (erro de cliente): log continua sem stacktrace")
+    @DisplayName("tipo errado de parâmetro COM causa (erro de cliente): log continua sem stacktrace")
     void tipoErradoComCausa_logContinuaEnxuto() throws Exception {
         MethodParameter param = new MethodParameter(Alvo.class.getDeclaredMethod("metodo", String.class), 0);
         Exception comCausa = new MethodArgumentTypeMismatchException("abc", Integer.class, "page", param,
@@ -261,9 +256,9 @@ class GlobalExceptionHandlerTest {
         assertThat(appender.list.get(0).getThrowableProxy()).isNull();   // o 400 comum segue enxuto
     }
 
-    /** O outro lado do F64: sem causa é o erro puro de CLIENTE — a linha do log continua enxuta (F36). */
+    /** O outro lado: sem causa é o erro puro de CLIENTE — a linha do log continua enxuta. */
     @Test
-    @DisplayName("corrige F64 — multipart SEM causa (erro de cliente): 400 idêntico e log sem stacktrace")
+    @DisplayName("multipart SEM causa (erro de cliente): 400 idêntico e log sem stacktrace")
     void multipartSemCausa_logContinuaEnxuto() {
         Logger logger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -286,7 +281,7 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    @DisplayName("corrige F2 — acesso negado pela method security vira 403, não 500")
+    @DisplayName("acesso negado pela method security vira 403, não 500")
     void acessoNegado_403() {
         ResponseEntity<Map<String, Object>> r =
                 handler.handleAccessDenied(new AccessDeniedException("Access Denied"));

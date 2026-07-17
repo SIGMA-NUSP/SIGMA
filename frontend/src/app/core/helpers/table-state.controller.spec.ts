@@ -5,16 +5,16 @@ import { ApiService } from '../services/api.service';
 import { TableStateController, TableStateOptions } from './table-state.controller';
 
 /**
- * T21 — TableStateController (§5.2/B6): motor de estado das listagens server-side.
+ * TableStateController — motor de estado das listagens server-side. Cobre estado
+ * inicial, load, gatilhos de recarga (sort/filtro/página/limite/busca), o canal de
+ * erro de `load()` (rows zeradas, `meta` LIMPO, `erro` preenchido; limpo a cada nova
+ * carga — as telas apenas o consomem) e o token de recência (vence o pedido MAIS
+ * NOVO, não a resposta mais lenta).
  * Instanciado via TestBed.runInInjectionContext (o construtor chama inject(DestroyRef)
- * para limpar o debounce — mesma técnica da divergência 1 do T19+T20). ApiService.getList
- * mockado. `onSearch` com debounce de 400 ms provado com fake timers (vi.useRealTimers
- * em afterEach). Asserções sobre o próprio `state`/signals (evita a armadilha da
- * referência compartilhada de `state` entre chamadas de getList).
- *
- * C7 — canal de erro (F46): o describe "canal de erro" trava o contrato novo do
- * `error` de `load()` (rows zeradas, `meta` LIMPO, `erro` preenchido) e a limpeza do
- * erro em toda nova carga. É o motor da correção; as telas apenas o consomem.
+ * para limpar o debounce). ApiService.getList mockado. `onSearch` com debounce de
+ * 400 ms provado com fake timers (vi.useRealTimers em afterEach). Asserções sobre o
+ * próprio `state`/signals (evita a armadilha da referência compartilhada de `state`
+ * entre chamadas de getList).
  */
 describe('TableStateController', () => {
   let getList: ReturnType<typeof vi.fn>;
@@ -76,7 +76,7 @@ describe('TableStateController', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Canal de erro (C7/F46) — falha de leitura NÃO pode virar "lista vazia"
+  // Canal de erro — falha de leitura NÃO pode virar "lista vazia"
   // ═══════════════════════════════════════════════════════════════════
   describe('canal de erro', () => {
     const META = { page: 1, limit: 10, total: 42, pages: 5 };
@@ -169,9 +169,9 @@ describe('TableStateController', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // corrige F61 (C13b) — recência: vence o pedido MAIS NOVO, não a resposta mais lenta
+  // Recência: vence o pedido MAIS NOVO, não a resposta mais lenta
   // ═══════════════════════════════════════════════════════════════════
-  describe('corrige F61 — token de recência', () => {
+  describe('token de recência', () => {
     const META_2 = { page: 2, limit: 10, total: 42, pages: 5 };
     const META_3 = { page: 3, limit: 10, total: 42, pages: 5 };
 
@@ -203,7 +203,7 @@ describe('TableStateController', () => {
     });
 
     it('PIOR FACETA — a carga velha FALHA depois de a nova suceder: nada é apagado', () => {
-      // Sem o guard no `error`, o C7 tornava isto destrutivo: rows zeradas, meta NULL (rodapé some)
+      // Sem o guard no `error`, isto era destrutivo: rows zeradas, meta NULL (rodapé some)
       // e uma caixa de erro sobre uma lista que tinha acabado de carregar com sucesso.
       const { c, velha, nova } = duasCargasEmVoo();
 

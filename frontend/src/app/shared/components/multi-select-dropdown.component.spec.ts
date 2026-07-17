@@ -2,11 +2,10 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { MultiSelectDropdownComponent, MultiSelectOption } from './multi-select-dropdown.component';
 
 /**
- * T20 — MultiSelectDropdownComponent: primeiro alvo TestBed do frontend (§5.4; §C6).
- * Estabelece o padrão TestBed + `fixture.componentRef.setInput` para signal inputs
- * (`input.required`) reutilizado por T22–T24 e pela FASE G. É um componente
- * CONTROLADO: `onToggle` NÃO muta o input — emite uma lista nova e a seleção efetiva
- * só muda quando o host re-passa `selected`.
+ * MultiSelectDropdownComponent: TestBed + `fixture.componentRef.setInput` para os
+ * signal inputs (`input.required`). É um componente CONTROLADO: `onToggle` NÃO muta
+ * o input — emite uma lista nova e a seleção efetiva só muda quando o host re-passa
+ * `selected`.
  */
 describe('MultiSelectDropdownComponent', () => {
   const OPCOES: MultiSelectOption[] = [

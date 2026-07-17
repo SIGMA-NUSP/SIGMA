@@ -4,17 +4,12 @@ import { MesAnoSelectorComponent } from './mes-ano-selector.component';
 import { RegistroManualPontoComponent } from './registro-manual-ponto.component';
 
 /**
- * C14 — RegistroManualPontoComponent (shared): ESQUELETO da página "Registro manual de ponto"
- * (card de /ponto, hoje oculto por flag). Sem backend: os campos de hora e as câmeras são
- * placeholders e `dias()` é um computed local do relógio — não há HTTP para mockar.
- *
- * Spec NASCE aqui, mínimo e focado no F37 (C14): a tela é o 3º consumidor do
- * `app-mes-ano-selector` e, como os outros dois, ficava presa ao ano do relógio — em janeiro não
- * se alcançava dezembro. O que se trava: o range chega ao seletor pelo `[anos]` e a navegação real
- * (clique na seta ‹) reconstrói a lista de dias do mês do ano anterior.
- *
- * Relógio congelado (`{toFake:['Date']}`) ANTES de `createComponent`: `hoje`/`ano`/`mes` e o
- * `anosSeletor` são lidos no field initializer.
+ * RegistroManualPontoComponent: esqueleto da página "Registro manual de ponto" (card de
+ * /ponto, oculto por flag). Sem backend: os campos de hora e as câmeras são placeholders e
+ * `dias()` é um computed local do relógio — não há HTTP para mockar. Trava-se que o range de
+ * anos chega ao `app-mes-ano-selector` pelo `[anos]` e que a navegação real (clique na seta ‹)
+ * reconstrói a lista de dias do mês vizinho. Relógio congelado (`{toFake:['Date']}`) ANTES de
+ * `createComponent`: `hoje`/`ano`/`mes` e o `anosSeletor` são lidos no field initializer.
  */
 describe('RegistroManualPontoComponent', () => {
   beforeEach(async () => {
@@ -58,7 +53,7 @@ describe('RegistroManualPontoComponent', () => {
     expect(rotulosNoDom(fixture)[0]).toMatch(/^01\/07 - /);
   });
 
-  it('corrige F37 — em 05/01/2027 o seletor recebe [2026, 2027] e o ‹ leva a lista para DEZEMBRO/2026', () => {
+  it('em 05/01/2027 o seletor recebe [2026, 2027] e o ‹ leva a lista para DEZEMBRO/2026', () => {
     const fixture = renderizar('2027-01-05T09:00:00-03:00');
     const comp = fixture.componentInstance;
 

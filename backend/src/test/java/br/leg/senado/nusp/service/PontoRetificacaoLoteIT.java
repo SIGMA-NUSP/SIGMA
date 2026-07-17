@@ -37,14 +37,12 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
 /**
- * IT da ATOMICIDADE do lote de retificação (F39), contra Oracle real: ou os N dias entram, ou
- * NENHUM entra. É a única prova possível aqui — quem desfaz os dias já gravados é o rollback da
- * transação do container, não o service.
+ * IT da ATOMICIDADE do lote de retificação contra Oracle real: ou os N dias entram, ou NENHUM entra
+ * — quem desfaz os dias já gravados é o rollback da transação do container, não o service.
  *
- * <p><b>Por que {@code @SpringBootTest} e não o {@code @OracleIT} (slice {@code @DataJpaTest}) do
- * resto da FASE C:</b> no slice, a transação do TESTE envolve a chamada e nada é commitado nem
- * revertido de verdade — o teste "passaria" mesmo com a transação do service removida, que é
- * exatamente a mutação que ele precisa matar. Aqui o service é chamado FORA de transação: o
+ * <p>Usa {@code @SpringBootTest}, não o slice {@code @OracleIT} ({@code @DataJpaTest}): no slice a
+ * transação do TESTE envolve a chamada e nada é commitado nem revertido de verdade — o teste
+ * passaria mesmo sem a transação do service. Aqui o service é chamado FORA de transação: o
  * {@code @Transactional} dele abre, commita ou faz rollback pra valer, e a leitura seguinte (em
  * outra transação) vê o que o banco realmente guardou. Sem rollback automático → limpeza manual.
  *
@@ -177,7 +175,7 @@ class PontoRetificacaoLoteIT {
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("corrige F39 — lote válido de 3 dias: os 3 estão no banco depois do commit")
+    @DisplayName("lote válido de 3 dias: os 3 estão no banco depois do commit")
     void loteValidoGravaTodosOsDias() {
         service.criarRetificacoes(pagina.getId(), operador.getId(), lote(
                 dia(DIA_1, "08:00", "12:00"),
@@ -188,7 +186,7 @@ class PontoRetificacaoLoteIT {
     }
 
     @Test
-    @DisplayName("corrige F39 — um dia do lote viola a UK: NENHUM dia persiste (rollback do lote) e a recusa nomeia o dia")
+    @DisplayName("um dia do lote viola a UK: NENHUM dia persiste (rollback do lote) e a recusa nomeia o dia")
     void diaJaRetificadoDerrubaOLoteInteiro() {
         semearRetificacaoDe(DIA_2);   // o dia do meio já foi retificado numa submissão anterior
 
@@ -207,7 +205,7 @@ class PontoRetificacaoLoteIT {
     }
 
     @Test
-    @DisplayName("corrige F39 — recusa no ÚLTIMO dia (fora do período) também derruba os dois primeiros")
+    @DisplayName("recusa no ÚLTIMO dia (fora do período) também derruba os dois primeiros")
     void erroNoUltimoDiaDerrubaOsAnteriores() {
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                 () -> service.criarRetificacoes(pagina.getId(), operador.getId(), lote(
@@ -222,7 +220,7 @@ class PontoRetificacaoLoteIT {
     }
 
     @Test
-    @DisplayName("corrige F39 — horário inválido no 2º dia: nada persiste e a mensagem diz o dia e o valor")
+    @DisplayName("horário inválido no 2º dia: nada persiste e a mensagem diz o dia e o valor")
     void horarioInvalidoDerrubaOLote() {
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                 () -> service.criarRetificacoes(pagina.getId(), operador.getId(), lote(
@@ -234,10 +232,10 @@ class PontoRetificacaoLoteIT {
         assertTrue(diasNoBanco().isEmpty(), "nenhum dia pode ter sido gravado: " + diasNoBanco());
     }
 
-    // ══ C11 — as validações de conteúdo contra o banco REAL (F31/F33) ═════════════
+    // ══ Validações de conteúdo contra o banco REAL ════════════════════════════════
 
     @Test
-    @DisplayName("corrige F33 — observação de 301 caracteres: 400 nomeando o CAMPO e o dia, e NENHUM dia do lote persiste")
+    @DisplayName("observação de 301 caracteres: 400 nomeando o CAMPO e o dia, e NENHUM dia do lote persiste")
     void observacaoLongaDerrubaOLoteComMensagemHonesta() {
         // Sem a guarda, o texto ia cru ao Oracle: ORA-12899 → DataIntegrityViolationException → o
         // catch (escrito para a UK) respondia "O dia … já foi retificado.", e o usuário ia embora
@@ -259,14 +257,13 @@ class PontoRetificacaoLoteIT {
     }
 
     @Test
-    @DisplayName("corrige F33 — o texto que ANTES estourava a coluna (1.200 caracteres = 2.400 bytes) é barrado pela guarda e NÃO chega ao Oracle")
+    @DisplayName("o texto que ANTES estourava a coluna (1.200 caracteres = 2.400 bytes) é barrado pela guarda e NÃO chega ao Oracle")
     void observacaoQueEstouravaAColunaNaoChegaMaisAoBanco() {
-        // O caso ORIGINAL do F33: acima de ~1.100 caracteres acentuados o texto estoura VARCHAR2(2000)
-        // BYTES. ⚠️ Medido aqui (mutação M2 do C11): o ORA-12899 NÃO vira DataIntegrityViolationException
+        // Acima de ~1.100 caracteres acentuados o texto estoura VARCHAR2(2000) BYTES.
+        // ⚠️ Medido aqui: o ORA-12899 NÃO vira DataIntegrityViolationException
         // — o Hibernate o traduz para GenericJDBCException → JpaSystemException, que o catch da UK nunca
-        // viu. Ou seja, a faceta "responde 'já foi retificado'" do §5 não era alcançável por esta via: o
-        // desfecho real era um 500 mudo, com a retificação perdida e o prazo de 5 dias correndo. É esse
-        // 500 que a guarda troca por um 400 que diz o que fazer.
+        // viu. O desfecho real era um 500 mudo, com a retificação perdida e o prazo de 5 dias correndo.
+        // É esse 500 que a guarda troca por um 400 que diz o que fazer.
         Map<String, Object> item = dia(DIA_1, "08:00", "12:00");
         item.put("observacoes", "ç".repeat(1200));
 
@@ -279,7 +276,7 @@ class PontoRetificacaoLoteIT {
     }
 
     @Test
-    @DisplayName("corrige F33 — 300 caracteres ACENTUADOS (600 bytes) gravam de verdade: o teto em caracteres cabe no budget em BYTES da coluna")
+    @DisplayName("300 caracteres ACENTUADOS (600 bytes) gravam de verdade: o teto em caracteres cabe no budget em BYTES da coluna")
     void observacaoNoLimiteCabeNaColuna() {
         // O teto é em CARACTERES (o que o usuário conta e o que o maxlength do HTML conta), mas a
         // coluna é VARCHAR2(2000) em BYTES. Este caso prova, no Oracle real, que 300 não estoura —
@@ -295,7 +292,7 @@ class PontoRetificacaoLoteIT {
     }
 
     @Test
-    @DisplayName("corrige F33 — a corrida na UK REAL do Oracle continua virando 'já foi retificado' (o catch acha a constraint na cadeia de causas)")
+    @DisplayName("a corrida na UK REAL do Oracle continua virando 'já foi retificado' (o catch acha a constraint na cadeia de causas)")
     void corridaNaUkRealContinuaSendoRecusaAmigavel() {
         semearRetificacaoDe(DIA_1);
         // A corrida: a submissão rival commitou DEPOIS do nosso exists, que por isso não viu a linha.
@@ -310,11 +307,11 @@ class PontoRetificacaoLoteIT {
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertEquals("O dia 15/06/2026 já foi retificado.", ex.getMessage(),
-                "o estreitamento do catch (C11) não pode ter deixado a UK real de fora");
+                "o estreitamento do catch não pode ter deixado a UK real de fora");
     }
 
     @Test
-    @DisplayName("corrige F31 — dia sem nenhum horário: 400 e nada persiste (a retificação vazia não nasce mais)")
+    @DisplayName("dia sem nenhum horário: 400 e nada persiste (a retificação vazia não nasce mais)")
     void diaSemHorariosNaoPersiste() {
         Map<String, Object> vazio = new LinkedHashMap<>();
         vazio.put("data", DIA_2.toString());
@@ -331,7 +328,7 @@ class PontoRetificacaoLoteIT {
     }
 
     @Test
-    @DisplayName("corrige F39 — depois de um lote recusado, reenviar o lote corrigido grava tudo (a UK não ficou 'suja')")
+    @DisplayName("depois de um lote recusado, reenviar o lote corrigido grava tudo (a UK não ficou 'suja')")
     void reenvioAposRecusaGravaTudo() {
         assertThrows(ServiceValidationException.class,
                 () -> service.criarRetificacoes(pagina.getId(), operador.getId(), lote(

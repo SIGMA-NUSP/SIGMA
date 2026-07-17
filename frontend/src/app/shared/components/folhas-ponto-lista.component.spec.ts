@@ -5,24 +5,15 @@ import { ApiService } from '../../core/services/api.service';
 import { FolhasPontoListaComponent, MinhaFolha } from './folhas-ponto-lista.component';
 
 /**
- * T28 — FolhasPontoListaComponent (shared, 104 LOC — lista reutilizável das folhas de
- * ponto de uma pessoa; usada em /ponto e embutida em /admin/ponto).
- *
- * ⚠️ Divergência do prompt do estágio (o código vence): o componente NÃO carrega as folhas
- * da API — recebe-as por `input<MinhaFolha[]>()` (quem busca é o pai, `ponto-banco`). O
- * `ApiService` aqui só serve aos downloads (`getBlob` + `abrirBlobInline`/`baixarBlob`).
- *
- * Estratégia (manual de PAGE do T22/T23/T24): TestBed cria o componente (DI + signals) SEM
- * `detectChanges()`; a lógica é exercitada por chamada direta; `ApiService`/`Router` mockados
- * via `useValue`. O input é semeado com `componentRef.setInput` (T19+T20) — o `ClientPager`
- * é construído sobre o Signal do input, então reage sem render.
- *
- * `pager` é `protected` → lido via `(comp as any)`. O ClientPager em si já tem spec próprio
- * (`core/helpers/client-pager.spec.ts`); aqui trava-se só a INTEGRAÇÃO (o recorte que a tabela
- * consome vem do input).
- *
- * Relógio congelado (regra do estágio: nenhum spec depende do dia real) — o SUT não lê `Date`,
- * o congelamento é profilático.
+ * FolhasPontoListaComponent (shared — lista reutilizável das folhas de ponto de uma pessoa;
+ * usada em /ponto e embutida em /admin/ponto). O componente NÃO carrega as folhas da API —
+ * recebe-as por `input<MinhaFolha[]>()` (quem busca é o pai, `ponto-banco`); o `ApiService`
+ * aqui só serve aos downloads (`getBlob` + `abrirBlobInline`/`baixarBlob`).
+ * TestBed sem `detectChanges()`; lógica exercitada por chamada direta; `ApiService`/`Router`
+ * mockados via `useValue`; o input é semeado com `componentRef.setInput` — o `ClientPager` é
+ * construído sobre o Signal do input e reage sem render. `pager` é `protected` → lido via
+ * `(comp as any)`; o ClientPager em si tem spec próprio (`core/helpers/client-pager.spec.ts`),
+ * aqui trava-se só a INTEGRAÇÃO. O SUT não lê `Date` — o relógio congelado é profilático.
  */
 describe('FolhasPontoListaComponent', () => {
   let apiGetBlob: ReturnType<typeof vi.fn>;

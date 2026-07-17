@@ -36,11 +36,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contrato HTTP representativo do {@link AnormalidadeController} (T17).
- *
- * <p>A consulta tem gate próprio: existência 404 antes de acesso 403, acesso
- * concedido antes da busca do RAOA e um segundo 404 quando a busca retorna
- * null. O service permanece integralmente mockado.</p>
+ * Contrato HTTP representativo do {@link AnormalidadeController}, com o service
+ * integralmente mockado. A consulta tem gate próprio: existência 404 antes de
+ * acesso 403, acesso concedido antes da busca do RAOA e um segundo 404 quando
+ * a busca retorna null.
  */
 @SigmaControllerTest(AnormalidadeController.class)
 class AnormalidadeControllerTest {
@@ -201,10 +200,10 @@ class AnormalidadeControllerTest {
     }
 
     @Test
-    @DisplayName("corrige F6 — binding inválido responde 400 no shape padrão de erro")
-    void bindingInvalido_corrigeF6_400() throws Exception {
-        // @RequestBody malformado → HttpMessageNotReadableException, agora tratada pelo handler
-        // de requisição malformada do GlobalExceptionHandler → 400. Achado F6 da §5 (C4).
+    @DisplayName("binding inválido responde 400 no shape padrão de erro")
+    void bindingInvalido_400() throws Exception {
+        // @RequestBody malformado → HttpMessageNotReadableException, tratada pelo handler
+        // de requisição malformada do GlobalExceptionHandler → 400.
         mockMvc.perform(Requests.post("/api/operacao/anormalidade/registro")
                         .header("Authorization", operador)
                         .contentType(MediaType.APPLICATION_JSON)

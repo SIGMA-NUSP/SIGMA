@@ -5,14 +5,13 @@ import { environment } from '../../../environments/environment';
 import { ApiService } from './api.service';
 
 /**
- * T21 — ApiService: a borda HTTP de todo o app. O foco (§5.5/B1) é a LÓGICA do
- * `getList` (serialização JSON de filters/periodo e OMISSÃO de params falsy) e os 4
- * métodos de blob com efeito colateral (B2); os verbos one-liner (put/patch/delete/
- * postForm) são delegação pura ao HttpClient — só 1–2 representativos (post + get com
- * params) provam o prefixo `url()`. `HttpTestingController.verify()` em todo afterEach
- * (B7) — zero request pendente é critério de validação do estágio.
+ * ApiService — a borda HTTP do app. Foco na LÓGICA do `getList` (serialização JSON
+ * de filters/periodo e OMISSÃO de params falsy) e nos métodos de blob com efeito
+ * colateral; os verbos one-liner (put/patch/delete/postForm) são delegação pura ao
+ * HttpClient — casos representativos (post + get com params) provam o prefixo
+ * `url()`. `HttpTestingController.verify()` em todo afterEach: zero request pendente.
  */
-const BASE = environment.apiBaseUrl; // 'http://localhost:8000' (tracked/limpo — obs. T19+T20)
+const BASE = environment.apiBaseUrl; // 'http://localhost:8000'
 
 describe('ApiService', () => {
   let api: ApiService;

@@ -9,39 +9,14 @@ import { ErroCargaComponent } from '../../shared/components/erro-carga.component
 import { AdminGestaoPessoasComponent } from './admin-gestao-pessoas.component';
 
 /**
- * C13b — AdminGestaoPessoasComponent (/admin/gestao-pessoas): o cadastro vivo de PESSOAS do
- * sistema, com TRÊS listagens server-side independentes, uma por `TableStateController`:
- *   • opCtrl  → `/api/admin/dashboard/operadores`
- *   • tecCtrl → `/api/admin/dashboard/tecnicos`
- *   • admCtrl → `/api/admin/dashboard/administradores` (seção que SÓ existe para o master)
- *
- * O que este spec trava é o CANAL DE ERRO (C7) instalado nas três tabelas. Antes dele, a tela
- * preenchia o `erro` do controlador e não o exibia: uma leitura que falhava caía no ramo de lista
- * vazia e a tela AFIRMAVA "Nenhum operador encontrado." / "Nenhum técnico cadastrado." / "Nenhum
- * administrador encontrado.". Aqui a leitura falsa é especialmente cara: o admin conclui que a
- * pessoa não existe e vai RECADASTRAR quem já está no sistema (os cards "Cadastro de Operador"/
- * "Cadastro de Técnico" estão logo acima) — ou, na tabela do master, que não há mais nenhum
- * administrador.
- *
- * Por isso os testes são de RENDER (exceção deliberada à regra "só lógica"): o canal só cumpre a
- * decisão do estágio se o TEMPLATE o consumir — travar apenas o signal deixaria a suíte verde com
- * o ramo `@if (X.erro())` apagado e o defeito de volta na tela. O motor (rows/meta/loading/erro/
- * recência) já está coberto no T21 (`table-state.controller.spec.ts`); aqui prova-se a INSTALAÇÃO
- * por tabela: caixa presente com `role="alert"`, mensagem certa, retry que re-pede o endpoint
- * CERTO, vazio legítimo intacto, isolamento entre as três e rodapé que não mente.
- *
- * Estratégia: TestBed com `ApiService` mockado por `useValue` e `getList` roteado POR ENDPOINT (é
- * o que distingue as três tabelas — e o que permite derrubar UMA sem tocar nas outras). Os
- * `TableStateController` são REAIS. `AuthService` entra como stub com `isMaster` = signal (é só o
- * que a tela lê dele), permitindo cobrir os dois papéis. Sem fake timers: nada no caminho testado
- * lê `Date` e o debounce da busca (400 ms, do controlador) não é exercido. Como o template tem
- * `ngModel` (as buscas das seções), todo render passa por `await fixture.whenStable()`.
- *
- * ⚠️ Divergência do enunciado do estágio (o CÓDIGO vence): o `Router` NÃO pode ser um `useValue`
- * só com `navigate` — o template usa `routerLink` nos 5 cards de navegação, e a diretiva injeta o
- * `Router` de verdade (`createUrlTree`/`serializeUrl` para montar o href). Usa-se o `provideRouter([])`
- * e espiona-se o `navigate` (mesma solução do spec do /admin/ponto): a navegação programática
- * (`abrirPerfil`/`novoAdmin`) fica provada sem quebrar os cards.
+ * Testes de RENDER das TRÊS listagens server-side de /admin/gestao-pessoas (operadores,
+ * técnicos e, só para o master, administradores), cada uma num `TableStateController`
+ * próprio: caixa de erro com role="alert" e mensagem certa, retry que re-pede o endpoint
+ * CERTO, vazio legítimo intacto, rodapé coerente e isolamento entre as três. Papéis via
+ * stub de `AuthService` com `isMaster` = signal. ApiService mockado por useValue com
+ * getList roteado POR ENDPOINT (derruba UMA tabela sem tocar nas outras); Router real via
+ * provideRouter([]) — RouterLink não aceita useValue cru — com spy em `navigate`; sem
+ * fake timers; ngModel no template → todo render passa por `await fixture.whenStable()`.
  */
 
 // ── Endpoints das 3 listagens ──
@@ -63,7 +38,7 @@ const ERRO_500 = { status: 500, error: { ok: false, error: 'Erro interno do serv
 /** Texto que o admin efetivamente lê na caixa: guia da tela + detalhe do backend entre parênteses. */
 const MSG_500 = 'Não foi possível carregar a lista. (Erro interno do servidor)';
 
-describe('AdminGestaoPessoasComponent — canal de erro das 3 listagens (C7/C13b)', () => {
+describe('AdminGestaoPessoasComponent — canal de erro das 3 listagens', () => {
   let apiGetList: ReturnType<typeof vi.fn>;
   let downloadReport: ReturnType<typeof vi.fn>;
 
@@ -330,7 +305,7 @@ describe('AdminGestaoPessoasComponent — canal de erro das 3 listagens (C7/C13b
       expect(secaoAdm.query(By.css('.pag-info'))).toBeNull();
     });
 
-    it('o botão "Novo Admin" continua na tela durante o erro (a saída não some junto com os dados — F44)', async () => {
+    it('o botão "Novo Admin" continua na tela durante o erro (a saída não some junto com os dados)', async () => {
       respostas[EP_ADM] = falha();
       const fixture = await renderizar();
       const secaoAdm = fixture.debugElement.queryAll(By.css('section'))[2];
@@ -435,7 +410,7 @@ describe('AdminGestaoPessoasComponent — canal de erro das 3 listagens (C7/C13b
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Controles da tela durante o erro (não repetir o F44: perder a saída junto com os dados)
+  // Controles da tela durante o erro (não perder a saída junto com os dados)
   // ═══════════════════════════════════════════════════════════════════
   describe('controles da tela', () => {
     it('com as 3 listagens em erro, as buscas, os cards de cadastro e os relatórios continuam na tela', async () => {

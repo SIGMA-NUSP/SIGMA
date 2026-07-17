@@ -23,9 +23,9 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 /**
  * Testes unitários do NativeQueryUtils.
  *
- * Prioridade: partitionForIn — o chunking protege as buscas em lote IN dos
- * relatórios (Q1/Q2) contra o ORA-01795 (máx. 1000 itens por lista IN), e os
- * dados reais não alcançam o limite: a validação do particionador é sintética.
+ * partitionForIn — o chunking protege as buscas em lote IN dos relatórios
+ * contra o ORA-01795 (máx. 1000 itens por lista IN); os dados reais não
+ * alcançam o limite, então a validação do particionador é sintética.
  */
 class NativeQueryUtilsTest {
 
@@ -203,7 +203,7 @@ class NativeQueryUtilsTest {
         }
 
         /**
-         * O ordinal é o caso que obrigou o NFKD (F30). O NFD decompõe acentos mas deixa {@code ª}
+         * O ordinal é o caso que obriga o NFKD. O NFD decompõe acentos mas deixa {@code ª}
          * (U+00AA) intacto — e 0xAA ordena DEPOIS do "z", enquanto o Oracle, sob
          * {@code NLS_SORT=BINARY_AI}, trata o mesmo caractere como um {@code a} (chave medida:
          * {@code NLSSORT('1ª Reuniao')} == {@code NLSSORT('1a Reuniao')}). Não é hipótese: o sistema
@@ -211,7 +211,7 @@ class NativeQueryUtilsTest {
          * NFD, a faceta (ordenada em Java) e a coluna (ordenada no banco) discordariam nessas linhas.
          */
         @Test
-        @DisplayName("semAcento — o ordinal ª/º vira a/o, como no Oracle (NFKD, não NFD) — F30")
+        @DisplayName("semAcento — o ordinal ª/º vira a/o, como no Oracle (NFKD, não NFD)")
         void semAcento_normalizaOrdinalComoOOracle() {
             assertEquals("1a reuniao", NativeQueryUtils.semAcento("1ª Reunião"));
             assertEquals("2o turno", NativeQueryUtils.semAcento("2º Turno"));
@@ -223,7 +223,7 @@ class NativeQueryUtilsTest {
          * de pessoas) precisam usar para não discordar das que vêm ordenadas do banco.
          */
         @Test
-        @DisplayName("ORDEM_TEXTO_PT_BR — acento/caixa não contam; o desempate é estável (F30)")
+        @DisplayName("ORDEM_TEXTO_PT_BR — acento/caixa não contam; o desempate é estável")
         void ordemTextoPtBr_ignoraAcentoECaixaComDesempateEstavel() {
             List<String> nomes = new java.util.ArrayList<>(List.of(
                     "Zulmira", "Kátia Mayara", "Katiane", "JOSE SILVA", "José Silva", "Jose Silva", "1ª Reunião"));
@@ -236,14 +236,14 @@ class NativeQueryUtilsTest {
         }
 
         /**
-         * Guarda do {@code Locale.ROOT} (F30). O {@code semAcento} virou a chave de ordenação das
+         * Guarda do {@code Locale.ROOT}. O {@code semAcento} é a chave de ordenação das
          * facetas — ele tem de reproduzir, em Java, a colação {@code BINARY_AI} do Oracle. Um
-         * {@code toLowerCase()} sem locale usa o default da JVM, e era exatamente a dependência de
-         * locale que o F30 veio arrancar: em tr/az o 'I' vira 'ı' (U+0131) e a ordem passaria a
-         * depender de onde o processo roda — o mesmo defeito, na outra ponta.
+         * {@code toLowerCase()} sem locale usa o default da JVM: em tr/az o 'I' vira 'ı'
+         * (U+0131) e a ordem passaria a depender de onde o processo roda — o mesmo defeito,
+         * na outra ponta.
          */
         @Test
-        @DisplayName("semAcento — a normalização NÃO depende do locale default da JVM (F30)")
+        @DisplayName("semAcento — a normalização NÃO depende do locale default da JVM")
         void semAcento_naoDependeDoLocaleDaJvm() {
             Locale original = Locale.getDefault();
             try {

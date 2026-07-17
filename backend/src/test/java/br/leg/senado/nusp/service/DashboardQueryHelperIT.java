@@ -41,21 +41,16 @@ import ch.qos.logback.core.read.ListAppender;
 import jakarta.persistence.EntityManager;
 
 /**
- * IT do contrato completo de {@link DashboardQueryHelper#executePagedQuery} — o motor único de
- * TODAS as listagens paginadas do sistema — contra Oracle real.
+ * IT do contrato completo de {@link DashboardQueryHelper#executePagedQuery} — o motor único das
+ * listagens paginadas — contra Oracle real. Veículos: {@code AdminDashboardService.listOperadores}
+ * e {@code listChecklists}, construídos à mão com EM real + ObjectMapper, para que os binds saiam
+ * na composição real ({@code baseParams → search → período → filtros → OFFSET/FETCH}); a perna
+ * {@code baseParams} é exercitada chamando o motor diretamente (público e estático).
  *
- * <p>Veículos: {@code AdminDashboardService.listOperadores} (sem período/tiebreaker) e
- * {@code listChecklists} (dateCol, tiebreaker, 5 facetas, expressão derivada no colMap),
- * construídos à mão com EM real + ObjectMapper. Assim os binds saem na composição REAL:
- * {@code baseParams → search → período → filtros → OFFSET/FETCH}. A perna {@code baseParams}
- * (hoje só usada por OperadorDashboardService e BancoHorasService) é exercitada chamando o motor
- * diretamente — ele é público e estático.
- *
- * <p><b>Anti-falso-verde das facetas:</b> a consolidação {@code GROUPING SETS} e o fallback
- * por-coluna produzem o MESMO resultado; só um WARN distingue os caminhos. Sem vigiar o log, todo
- * teste de faceta passaria mesmo com a consolidação quebrada (o fallback a substituiria em
- * silêncio). Por isso {@link #nenhumWarnDeFaceta()} falha o teste se o motor logar qualquer WARN —
- * é a verificação "zero WARN de faceta" da validação do T12, tornada executável.
+ * <p>Anti-falso-verde das facetas: a consolidação {@code GROUPING SETS} e o fallback por-coluna
+ * produzem o MESMO resultado; só um WARN distingue os caminhos — sem vigiar o log, teste de
+ * faceta passaria mesmo com a consolidação quebrada. Por isso {@link #nenhumWarnDeFaceta()}
+ * falha o teste se o motor logar qualquer WARN.
  */
 @OracleIT
 class DashboardQueryHelperIT {
@@ -198,7 +193,7 @@ class DashboardQueryHelperIT {
     class Busca {
 
         /**
-         * corrige F30. Contrato novo da busca: <b>acento e caixa não contam</b> — quem digita "jose"
+         * Contrato da busca: <b>acento e caixa não contam</b> — quem digita "jose"
          * acha "José", e quem digita "José" acha "Jose". Antes, o motor usava {@code UPPER(col) LIKE
          * UPPER(?)}: neutralizava a caixa e mantinha o acento, então quem procurasse a operadora
          * "Kátia" por "katia" (o jeito natural de digitar) não a encontrava.
@@ -208,7 +203,7 @@ class DashboardQueryHelperIT {
          * do sistema mudou junto.
          */
         @Test
-        @DisplayName("corrige F30 — a busca ignora caixa E acento: Jose/jose/José/josé/JOSE acham 'José'")
+        @DisplayName("a busca ignora caixa E acento: Jose/jose/José/josé/JOSE acham 'José'")
         void busca_ignoraCaixaEAcento() {
             // logins neutros: o termo buscado precisa existir só no NOME (a busca varre nome E e-mail)
             Operador jose = CenarioFactory.novoOperador(emReal(), "José Antônio", "alfa");
@@ -690,7 +685,7 @@ class DashboardQueryHelperIT {
 
     // ══════════════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("colação pt-BR (F30) — ordenação, paridade dev↔prod e o limite da mudança")
+    @DisplayName("colação pt-BR — ordenação, paridade dev↔prod e o limite da mudança")
     class ColacaoPtBr {
 
         /**
@@ -701,20 +696,20 @@ class DashboardQueryHelperIT {
          * {@code NLS_SORT} removida — e produção continuaria quebrada. Motivo: a JVM de dev roda em
          * pt_BR, então o driver deriva {@code WEST_EUROPEAN}, uma colação linguística que TAMBÉM
          * agrupa acentos; a máquina de desenvolvimento mascara o defeito (é exatamente por isso que o
-         * F30 sobreviveu tanto tempo). O dígito separa as três: {@code BINARY_AI} o põe ANTES das
+         * defeito sobreviveu tanto tempo). O dígito separa as três: {@code BINARY_AI} o põe ANTES das
          * letras, {@code WEST_EUROPEAN} o joga para DEPOIS de "Zulmira", e {@code BINARY} (produção)
-         * ainda por cima manda os acentuados para o fim. Medido no Oracle real (C15).
+         * ainda por cima manda os acentuados para o fim. Medido no Oracle real.
          */
         private static final List<String> NOMES_ADVERSARIAIS = List.of(
                 "Zulmira Zebra", "Álvaro Alfa", "Alvaro Bravo", "Ângela Charlie", "Angela Delta",
                 "Ana Echo", "2 Discriminador Numerico");
 
         /**
-         * A ordem pt-BR CONTRATADA (decisão do Douglas): o acento tem peso ZERO — não é "desempate por
+         * A ordem pt-BR CONTRATADA: o acento tem peso ZERO — não é "desempate por
          * acento". Repare que "Álvaro Alfa" vem ANTES de "Alvaro Bravo" e "Ângela Charlie" antes de
          * "Angela Delta": quem decide é o resto do nome ("alfa" &lt; "bravo"), como se o acento não
          * existisse. Sob a colação BINARY que produção usava, "Álvaro" (0xC1) e "Ângela" (0xC2)
-         * cairiam no FIM da lista, depois de "Zulmira" — o F30 tal como o usuário o via.
+         * cairiam no FIM da lista, depois de "Zulmira" — o defeito tal como o usuário o via.
          */
         private static final List<String> ORDEM_PT_BR = List.of(
                 "2 Discriminador Numerico", "Álvaro Alfa", "Alvaro Bravo", "Ana Echo",
@@ -740,7 +735,7 @@ class DashboardQueryHelperIT {
 
         /**
          * A régua: a ordem que o próprio Oracle chama de BINARY_AI, pedida a ele com {@code NLSSORT}
-         * EXPLÍCITO. Não pode vir de {@code String.compareTo} (foi o locale do Java que gerou o F30),
+         * EXPLÍCITO. Não pode vir de {@code String.compareTo} (foi o locale do Java que gerou o defeito),
          * nem da colação da sessão — que é justamente o que está sob teste: se alguém remover a
          * fixação do {@code NLS_SORT}, a listagem volta a BINARY e esta régua NÃO, e o teste cai.
          */
@@ -759,7 +754,7 @@ class DashboardQueryHelperIT {
         }
 
         @Test
-        @DisplayName("corrige F30 — ordenação pt-BR: o acentuado sai JUNTO do par sem acento, não depois do 'Z'")
+        @DisplayName("ordenação pt-BR: o acentuado sai JUNTO do par sem acento, não depois do 'Z'")
         void ordenacao_acentuadosJuntoDosParesSemAcento() {
             semearAdversariais();
 
@@ -774,14 +769,14 @@ class DashboardQueryHelperIT {
         }
 
         /**
-         * §5.5 — a contramedida contra a regressão silenciosa, no lado JAVA da colação: a faceta é
+         * A contramedida contra a regressão silenciosa, no lado JAVA da colação: a faceta é
          * ordenada em memória, e a chave ({@code semAcento}) usa {@code toLowerCase(Locale.ROOT)}.
          * Sem o {@code Locale.ROOT}, o lowercase passaria a depender do locale default da JVM — a
-         * MESMA doença do F30, na outra ponta: a lista mudaria conforme quem roda o processo.
+         * MESMA doença, na outra ponta: a lista mudaria conforme quem roda o processo.
          *
          * <p>⚠️ O locale hostil é {@code tr-TR} de propósito, e não {@code en-US}: para o alfabeto
          * latino, {@code en-US} e {@code pt-BR} produzem lowercase IDÊNTICO — um teste que comparasse
-         * esses dois passaria mesmo com o bug (foi o que este teste fazia até a revisão do C15 pegá-lo).
+         * esses dois passaria mesmo com o bug.
          * É o turco que mapeia 'I' → 'ı' (U+0131), e aí a faceta sairia fora de ordem.
          *
          * <p>⚠️ O que este teste NÃO é: ele não reabre conexão sob cada locale (o pool já está
@@ -791,7 +786,7 @@ class DashboardQueryHelperIT {
          * banco, outro o lado do Java.
          */
         @Test
-        @DisplayName("guarda de paridade (F30) — a faceta ordenada em Java não muda com o locale da JVM")
+        @DisplayName("guarda de paridade — a faceta ordenada em Java não muda com o locale da JVM")
         void ordenacao_naoDependeDoLocaleDaJvm() {
             for (String nome : List.of("Ítalo Iris", "Ivan Ipsilon", "Ana Echo")) comNomeExato(nome, "loc" + nome.charAt(1));
 
@@ -816,17 +811,17 @@ class DashboardQueryHelperIT {
         }
 
         /**
-         * O caractere que quase escapou (F30). O Oracle, sob {@code BINARY_AI}, trata o ordinal
+         * O caractere que quase escapou. O Oracle, sob {@code BINARY_AI}, trata o ordinal
          * {@code ª} como um {@code a} — mas o {@code Normalizer.NFD} do Java NÃO o decompõe, e 0xAA
          * ordena depois do "z". O sistema tem CENTENAS de {@code NOME_EVENTO} assim ("1ª Reunião" —
          * 229 linhas em OPR_REGISTRO_ENTRADA, 6 em OPR_ANORMALIDADE no espelho de produção), e
          * {@code NOME_EVENTO} é faceta E coluna de busca: com NFD, o dropdown de filtro (ordenado em
          * Java) mostraria "1ª Reunião" no fim enquanto a coluna (ordenada no banco) a mostra junto dos
-         * "1a…". Seria o F30 reintroduzido dentro da própria correção. Por isso {@code semAcento} usa
+         * "1a…". Seria o defeito reintroduzido dentro da própria correção. Por isso {@code semAcento} usa
          * NFKD — e por isso este teste semeia o vizinho "1z", que é quem denuncia a diferença.
          */
         @Test
-        @DisplayName("corrige F30 — o ordinal (1ª Reunião) ordena como '1a' nos DOIS motores, não depois do 'z'")
+        @DisplayName("o ordinal (1ª Reunião) ordena como '1a' nos DOIS motores, não depois do 'z'")
         void ordenacao_ordinalConcordaEntreBancoEJava() {
             int i = 0;
             for (String nome : List.of("1ª Reuniao", "1a Sessao", "1o Turno", "1z Extra")) comNomeExato(nome, "ord" + i++);
@@ -840,21 +835,21 @@ class DashboardQueryHelperIT {
         }
 
         /**
-         * §3.3 — o limite da decisão, feito teste. A busca ficou insensível a acento/caixa por
+         * O limite da decisão, feito teste. A busca ficou insensível a acento/caixa por
          * EXPRESSÃO ({@code COLLATE BINARY_AI} no LIKE). A tentação seria fazê-lo pela sessão
          * ({@code NLS_COMP=LINGUISTIC}), que dá a mesma busca de graça — e junto, sem ninguém pedir:
          * 'douglas' passaria a casar 'DOUGLAS' e 'dóuglas' no LOGIN, o DISTINCT que alimenta as
          * próprias facetas colapsaria 'Jose' com 'José', o GROUP BY dos dashboards mudaria de contagem
          * e a unicidade de username/e-mail passaria a acusar duplicata onde não há (tudo medido no
-         * Oracle real, C15). Esta testemunha é estrutural: se alguém "simplificar" o
+         * Oracle real). Esta testemunha é estrutural: se alguém "simplificar" o
          * connection-init-sql, a busca continua verde e é AQUI que o alarme toca.
          */
         @Test
-        @DisplayName("§3.3 — a identidade textual NÃO afrouxou: a sessão fixa o NLS_SORT, jamais o NLS_COMP")
+        @DisplayName("a identidade textual NÃO afrouxou: a sessão fixa o NLS_SORT, jamais o NLS_COMP")
         void identidade_naoAfrouxouForaDaBusca() {
             assertEquals("BINARY_AI", nlsDaSessao("NLS_SORT"),
                     "o connection-init-sql do Hikari (application.yml) não chegou à sessão — sem ele a"
-                            + " colação volta a ser a que o driver deriva do locale da JVM (o F30)");
+                            + " colação volta a ser a que o driver deriva do locale da JVM");
             assertEquals("BINARY", nlsDaSessao("NLS_COMP"),
                     "NLS_COMP=LINGUISTIC tornaria TODA igualdade de texto do sistema insensível a"
                             + " acento e caixa — login, unicidade, DISTINCT das facetas, GROUP BY");
@@ -875,7 +870,7 @@ class DashboardQueryHelperIT {
         }
 
         /**
-         * §5.4 — a decisão 5, provada: o caminho consolidado ordena as facetas <b>em Java</b> e o
+         * A decisão de projeto, provada: o caminho consolidado ordena as facetas <b>em Java</b> e o
          * fallback por-coluna as ordena <b>no banco</b>. São dois motores de colação diferentes, e
          * confiar que concordam "no universal" seria ingênuo — eles concordam no domínio real porque
          * o par foi escolhido para isso: {@code BINARY_AI} (acento e caixa com peso zero, resto em
@@ -885,7 +880,7 @@ class DashboardQueryHelperIT {
          * consolidação, e aí o WARN derrubaria o teste no {@link #nenhumWarnDeFaceta()}.
          */
         @Test
-        @DisplayName("F30 — faceta consolidada (Java) e fallback por-coluna (banco) saem IDÊNTICAS no domínio adversarial")
+        @DisplayName("faceta consolidada (Java) e fallback por-coluna (banco) saem IDÊNTICAS no domínio adversarial")
         void facetas_consolidadoEFallbackConcordam() {
             // Três coisas no mesmo cenário: (a) o par acentuado; (b) o caso que só o desempate resolve
             // — 'Jose' e 'José' são DISTINCT diferentes (a igualdade é binária) que COLIDEM na chave
@@ -927,7 +922,7 @@ class DashboardQueryHelperIT {
          * que segue mostrando as três como itens distintos, contradiria o próprio filtro.
          */
         @Test
-        @DisplayName("F30 — filtro POR COLUNA ignora acento (o usuário digita); filtro por VALORES continua EXATO")
+        @DisplayName("filtro POR COLUNA ignora acento (o usuário digita); filtro por VALORES continua EXATO")
         void filtros_textoDigitadoIgnoraAcentoMasValorMarcadoEhExato() {
             Operador jose = comNomeExato("José Silva", "fil0");
             Operador semAcento = comNomeExato("Jose Silva", "fil1");
@@ -959,7 +954,7 @@ class DashboardQueryHelperIT {
          * quebra, a faz coincidir com a que o comparador Java produz para a faceta.
          *
          * <p>⚠️ <b>Honestidade sobre o alcance deste teste:</b> ele fixa a ordem total esperada, mas
-         * NÃO detecta a remoção do desempate — medido (mutação M10 do C15): sem ele, o Oracle ainda
+         * NÃO detecta a remoção do desempate — medido (por mutação): sem ele, o Oracle ainda
          * devolve estes 4 nomes na mesma ordem, porque com tão poucas linhas o plano é determinístico
          * na prática. A garantia é estrutural (ordem total no SQL), não observável neste volume; um
          * plano diferente (mais dados, índice, paralelismo) é que a exporia. O que este teste guarda
@@ -967,7 +962,7 @@ class DashboardQueryHelperIT {
          * concatena exatamente a lista inteira.
          */
         @Test
-        @DisplayName("F30 — nomes que colidem na chave sem-acento têm ordem total: paginam sem repetir nem sumir")
+        @DisplayName("nomes que colidem na chave sem-acento têm ordem total: paginam sem repetir nem sumir")
         void paginacao_ordemTotalComNomesQueColidemNaChaveAi() {
             for (String nome : List.of("José Silva", "Jose Silva", "JOSE SILVA", "josé silva")) {
                 comNomeExato(nome, "pag" + Math.abs(nome.hashCode()));
@@ -1113,9 +1108,9 @@ class DashboardQueryHelperIT {
         }
 
         @Test
-        @DisplayName("corrige F16 — sort inválido em listOperadores ordena SEMPRE por NOME (OP_SORT é LinkedHashMap)")
+        @DisplayName("sort inválido em listOperadores ordena SEMPRE por NOME (OP_SORT é LinkedHashMap)")
         void sortInvalido_ordemDefaultEstavelPorNome() {
-            // F16 (§5 do plano): OP_SORT/TEC_SORT/ADM_SORT eram Map.of, cuja ordem de iteração é
+            // OP_SORT/TEC_SORT/ADM_SORT eram Map.of, cuja ordem de iteração é
             // randomizada por JVM (SALT) — e buildOrderBy resolve o sort desconhecido com o PRIMEIRO
             // valor do map. A mesma chamada ordenava por NOME_COMPLETO numa JVM e por EMAIL na
             // seguinte. Agora são LinkedHashMap com "nome" primeiro (paridade com o

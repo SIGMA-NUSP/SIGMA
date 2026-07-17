@@ -6,12 +6,11 @@ import {
 } from './column-filter.component';
 
 /**
- * T20 — ColumnFilterComponent (§5.4; §C5). Alimenta todas as tabelas do admin. O
- * coração testado é a lógica de seleção com a semântica `values: null = TODOS
- * selecionados` (não confundir com "nenhum") e os computeds de busca. O
- * posicionamento do painel (duplo `requestAnimationFrame` + `getBoundingClientRect`)
- * é coberto à parte com `requestAnimationFrame` stubado e `getBoundingClientRect`
- * dublado no jsdom.
+ * ColumnFilterComponent — alimenta todas as tabelas do admin. O coração testado é a
+ * lógica de seleção com a semântica `values: null = TODOS selecionados` (não confundir
+ * com "nenhum") e os computeds de busca. O posicionamento do painel (duplo
+ * `requestAnimationFrame` + `getBoundingClientRect`) é coberto à parte com
+ * `requestAnimationFrame` stubado e `getBoundingClientRect` dublado no jsdom.
  */
 describe('ColumnFilterComponent', () => {
   const COL: ColumnFilterDef = { key: 'nome', label: 'Nome', type: 'text' };

@@ -19,17 +19,13 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * O {@code switch} de existência do F34 — a ÚNICA implementação real da pergunta "esta pessoa existe?"
- * do par polimórfico do Ponto, e por isso o único lugar onde ela pode ser provada de verdade.
- *
- * <p>Os dois consumidores ({@code MarcacaoService.aplicarLote} e {@code PontoService.atualizarVinculo})
- * mockam este componente — lá se prova o que eles FAZEM com a resposta (400, nada gravado). Se o switch
- * não tivesse teste próprio, trocar {@code case "TECNICO"} pelo repositório errado, ou devolver
- * {@code true} no {@code default}, deixaria a suíte inteira verde e o F34 voltaria calado. É este
- * arquivo que fecha essa porta.
- *
- * <p>O <b>par trocado</b> (id real de OPERADOR declarado como TECNICO) só é demonstrável aqui: exige um
- * cadastro que responde {@code true} e outro que responde {@code false} para o MESMO id.
+ * O {@code switch} de existência de {@link PessoaCadastroLookup} — a ÚNICA implementação real da
+ * pergunta "esta pessoa existe?" do par polimórfico (id, tipo) do Ponto. Os dois consumidores
+ * ({@code MarcacaoService.aplicarLote} e {@code PontoService.atualizarVinculo}) mockam este
+ * componente — lá se prova o que eles FAZEM com a resposta; cada {@code case} do switch (cada
+ * tipo consulta o SEU cadastro, {@code default} → false) só é provado aqui. Inclui o <b>par
+ * trocado</b> (id real de OPERADOR declarado como TECNICO → false), que exige um cadastro
+ * respondendo {@code true} e outro {@code false} para o MESMO id.
  */
 @ExtendWith(MockitoExtension.class)
 class PessoaCadastroLookupTest {
@@ -42,7 +38,7 @@ class PessoaCadastroLookupTest {
     private PessoaCadastroLookup lookup;
 
     @Test
-    @DisplayName("corrige F34 — cada tipo consulta o SEU cadastro (e só ele)")
+    @DisplayName("cada tipo consulta o SEU cadastro (e só ele)")
     void cadaTipoConsultaOSeuCadastro() {
         when(operadorRepo.existsById("op-1")).thenReturn(true);
         assertTrue(lookup.existe("op-1", "OPERADOR"));
@@ -57,12 +53,12 @@ class PessoaCadastroLookupTest {
     }
 
     /**
-     * O coração do F34: o id EXISTE — como OPERADOR. Declarado TECNICO, a resposta tem de ser não, porque
+     * O caso central: o id EXISTE — como OPERADOR. Declarado TECNICO, a resposta tem de ser não, porque
      * a marcação gravada com o par (op-1, TECNICO) é a linha órfã que nenhuma leitura do módulo procura.
      * Um {@code existsById} genérico (sem o switch por tipo) devolveria true aqui.
      */
     @Test
-    @DisplayName("corrige F34 — par trocado: id real de OPERADOR declarado como TECNICO → false (o cadastro consultado é o do TIPO)")
+    @DisplayName("par trocado: id real de OPERADOR declarado como TECNICO → false (o cadastro consultado é o do TIPO)")
     void parTrocado() {
         when(tecnicoRepo.existsById("op-1")).thenReturn(false);   // no cadastro de técnicos, esse id não existe
 
@@ -74,7 +70,7 @@ class PessoaCadastroLookupTest {
     }
 
     @Test
-    @DisplayName("corrige F34 — pessoa inexistente no cadastro do próprio tipo → false")
+    @DisplayName("pessoa inexistente no cadastro do próprio tipo → false")
     void inexistente() {
         when(operadorRepo.existsById("fantasma")).thenReturn(false);
 
@@ -82,7 +78,7 @@ class PessoaCadastroLookupTest {
     }
 
     @Test
-    @DisplayName("corrige F34 — tipo desconhecido → false, sem consultar cadastro nenhum")
+    @DisplayName("tipo desconhecido → false, sem consultar cadastro nenhum")
     void tipoDesconhecido() {
         assertFalse(lookup.existe("op-1", "XPTO"));
         assertFalse(lookup.existe("op-1", null));
@@ -92,7 +88,7 @@ class PessoaCadastroLookupTest {
 
     /** Id vazio nem chega ao banco: {@code existsById(null)} estouraria, e {@code ""} seria uma ida inútil. */
     @Test
-    @DisplayName("corrige F34 — id nulo ou em branco → false, sem tocar o banco")
+    @DisplayName("id nulo ou em branco → false, sem tocar o banco")
     void idVazio() {
         assertFalse(lookup.existe(null, "OPERADOR"));
         assertFalse(lookup.existe("   ", "OPERADOR"));
@@ -102,7 +98,7 @@ class PessoaCadastroLookupTest {
 
     /** O tipo chega da UI e do JSON como vier; é o lookup que o põe na forma em que as tabelas o gravam. */
     @Test
-    @DisplayName("corrige F34 — o tipo é normalizado (caixa e espaços) antes do switch")
+    @DisplayName("o tipo é normalizado (caixa e espaços) antes do switch")
     void tipoNormalizado() {
         when(tecnicoRepo.existsById("tec-7")).thenReturn(true);
 

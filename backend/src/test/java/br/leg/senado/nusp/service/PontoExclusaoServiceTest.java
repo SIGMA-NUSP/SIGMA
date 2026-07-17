@@ -61,15 +61,15 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Unitários da exclusão de publicações do Ponto (F59) — o que se prova SEM banco:
+ * Unitários da exclusão de publicações do Ponto — o que se prova SEM banco:
  *
  * <ul>
  *   <li>a PERMISSÃO: só o master (a propriedade {@code app.admin.master-username}, nunca um nome
  *       hardcoded) passa; para todos os outros é 403 e <b>nada é tocado</b> — nem lido;</li>
  *   <li>os alvos inexistentes (404) e a página de outro lote (400);</li>
- *   <li>a ORDEM das deleções, que é o estágio inteiro: retificações → flush → avisos → páginas →
- *       flush → re-âncora. Trocar dois passos aqui é ORA-02292 ou uma âncora que volta para a folha
- *       que acabou de ser excluída;</li>
+ *   <li>a ORDEM das deleções: retificações → flush → avisos → páginas → flush → re-âncora.
+ *       Trocar dois passos aqui é ORA-02292 ou uma âncora que volta para a folha que acabou
+ *       de ser excluída;</li>
  *   <li>a montagem do preview e do RESUMO da auditoria a partir de fatos mockados.</li>
  * </ul>
  *
@@ -207,7 +207,7 @@ class PontoExclusaoServiceTest {
          * distância de acontecer.
          */
         @Test
-        @DisplayName("corrige F59 — admin comum: 403 nas QUATRO rotas, e nenhum repositório é tocado")
+        @DisplayName("admin comum: 403 nas QUATRO rotas, e nenhum repositório é tocado")
         void naoMasterRecebe403SemTocarNada() {
             List<ServiceValidationException> recusas = List.of(
                     assertThrows(ServiceValidationException.class,
@@ -228,7 +228,7 @@ class PontoExclusaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F59 — usuário nulo/anônimo também leva 403 (nada de master por omissão)")
+        @DisplayName("usuário nulo/anônimo também leva 403 (nada de master por omissão)")
         void usuarioNuloRecebe403() {
             assertEquals(HttpStatus.FORBIDDEN,
                     assertThrows(ServiceValidationException.class,
@@ -321,7 +321,7 @@ class PontoExclusaoServiceTest {
          * que se acabou de excluir.
          */
         @Test
-        @DisplayName("corrige F59 — retificações → flush → páginas → flush → re-âncora, nesta ordem")
+        @DisplayName("retificações → flush → páginas → flush → re-âncora, nesta ordem")
         void ordemDeDelecaoEFlush() {
             cenarioMinimo("MENSAL");
             when(retificacaoRepo.findByPaginaIdIn(List.of(PAGINA)))
@@ -340,7 +340,7 @@ class PontoExclusaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F59 — a chave das retificações é a PÁGINA (proveniência), nunca a pessoa")
+        @DisplayName("a chave das retificações é a PÁGINA (proveniência), nunca a pessoa")
         void retificacoesSaemPelaPagina() {
             cenarioMinimo("SEMANAL");
 
@@ -369,13 +369,13 @@ class PontoExclusaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F59 — o lote é lido pelo caminho que SEGURA a linha (lockPorId), nunca pelo findById solto")
+        @DisplayName("o lote é lido pelo caminho que SEGURA a linha (lockPorId), nunca pelo findById solto")
         void exclusaoTravaOLote() {
             cenarioMinimo("SEMANAL");
 
             service.excluirLote(LOTE, MASTER, CALLER_ID);
 
-            // O mesmo portão da publicação (F49) e do vínculo (F58): sem ele, excluir corre por fora
+            // O mesmo portão da publicação e do vínculo: sem ele, excluir corre por fora
             // da serialização e a publicação em voo publica um lote que está sendo apagado.
             verify(loteRepo).lockPorId(LOTE);
             verify(loteRepo, never()).findById(anyString());
@@ -388,7 +388,7 @@ class PontoExclusaoServiceTest {
          * todo mundo do lote.
          */
         @Test
-        @DisplayName("corrige F59 — página PENDENTE (sem pessoa): nenhuma re-âncora, e os avisos do lote NEM SÃO CONSULTADOS")
+        @DisplayName("página PENDENTE (sem pessoa): nenhuma re-âncora, e os avisos do lote NEM SÃO CONSULTADOS")
         void paginaPendenteNaoReancoraNemMexeEmAviso() {
             when(loteRepo.lockPorId(LOTE)).thenReturn(Optional.of(lote("SEMANAL", "PUBLICADO")));
             when(paginaRepo.findById(PAGINA)).thenReturn(Optional.of(pagina(PAGINA, null)));
@@ -410,7 +410,7 @@ class PontoExclusaoServiceTest {
     class Avisos {
 
         @Test
-        @DisplayName("corrige F59 — exclusão de LOTE: só os cadastros com ORIGEM_LOTE_ID daquele lote morrem")
+        @DisplayName("exclusão de LOTE: só os cadastros com ORIGEM_LOTE_ID daquele lote morrem")
         void loteApagaOsCadastrosDaOrigem() {
             cenarioMinimo("MENSAL");
             AvisoCadastro cad = cadastro();
@@ -426,7 +426,7 @@ class PontoExclusaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F59 — exclusão de PÁGINA: sai o ALVO e a CIÊNCIA daquela pessoa; o cadastro SOBREVIVE para os demais")
+        @DisplayName("exclusão de PÁGINA: sai o ALVO e a CIÊNCIA daquela pessoa; o cadastro SOBREVIVE para os demais")
         void paginaApagaSoOAlvoDaPessoa() {
             when(loteRepo.lockPorId(LOTE)).thenReturn(Optional.of(lote("SEMANAL", "PUBLICADO")));
             when(paginaRepo.findById(PAGINA)).thenReturn(Optional.of(pagina(PAGINA, OP)));
@@ -447,7 +447,7 @@ class PontoExclusaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F59 — cadastro que fica com ZERO alvos morre junto (aviso ativo sem destinatário é aviso invisível)")
+        @DisplayName("cadastro que fica com ZERO alvos morre junto (aviso ativo sem destinatário é aviso invisível)")
         void cadastroSemAlvosMorre() {
             when(loteRepo.lockPorId(LOTE)).thenReturn(Optional.of(lote("SEMANAL", "PUBLICADO")));
             when(paginaRepo.findById(PAGINA)).thenReturn(Optional.of(pagina(PAGINA, OP)));
@@ -476,7 +476,7 @@ class PontoExclusaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F59 — o preview conta o que morre e diz para onde a âncora volta")
+        @DisplayName("o preview conta o que morre e diz para onde a âncora volta")
         @SuppressWarnings("unchecked")
         void previewDeLotePublicado() {
             when(paginaRepo.findByLoteIdOrderByNumeroPagina(LOTE)).thenReturn(List.of(pagina(PAGINA, OP)));
@@ -520,7 +520,7 @@ class PontoExclusaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F59 — pessoa sem folha anterior: o preview avisa que ela fica sem folha oficial (abertura 0)")
+        @DisplayName("pessoa sem folha anterior: o preview avisa que ela fica sem folha oficial (abertura 0)")
         void previewSemFolhaAnterior() {
             when(paginaRepo.findByLoteIdOrderByNumeroPagina(LOTE)).thenReturn(List.of(pagina(PAGINA, OP)));
             when(retificacaoRepo.findByPaginaIdIn(List.of(PAGINA))).thenReturn(List.of());
@@ -541,7 +541,7 @@ class PontoExclusaoServiceTest {
         }
 
         @Test
-        @DisplayName("corrige F59 — a âncora que NÃO está entre as páginas excluídas não muda (e a query da candidata nem roda)")
+        @DisplayName("a âncora que NÃO está entre as páginas excluídas não muda (e a query da candidata nem roda)")
         void previewAncoraDeOutraFolhaNaoMuda() {
             when(paginaRepo.findByLoteIdOrderByNumeroPagina(LOTE)).thenReturn(List.of(pagina(PAGINA, OP)));
             when(retificacaoRepo.findByPaginaIdIn(List.of(PAGINA))).thenReturn(List.of());
@@ -606,7 +606,7 @@ class PontoExclusaoServiceTest {
     class Auditoria {
 
         @Test
-        @DisplayName("corrige F59 — a trilha grava quem/quando/o quê, com as contagens REAIS e a âncora resultante")
+        @DisplayName("a trilha grava quem/quando/o quê, com as contagens REAIS e a âncora resultante")
         void trilhaComSnapshotReal() {
             cenarioMinimo("MENSAL");
             when(retificacaoRepo.findByPaginaIdIn(List.of(PAGINA))).thenReturn(List.of(

@@ -40,9 +40,9 @@ import br.leg.senado.nusp.repository.SalaRepository;
  * anti-duplicidade de 5 min do {@code registrar} (SYSTIMESTAMP + INTERVAL) e o
  * {@code DELETE ... NOT IN (:ids)} com bind de lista do {@code editar}.
  *
- * Service construído à mão com EM e repositories REAIS do slice (FASE C): sem proxy
- * Spring, o {@code @Transactional} do service é inerte — a transação (e o rollback)
- * vêm do próprio {@code @DataJpaTest}.
+ * Service construído à mão com EM e repositories reais do slice: sem proxy Spring,
+ * o {@code @Transactional} do service é inerte — a transação (e o rollback) vêm do
+ * próprio {@code @DataJpaTest}.
  */
 @OracleIT
 class ChecklistServiceIT {

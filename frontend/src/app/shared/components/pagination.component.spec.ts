@@ -2,10 +2,9 @@ import { PaginationComponent } from './pagination.component';
 import { PaginationMeta } from '../../core/models/user.model';
 
 /**
- * T19 — PaginationComponent: instanciação direta (§5.4: "instanciável direto, sem
- * TestBed"). Cobre o clamp de `go` em [1, meta.pages], a guarda "só emite se
- * p !== meta.page", a coerção string→número de `onLimitChange` e a sincronização
- * de `ngOnChanges`.
+ * PaginationComponent: instanciável direto, sem TestBed. Cobre o clamp de `go` em
+ * [1, meta.pages], a guarda "só emite se p !== meta.page", a coerção string→número
+ * de `onLimitChange` e a sincronização de `ngOnChanges`.
  */
 describe('PaginationComponent', () => {
   function meta(page: number, pages: number): PaginationMeta {

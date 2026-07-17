@@ -9,29 +9,17 @@ import { ErroCargaComponent } from '../../shared/components/erro-carga.component
 import { HomeComponent } from './home.component';
 
 /**
- * C13b — HomeComponent (page `/` do operador): spec NOVO, criado junto com a instalação do canal
- * de erro (C7) nas duas listagens da tela — "Verificação de Salas" (`chkCtrl`) e "Registros de
- * Operação de Áudio" (`opCtrl`), ambas sobre o `TableStateController`.
- *
- * O que se trava aqui é EXATAMENTE o que só existe no template: sem estes testes, apagar o ramo
- * `@else if (X.erro())` deixaria toda a suíte verde e a página principal voltaria a afirmar
- * "Nenhuma verificação encontrada." / "Nenhuma operação encontrada." quando a leitura FALHA — a
- * pior forma do defeito, porque o operador conclui que não registrou nada (e re-registra, ou deixa
- * de conferir o que já registrou) em vez de descobrir que o backend caiu. O motor (rows/meta/
- * loading/erro + recência) já está coberto em `table-state.controller.spec.ts`; este spec prova o
- * CONSUMO do canal pela tela: caixa com retry, distinção do vazio legítimo, isolamento entre as
- * duas tabelas e o rodapé que não mente.
- *
- * Estratégia: TestBed com render de verdade (`detectChanges()` → `ngOnInit` dispara as cargas, que
- * respondem de forma síncrona pelos mocks). O `app-pagination` usa `NgModel` → o DOM só assenta
- * depois do `await fixture.whenStable()`. `ApiService` despacha por ENDPOINT (a tela faz 3 GETs
- * pelo mesmo `api.getList`), o que também permite contar as chamadas de cada tabela em separado.
- *
- * A exclusão "FORA DE ESCOPO (F65)" que vivia aqui DEIXOU DE VALER no C18: a seção "Escala"
- * (a última listagem que engolia erro — e sem recência) ganhou canal + token no PRÓPRIO loader
- * (decisão do estágio: NÃO migrou para o `TableStateController` — o contrato do endpoint com
- * sort/search/filtros não foi provado), e o acordeão dela ganhou erro POR LINHA sem cache sticky.
- * O describe "seção Escala (C18/F65)" cobre tudo isso.
+ * Testes de RENDER da Home do operador (page `/`): canal de erro das duas listagens do
+ * `TableStateController` — "Verificação de Salas" (`chkCtrl`) e "Registros de Operação de
+ * Áudio" (`opCtrl`) — com caixa de erro + retry, distinção do vazio legítimo, isolamento
+ * entre as tabelas e rodapé coerente. Cobre também a seção Escala, que tem loader PRÓPRIO
+ * (não usa o `TableStateController`): canal de erro com recência na listagem e acordeão com
+ * erro POR LINHA sem cache sticky (reabrir refaz o GET).
+ * TestBed com render de verdade (`detectChanges()` → `ngOnInit` dispara as cargas, que
+ * respondem de forma síncrona pelos mocks). O `app-pagination` usa `NgModel` → o DOM só
+ * assenta depois do `await fixture.whenStable()`. `ApiService` despacha por ENDPOINT (a tela
+ * faz 3 GETs pelo mesmo `api.getList`), o que permite contar as chamadas de cada tabela em
+ * separado.
  */
 
 // ── Endpoints (o mock do getList despacha por eles; contamos as chamadas por endpoint) ──
@@ -49,7 +37,7 @@ const LINHA_OP = {
 
 const META = { page: 1, limit: 10, total: 3, pages: 1 };
 
-/** Linha de `GET /api/escala/list` (F65). */
+/** Linha de `GET /api/escala/list`. */
 const LINHA_ESCALA = { id: 'esc-1', data_inicio: '2026-07-13', data_fim: '2026-07-17', criado_em: '2026-07-10' };
 /** Resposta do `GET /api/escala/esc-1` — um plenário com um operador da manhã. */
 const RESUMO_OK = {
@@ -70,21 +58,21 @@ const ERRO_500 = { status: 500, error: { ok: false, error: 'Erro interno do serv
  */
 const MSG_ERRO = 'Não foi possível carregar a lista. (Erro interno do servidor)';
 
-describe('HomeComponent (canal de erro das listagens — C13b)', () => {
+describe('HomeComponent (canal de erro das listagens)', () => {
   let apiGetList: ReturnType<typeof vi.fn>;
   let apiGet: ReturnType<typeof vi.fn>;
   let openPdfInline: ReturnType<typeof vi.fn>;
   let whoAmI: ReturnType<typeof vi.fn>;
   /** Resposta corrente de cada endpoint — trocada por teste (o mock chama a fábrica a cada GET). */
   let resposta: Record<string, () => any>;
-  /** Resposta corrente do GET /api/escala/{id} (o acordeão da Escala) — trocada por teste (F65). */
+  /** Resposta corrente do GET /api/escala/{id} (o acordeão da Escala) — trocada por teste. */
   let respostaDetalheEscala: () => any;
 
   beforeEach(async () => {
     resposta = {
       [CHK]: () => of({ data: [LINHA_CHK], meta: { ...META } }),
       [OP]: () => of({ data: [LINHA_OP], meta: { ...META } }),
-      [ESCALA]: () => of({ data: [], meta: null }),   // vazio legítimo por padrão; os testes do F65 trocam
+      [ESCALA]: () => of({ data: [], meta: null }),   // vazio legítimo por padrão; os testes da Escala trocam
     };
     apiGetList = vi.fn((endpoint: string) => (resposta[endpoint] ?? (() => of({ data: [], meta: null })))());
     respostaDetalheEscala = () => of({ data: { resumo: [] } });
@@ -166,7 +154,7 @@ describe('HomeComponent (canal de erro das listagens — C13b)', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // O canal de erro de CADA tabela (C7/C13b) — o piso do estágio
+  // O canal de erro de CADA tabela
   //
   // As duas listagens têm o mesmo contrato (mesmo motor, mesmo ramo de template): o que muda é o
   // endpoint, o colspan e a frase do vazio. O erro de uma NÃO pode virar "lista vazia" nem contaminar
@@ -321,14 +309,14 @@ describe('HomeComponent (canal de erro das listagens — C13b)', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Seção Escala (C18/F65) — a última listagem que engolia erro, FORA do motor
+  // Seção Escala — listagem FORA do motor
   //
-  // A Escala tem loader próprio (decisão do estágio: sem migrar para o TableStateController) e um
-  // acordeão com drill-down por linha. O que se trava: o canal de erro da listagem (com recência —
-  // a faceta F61 que o C13b curou só no motor), o erro POR LINHA do acordeão sem cache sticky
+  // A Escala tem loader próprio (sem migrar para o TableStateController) e um
+  // acordeão com drill-down por linha. O que se trava: o canal de erro da listagem (com recência),
+  // o erro POR LINHA do acordeão sem cache sticky
   // (reabrir refaz o GET) e o isolamento em relação às tabelas do motor.
   // ═══════════════════════════════════════════════════════════════════
-  describe('seção Escala (C18/F65)', () => {
+  describe('seção Escala', () => {
     const VAZIO_ESCALA = 'Nenhuma escala cadastrada.';
     const VAZIO_RESUMO = 'Nenhum operador escalado.';
     const MSG_ERRO_ESCALA =
@@ -344,7 +332,7 @@ describe('HomeComponent (canal de erro das listagens — C13b)', () => {
       (secEscala(fixture).query(By.css('tr.escala-row')).nativeElement as HTMLTableRowElement).click();
     }
 
-    it('corrige F65 — falha na carga: caixa (role="alert") com a mensagem do canal, SEM "Nenhuma escala cadastrada." e com o meta limpo', async () => {
+    it('falha na carga: caixa (role="alert") com a mensagem do canal, SEM "Nenhuma escala cadastrada." e com o meta limpo', async () => {
       // "Nenhuma escala cadastrada." num 500 fazia o operador concluir que NÃO está escalado —
       // o oposto de "não sabemos", numa tela que é a fonte de onde ele deve se apresentar.
       resposta[ESCALA] = () => throwError(() => ERRO_500);
@@ -360,7 +348,7 @@ describe('HomeComponent (canal de erro das listagens — C13b)', () => {
       expect(sec.query(By.css('app-pagination'))).toBeNull();
     });
 
-    it('corrige F65 — "Tentar novamente" re-dispara loadEscalas() (e não recarrega as tabelas vizinhas)', async () => {
+    it('"Tentar novamente" re-dispara loadEscalas() (e não recarrega as tabelas vizinhas)', async () => {
       resposta[ESCALA] = () => throwError(() => ERRO_500);
       const fixture = await renderizar();
       expect(chamadas(ESCALA)).toBe(1);
@@ -374,7 +362,7 @@ describe('HomeComponent (canal de erro das listagens — C13b)', () => {
       expect(caixaErro(secEscala(fixture))).not.toBeNull();               // ainda falhando → caixa continua
     });
 
-    it('corrige F65 — retry com sucesso: a caixa some e as escalas aparecem', async () => {
+    it('retry com sucesso: a caixa some e as escalas aparecem', async () => {
       resposta[ESCALA] = () => throwError(() => ERRO_500);
       const fixture = await renderizar();
 
@@ -397,9 +385,9 @@ describe('HomeComponent (canal de erro das listagens — C13b)', () => {
       expect(caixaErro(secEscala(fixture))).toBeNull();
     });
 
-    it('corrige F65 — recência: a resposta VELHA que chega depois da nova é descartada (sucesso × sucesso)', async () => {
+    it('recência: a resposta VELHA que chega depois da nova é descartada (sucesso × sucesso)', async () => {
       // A Escala é paginada server-side e sem token: dois cliques rápidos de página deixavam a
-      // resposta VELHA vencer se chegasse por último — a mesma faceta F61 curada no motor (C13b).
+      // resposta VELHA vencer se chegasse por último — a mesma faceta de recência das tabelas do motor.
       const primeira = new Subject<any>();
       const segunda = new Subject<any>();
       let n = 0;
@@ -419,7 +407,7 @@ describe('HomeComponent (canal de erro das listagens — C13b)', () => {
       expect(texto(secEscala(fixture))).not.toContain(VAZIO_ESCALA);
     });
 
-    it('corrige F65 — recência: o ERRO velho não sobrescreve o sucesso mais novo', async () => {
+    it('recência: o ERRO velho não sobrescreve o sucesso mais novo', async () => {
       const primeira = new Subject<any>();
       const segunda = new Subject<any>();
       let n = 0;
@@ -443,9 +431,9 @@ describe('HomeComponent (canal de erro das listagens — C13b)', () => {
         resposta[ESCALA] = () => of({ data: [{ ...LINHA_ESCALA }], meta: { ...META, total: 1 } });
       });
 
-      it('corrige F65 — falha do detalhe: caixa NA LINHA, sem "Nenhum operador escalado."', async () => {
+      it('falha do detalhe: caixa NA LINHA, sem "Nenhum operador escalado."', async () => {
         // A mentira aqui era dupla: além de "nenhum operador" num 500, o `[]` gravado no erro era
-        // truthy para o guard de refetch — o vazio ficava STICKY até o F5.
+        // truthy para o guard de refetch — o vazio ficava STICKY.
         respostaDetalheEscala = () => throwError(() => ERRO_500);
         const fixture = await renderizar();
 
@@ -458,7 +446,7 @@ describe('HomeComponent (canal de erro das listagens — C13b)', () => {
         expect(texto(secEscala(fixture))).not.toContain(VAZIO_RESUMO);
       });
 
-      it('corrige F65 — o sticky morreu: fechar e reabrir REFAZ o GET (e o sucesso renderiza o resumo)', async () => {
+      it('sem cache sticky: fechar e reabrir REFAZ o GET (e o sucesso renderiza o resumo)', async () => {
         respostaDetalheEscala = () => throwError(() => ERRO_500);
         const fixture = await renderizar();
 
@@ -479,7 +467,7 @@ describe('HomeComponent (canal de erro das listagens — C13b)', () => {
         expect(texto(sec)).toContain('Maria Souza');
       });
 
-      it('corrige F65 — o retry da caixa refaz o GET DA LINHA e o sucesso renderiza o resumo', async () => {
+      it('o retry da caixa refaz o GET DA LINHA e o sucesso renderiza o resumo', async () => {
         respostaDetalheEscala = () => throwError(() => ERRO_500);
         const fixture = await renderizar();
         clicarLinha(fixture);

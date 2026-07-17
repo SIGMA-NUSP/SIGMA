@@ -15,16 +15,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * corrige F73 (C19) — a régua única de horário de entrada manual. O contrato completo
- * fica travado aqui; os testes por PORTA (Operacao/Checklist/AnormalidadeServiceTest)
- * provam só que a régua está LIGADA em cada campo.
+ * Contrato completo da régua única de horário de entrada manual ({@code HoraValidator}).
+ * Os testes por PORTA (Operacao/Checklist/AnormalidadeServiceTest) provam só que a régua
+ * está LIGADA em cada campo — o contrato em si é travado aqui.
  */
 class HoraValidatorTest {
 
     private static final String ROTULO = "Término do evento";
 
     @Nested
-    @DisplayName("corrige F73 — valores válidos passam")
+    @DisplayName("valores válidos passam")
     class Validos {
 
         @Test
@@ -62,7 +62,7 @@ class HoraValidatorTest {
     }
 
     @Nested
-    @DisplayName("corrige F73 — tortas recusam com 400 nomeando o campo")
+    @DisplayName("tortas recusam com 400 nomeando o campo")
     class Recusas {
 
         @ParameterizedTest
@@ -81,7 +81,7 @@ class HoraValidatorTest {
         }
 
         @Test
-        @DisplayName("24:00:00 é recusado NA PORTA (assunção do Douglas: 24:00 nunca é fim legítimo)")
+        @DisplayName("24:00:00 é recusado NA PORTA (24:00 nunca é fim legítimo)")
         void vinteEQuatro_recusa() {
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                     () -> HoraValidator.normalizar("24:00:00", ROTULO, true));
