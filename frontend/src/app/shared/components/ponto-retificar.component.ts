@@ -6,6 +6,7 @@ import { FmtDatePipe } from '../pipes/fmt-date.pipe';
 import { HORA_RE, HoraMaskDirective } from '../directives/hora-mask.directive';
 import { erroCargaMsg, httpErrorMsg } from '../../core/helpers/http.helpers';
 import { ErroCargaComponent } from './erro-carga.component';
+import { AjudaChatComponent } from './ajuda-chat.component';
 
 /**
  * Guia da tela quando a listagem das retificações falha (F63). Fail-closed: sem ela, a tela não
@@ -48,7 +49,7 @@ interface DadosFolha {
 @Component({
   selector: 'app-ponto-retificar',
   standalone: true,
-  imports: [FormsModule, RouterLink, FmtDatePipe, HoraMaskDirective, ErroCargaComponent],
+  imports: [FormsModule, RouterLink, FmtDatePipe, HoraMaskDirective, ErroCargaComponent, AjudaChatComponent],
   template: `
     <h1>Retificação de Ponto</h1>
     <div class="topo-bar">
@@ -196,6 +197,9 @@ interface DadosFolha {
         }
       </div>
     }
+
+    <!-- Chat de ajuda com IA (piloto) — mesmo manual do /ponto; se auto-esconde sem a flag 'ajudaIa' -->
+    <app-ajuda-chat pagina="ponto-banco" titulo="Ajuda — Retificação de Ponto" />
   `,
   styles: [`
     .periodo { margin: 0 0 8px; }
