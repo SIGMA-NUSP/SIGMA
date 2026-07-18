@@ -4,6 +4,7 @@ import { ApiService } from '../../core/services/api.service';
 import { AuthService } from '../../core/services/auth.service';
 import { homeRouteForRole } from '../../core/helpers/auth.helpers';
 import { erroCargaMsg } from '../../core/helpers/http.helpers';
+import { AjudaChatComponent } from './ajuda-chat.component';
 import { BancoHorasPessoalComponent } from './banco-horas-pessoal.component';
 import { ErroCargaComponent } from './erro-carga.component';
 import { FolhasPontoListaComponent, MinhaFolha } from './folhas-ponto-lista.component';
@@ -19,8 +20,8 @@ import { RegistroManualPontoComponent } from './registro-manual-ponto.component'
 @Component({
   selector: 'app-ponto-banco',
   standalone: true,
-  imports: [RouterLink, BancoHorasPessoalComponent, ErroCargaComponent, FolhasPontoListaComponent,
-    RegistroManualPontoComponent],
+  imports: [AjudaChatComponent, RouterLink, BancoHorasPessoalComponent, ErroCargaComponent,
+    FolhasPontoListaComponent, RegistroManualPontoComponent],
   template: `
     <h1>Ponto e Banco de Horas</h1>
     <a [routerLink]="backLink()" class="back-link">&larr; Voltar</a>
@@ -62,6 +63,9 @@ import { RegistroManualPontoComponent } from './registro-manual-ponto.component'
         </div>
       }
     </div>
+
+    <!-- Chat de ajuda com IA (teste piloto: só esta página) — se auto-esconde sem a flag 'ajudaIa' -->
+    <app-ajuda-chat pagina="ponto-banco" titulo="Ajuda — Ponto e Banco" />
   `,
   styles: [`
     .acordeao { display:flex; flex-direction:column; gap:12px; margin-bottom:24px; }

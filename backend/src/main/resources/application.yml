@@ -102,6 +102,19 @@ app:
     sync-to: ${ALERTS_SYNC_TO:}                       # destino(s) dos alertas (vírgula); vazio = desligado
     sheet-stale-minutes: ${ALERTS_SHEET_STALE_MIN:30} # falha contínua por N min antes do 1º alerta
     reminder-hours: ${ALERTS_REMINDER_HOURS:24}       # intervalo dos lembretes enquanto seguir falhando
+  chat-ia:
+    # Chat de ajuda ao usuário (AjudaChatService). Fail-safe: sem provider/chave/modelo/manuais
+    # configurados, o endpoint responde 503 amigável — ambientes sem as variáveis não mudam em nada.
+    # Segredos vivem em docker/.env.chat (gitignored), NUNCA aqui.
+    provider: ${CHAT_IA_PROVIDER:}                    # "openai" (Gemini/Anthropic entram via base-url compatível)
+    api-key: ${CHAT_IA_API_KEY:}
+    model: ${CHAT_IA_MODEL:}
+    base-url: ${CHAT_IA_BASE_URL:https://api.openai.com/v1}
+    manual-dir: ${CHAT_IA_MANUAL_DIR:}                # diretório com os manuais por página (montado no container)
+    max-tokens: ${CHAT_IA_MAX_TOKENS:700}
+    timeout-sec: ${CHAT_IA_TIMEOUT_SEC:30}
+    rate-limit-per-minute: ${CHAT_IA_RATE_LIMIT_PER_MINUTE:10}
+    reasoning-effort: ${CHAT_IA_REASONING_EFFORT:none}  # só vai ao corpo quando provider=openai; vazio = não envia
 
 cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:4200}

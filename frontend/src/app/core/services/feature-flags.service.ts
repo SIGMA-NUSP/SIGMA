@@ -1,7 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 
 /** Flags conhecidas — controladas em runtime por `/config.json` (ver docker/frontend-entrypoint.sh). */
-export type FeatureFlag = 'pontoBanco' | 'inserirAvisos';
+export type FeatureFlag = 'pontoBanco' | 'inserirAvisos' | 'ajudaIa';
 
 /**
  * Flags de funcionalidade carregadas em runtime de `/config.json` (gerado pelo container

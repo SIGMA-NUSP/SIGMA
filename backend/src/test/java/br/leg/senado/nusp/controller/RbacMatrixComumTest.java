@@ -28,6 +28,7 @@ import br.leg.senado.nusp.repository.OperadorRepository;
 import br.leg.senado.nusp.repository.SalaRepository;
 import br.leg.senado.nusp.security.JwtTokenProvider;
 import br.leg.senado.nusp.service.AgendaLegislativaService;
+import br.leg.senado.nusp.service.AjudaChatService;
 import br.leg.senado.nusp.service.AnormalidadeService;
 import br.leg.senado.nusp.service.AuthService;
 import br.leg.senado.nusp.service.ChecklistService;
@@ -59,9 +60,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * sem token é 401 (cai no anyRequest().authenticated()).
  */
 @SigmaControllerTest({LookupController.class, AgendaLegislativaController.class,
-        AnormalidadeController.class, AuthController.class, ChecklistController.class,
-        HealthController.class, OperacaoController.class, OperadorDashboardController.class,
-        PasswordResetController.class})
+        AjudaChatController.class, AnormalidadeController.class, AuthController.class,
+        ChecklistController.class, HealthController.class, OperacaoController.class,
+        OperadorDashboardController.class, PasswordResetController.class})
 class RbacMatrixComumTest {
 
     private static final String SEM_TOKEN = "sem-token";
@@ -75,6 +76,7 @@ class RbacMatrixComumTest {
     @MockitoBean private SalaRepository salaRepository;
     @MockitoBean private ComissaoRepository comissaoRepository;
     @MockitoBean private AgendaLegislativaService agendaLegislativaService;
+    @MockitoBean private AjudaChatService ajudaChatService;
     @MockitoBean private AnormalidadeService anormalidadeService;
     @MockitoBean private AuthService authService;
     @MockitoBean private ChecklistService checklistService;
@@ -159,6 +161,37 @@ class RbacMatrixComumTest {
     @MethodSource("matriz")
     void matrizRbac(String rota, String papel, int esperado) throws Exception {
         executar(rota, papel).andExpect(status().is(esperado));
+    }
+
+    /** A matriz principal é GET-only; a rota do chat de ajuda é POST e ganha o seu par de casos aqui. */
+    @Nested
+    @DisplayName("rota POST /api/ajuda/chat (AjudaChatController) — comum: 3 papéis passam, sem token 401")
+    class RotaPostAjudaChat {
+
+        private static final String CORPO = "{\"pergunta\":\"Oi?\",\"pagina\":\"ponto-banco\"}";
+
+        @ParameterizedTest(name = "[{index}] {0} → {1}")
+        @MethodSource("br.leg.senado.nusp.controller.RbacMatrixComumTest#papeisComuns")
+        void porPapel(String papel, int esperado) throws Exception {
+            when(ajudaChatService.responder(anyString(), anyString(), anyString(), any()))
+                    .thenReturn("resposta");
+            MockHttpServletRequestBuilder req = Requests.post("/api/ajuda/chat")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(CORPO);
+            if (!SEM_TOKEN.equals(papel)) {
+                req.header("Authorization", "Bearer " + tokens.valido(papel));
+            }
+            mockMvc.perform(req).andExpect(status().is(esperado));
+        }
+    }
+
+    static Stream<Arguments> papeisComuns() {
+        return Stream.of(
+                Arguments.of(TokenFactory.ADMIN, 200),
+                Arguments.of(TokenFactory.OPERADOR, 200),
+                Arguments.of(TokenFactory.TECNICO, 200),
+                Arguments.of(SEM_TOKEN, 401)
+        );
     }
 
     @Nested
