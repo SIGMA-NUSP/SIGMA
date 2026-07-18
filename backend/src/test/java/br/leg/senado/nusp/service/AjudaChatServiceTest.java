@@ -169,6 +169,24 @@ class AjudaChatServiceTest {
         }
 
         @Test
+        @DisplayName("página 'admin-ponto' é aceita e lê o admin-ponto.md; o corte da seção 10 é genérico (vale p/ este manual também)")
+        void paginaAdminPonto() throws Exception {
+            Files.writeString(manuais.resolve("admin-ponto.md"),
+                    "## Folhas de Ponto (admin)\nEnvie o PDF e publique o lote."
+                            + "\n\n## 10. Referência técnica (não citar ao usuário)\nSEGREDO-ADMIN endpoints e tabelas.");
+            provedorResponde(200, RESPOSTA_OK);
+
+            service.responder("u1", "admin-ponto", "Como envio a folha de ponto?", null);
+
+            String system = objectMapper.readTree(corpoDe(requisicaoEnviada()))
+                    .path("messages").get(0).path("content").asText();
+            assertTrue(system.contains("Envie o PDF e publique o lote."),
+                    "o manual da folha do admin deve entrar no prompt");
+            assertFalse(system.contains("SEGREDO-ADMIN"),
+                    "a seção interna também é cortada neste manual (corte por título, genérico)");
+        }
+
+        @Test
         @DisplayName("histórico: mapeia de/texto → role/content e corta nas últimas 6 mensagens")
         void historicoTruncado() throws Exception {
             provedorResponde(200, RESPOSTA_OK);

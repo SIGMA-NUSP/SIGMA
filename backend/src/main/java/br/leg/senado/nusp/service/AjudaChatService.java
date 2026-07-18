@@ -49,7 +49,8 @@ public class AjudaChatService {
     /** Página conhecida → arquivo de manual dentro de {@code app.chat-ia.manual-dir}.
      *  Whitelist de propósito: o id vem do cliente e jamais pode virar path arbitrário. */
     private static final Map<String, String> MANUAL_POR_PAGINA = Map.of(
-            "ponto-banco", "ponto-banco.md"
+            "ponto-banco", "ponto-banco.md",
+            "admin-ponto", "admin-ponto.md"
     );
 
     /** Teto de caracteres da pergunta do usuário. */

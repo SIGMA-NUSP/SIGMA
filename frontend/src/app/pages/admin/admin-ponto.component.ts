@@ -10,6 +10,7 @@ import { ErroCargaComponent } from '../../shared/components/erro-carga.component
 import { PaginationComponent } from '../../shared/components/pagination.component';
 import { SolicitacoesAdminComponent } from '../../shared/components/solicitacoes-admin.component';
 import { GradeRetificacoesComponent } from '../../shared/components/grade-retificacoes.component';
+import { AjudaChatComponent } from '../../shared/components/ajuda-chat.component';
 import { ToastService } from '../../shared/components/toast.component';
 
 type PessoaTipo = 'OPERADOR' | 'TECNICO' | 'ADMINISTRADOR';
@@ -77,7 +78,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
   selector: 'app-admin-ponto',
   standalone: true,
   imports: [FormsModule, RouterLink, FmtDatePipe, ErroCargaComponent, PaginationComponent,
-    SolicitacoesAdminComponent, GradeRetificacoesComponent],
+    SolicitacoesAdminComponent, GradeRetificacoesComponent, AjudaChatComponent],
   template: `
     <h1>Ponto e Banco de Horas</h1>
     <a routerLink="/admin/gestao-pessoas" class="back-link">&larr; Voltar</a>
@@ -388,6 +389,9 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
         </div>
       </div>
     }
+
+    <!-- Chat de ajuda com IA (piloto) — manual próprio 'admin-ponto'; se auto-esconde sem a flag 'ajudaIa' -->
+    <app-ajuda-chat pagina="admin-ponto" titulo="Ajuda — Ponto e Banco" />
   `,
   styles: [`
     .grid-cards { margin-bottom:24px; }
