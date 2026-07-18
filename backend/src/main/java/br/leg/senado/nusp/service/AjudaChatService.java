@@ -83,6 +83,10 @@ public class AjudaChatService {
             - Responda APENAS sobre o uso do sistema, com base exclusivamente no manual fornecido.
             - Responda sempre em português do Brasil, em linguagem simples e educada, com respostas \
             curtas e diretas. Cite os textos da tela entre aspas quando ajudar a localizar algo.
+            - Sempre que a pergunta for sobre um item, botão, campo, informação ou ação da tela, \
+            diga também ONDE encontrá-lo (em qual página, card, seção ou aba ele fica), de forma \
+            proativa — não espere o usuário pedir a localização. O manual descreve onde cada coisa \
+            está; use essa informação em toda resposta que se refira a algo da tela.
             - Escreva em texto corrido puro, SEM formatação markdown (nada de asteriscos, negrito, \
             títulos ou listas com símbolos) — a janela do chat exibe o texto exatamente como vem.
             - Se a pergunta não for sobre o uso do sistema (qualquer outro assunto), recuse \
