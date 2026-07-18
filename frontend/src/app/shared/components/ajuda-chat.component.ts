@@ -30,8 +30,24 @@ const HISTORICO_MAX = 6;
   template: `
     @if (flags.isEnabled('ajudaIa')) {
       <button type="button" class="ajuda-fab" #fab (click)="alternar()"
-              [attr.aria-expanded]="aberto()" aria-label="Ajuda sobre esta página"
-              title="Ajuda sobre esta página">{{ aberto() ? '×' : '?' }}</button>
+              [attr.aria-expanded]="aberto()"
+              [attr.aria-label]="aberto() ? 'Fechar chat de ajuda' : 'Abrir chat de ajuda'"
+              [title]="aberto() ? 'Fechar chat de ajuda' : 'Abrir chat de ajuda'">
+        @if (aberto()) {
+          <span class="ajuda-fab__x" aria-hidden="true">×</span>
+        } @else {
+          <!-- Balão de conversa com reticências: lê como "chat de dúvidas".
+               Tudo em currentColor — o vazio do balão mostra o fundo do botão. -->
+          <svg class="ajuda-fab__icone" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round"
+               stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            <circle cx="8" cy="10" r="1.1" fill="currentColor" stroke="none" />
+            <circle cx="12" cy="10" r="1.1" fill="currentColor" stroke="none" />
+            <circle cx="16" cy="10" r="1.1" fill="currentColor" stroke="none" />
+          </svg>
+        }
+      </button>
 
       @if (aberto()) {
         <div class="ajuda-janela" role="dialog" aria-label="Assistente de ajuda"
@@ -42,8 +58,7 @@ const HISTORICO_MAX = 6;
           </div>
 
           <div class="ajuda-mensagens" #listaMensagens aria-live="polite">
-            <p class="ajuda-aviso">Tire dúvidas sobre o uso desta tela. As perguntas são
-              processadas por um serviço externo de IA — não digite dados pessoais.</p>
+            <p class="ajuda-aviso">Tire suas dúvidas sobre o uso desta página. Não digite dados pessoais</p>
             @for (m of mensagens(); track $index) {
               <div class="ajuda-msg" [class.de-usuario]="m.de === 'usuario'">{{ m.texto }}</div>
             }
@@ -67,15 +82,25 @@ const HISTORICO_MAX = 6;
     }
   `,
   styles: [`
+    /* Cor do botão (definida com o Douglas): balão claro + ícone azul-Senado — contrasta
+       com a faixa azul do rodapé e com o fundo claro. Para trocar, mudar só estas 2 vars. */
     .ajuda-fab {
-      position: fixed; right: 20px; bottom: 20px; width: 48px; height: 48px;
-      border-radius: 50%; background: var(--senado-azul); color: #fff; border: none;
-      font-size: 1.3rem; font-weight: 700; cursor: pointer; z-index: 900;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
-      &:hover { filter: brightness(1.2); }
+      --fab-bg: #fff;
+      --fab-fg: var(--senado-azul);
+      /* Sobe acima da faixa fixa do rodapé (32px) com folga visível — não some mais no azul. */
+      position: fixed; right: 20px; bottom: 48px; width: 52px; height: 52px;
+      border-radius: 50%; background: var(--fab-bg); color: var(--fab-fg);
+      border: 1px solid var(--border); cursor: pointer; z-index: 900;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 3px 10px rgba(0, 0, 0, .28);
+      transition: transform .12s, box-shadow .12s;
+      &:hover { box-shadow: 0 5px 14px rgba(0, 0, 0, .32); transform: translateY(-1px); }
+      &:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
     }
+    .ajuda-fab__icone { width: 27px; height: 27px; }
+    .ajuda-fab__x { font-size: 1.7rem; line-height: 1; }
     .ajuda-janela {
-      position: fixed; right: 20px; bottom: 80px;
+      position: fixed; right: 20px; bottom: 112px;
       width: min(360px, calc(100vw - 32px)); height: min(480px, 70vh);
       background: #fff; border: 1px solid var(--border); border-radius: 12px;
       box-shadow: 0 8px 24px rgba(0, 0, 0, .2); overflow: hidden;

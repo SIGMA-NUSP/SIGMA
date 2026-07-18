@@ -55,7 +55,7 @@ describe('AjudaChatComponent', () => {
     abrir(fixture);
     expect(fixture.debugElement.query(By.css('.ajuda-janela'))).not.toBeNull();
     expect(fixture.debugElement.query(By.css('.ajuda-aviso')).nativeElement.textContent)
-      .toContain('não digite dados pessoais');
+      .toContain('Não digite dados pessoais');
 
     fixture.debugElement.query(By.css('.ajuda-fechar')).nativeElement.click();
     fixture.detectChanges();
