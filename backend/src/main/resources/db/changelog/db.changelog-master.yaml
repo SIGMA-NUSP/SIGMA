@@ -87,3 +87,5 @@ databaseChangeLog:
       file: db/changelog/043-cad-sala-identity-realinhada.yaml
   - include:
       file: db/changelog/044-ponto-exclusao.yaml
+  - include:
+      file: db/changelog/045-aviso-escala-subtipo.yaml

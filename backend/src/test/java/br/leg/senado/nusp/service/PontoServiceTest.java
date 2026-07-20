@@ -1,5 +1,6 @@
 package br.leg.senado.nusp.service;
 
+import br.leg.senado.nusp.enums.SubtipoAviso;
 import br.leg.senado.nusp.entity.Operador;
 import br.leg.senado.nusp.entity.PontoLote;
 import br.leg.senado.nusp.entity.PontoLotePagina;
@@ -474,9 +475,10 @@ class PontoServiceTest {
             assertNotNull(lote.getPublicadoEm());
             verify(loteRepo).save(lote);
             verify(saldoAberturaService, times(1)).reancorar(OP, "OPERADOR");
-            // O 4º argumento é a PROVENIÊNCIA: o aviso nasce marcado com o lote que o criou, e é
-            // só por essa marca que a exclusão daquele lote sabe reconhecê-lo depois.
-            verify(avisoService, times(1)).criarPessoalIndividual(anyList(), anyString(), eq(ADMIN), eq(LOTE));
+            // O subtipo (FOLHA_MENSAL aqui) e a PROVENIÊNCIA (o lote): o aviso nasce marcado com o
+            // lote que o criou, e é só por essa marca que a exclusão daquele lote sabe reconhecê-lo.
+            verify(avisoService, times(1)).criarPessoalIndividual(anyList(), anyString(), eq(ADMIN),
+                    eq(SubtipoAviso.FOLHA_MENSAL), eq(LOTE));
         }
 
         @Test
@@ -490,8 +492,10 @@ class PontoServiceTest {
 
             // Sem a origem, a exclusão do lote teria de adivinhar quais avisos são dele — e apagaria,
             // por autor/tipo, os avisos PESSOAIS do desfecho de folga, que não são desta publicação.
-            verify(avisoService).criarPessoalIndividual(anyList(), anyString(), eq(ADMIN), eq(LOTE));
-            verify(avisoService, never()).criarPessoalIndividual(anyList(), anyString(), anyString());
+            verify(avisoService).criarPessoalIndividual(anyList(), anyString(), eq(ADMIN),
+                    eq(SubtipoAviso.FOLHA_SEMANAL), eq(LOTE));
+            // Nunca a sobrecarga SEM origem (desfecho de folga): a publicação sempre marca o lote.
+            verify(avisoService, never()).criarPessoalIndividual(anyList(), anyString(), anyString(), any(SubtipoAviso.class));
         }
 
         @Test

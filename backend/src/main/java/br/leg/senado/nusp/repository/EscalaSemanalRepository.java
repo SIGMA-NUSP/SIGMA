@@ -20,4 +20,8 @@ public interface EscalaSemanalRepository extends JpaRepository<EscalaSemanal, Lo
 
     /** Escala imediatamente anterior a um novo período. */
     Optional<EscalaSemanal> findFirstByDataFimBeforeOrderByDataFimDescDataInicioDescIdDesc(LocalDate dataInicio);
+
+    /** Escalas atual e futuras (DATA_FIM >= hoje) — as que o painel do aviso de Escala oferece. */
+    @Query("SELECT e FROM EscalaSemanal e WHERE e.dataFim >= :hoje ORDER BY e.dataInicio ASC")
+    List<EscalaSemanal> findAtualEFuturas(@Param("hoje") LocalDate hoje);
 }

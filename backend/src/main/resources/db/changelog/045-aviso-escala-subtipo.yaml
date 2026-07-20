@@ -1,0 +1,34 @@
+databaseChangeLog:
+  # ============================================================
+  # 045 — Avisos: ESCALA_ID + SUBTIPO em FRM_AVISO_CADASTRO
+  #
+  # Prepara os avisos de Escala/Agenda/Pessoal-Grupo: o cabeçalho ganha o
+  # vínculo com a escala (só o aviso de ESCALA o usa; vigência e destinatário
+  # derivam da escala em consulta) e um código de SUBTIPO do qual o backend
+  # deriva o título do popup e o rótulo da tabela (plano §2/§9).
+  #
+  # Aditivo e benigno — módulo em produção, nenhum aviso de ESCALA gravado e
+  # nenhum subtipo: todo o legado é TIPO<>'ESCALA' com ESCALA_ID/SUBTIPO nulos,
+  # que os CHECKs aceitam. Constraints de STATUS/DURACAO/EXPIRA e as tabelas
+  # de alvo/ciência ficam INTOCADAS.
+  # ============================================================
+  - changeSet:
+      id: 045-aviso-escala-subtipo
+      author: douglas.antunes
+      comment: "Avisos: ESCALA_ID (FK OPR_ESCALA_SEMANAL) + SUBTIPO em FRM_AVISO_CADASTRO, com CHECKs de coerência/domínio e índice"
+      changes:
+        - sqlFile:
+            path: db/changelog/045-aviso-escala-subtipo.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "DROP INDEX IDX_FRM_AVISO_CAD_ESCALA"
+        - sql:
+            sql: "ALTER TABLE FRM_AVISO_CADASTRO DROP CONSTRAINT CK_FRM_AVISO_CAD_SUBTIPO"
+        - sql:
+            sql: "ALTER TABLE FRM_AVISO_CADASTRO DROP CONSTRAINT CK_FRM_AVISO_CAD_ESCALA"
+        - sql:
+            sql: "ALTER TABLE FRM_AVISO_CADASTRO DROP CONSTRAINT FK_FRM_AVISO_CAD_ESCALA"
+        - sql:
+            sql: "ALTER TABLE FRM_AVISO_CADASTRO DROP (ESCALA_ID, SUBTIPO)"

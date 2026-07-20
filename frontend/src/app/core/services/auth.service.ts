@@ -7,6 +7,13 @@ import { User, LoginResponse, WhoAmIResponse, JwtPayload } from '../models/user.
 
 const TOKEN_KEY = 'auth_token';
 const USER_KEY = 'auth_user';
+
+/**
+ * sessionStorage: avisos "manter após ciência" já confirmados NESTA sessão de login (o popup os
+ * esconde até o próximo login). Vive aqui porque é o AuthService quem delimita a sessão: o login
+ * limpa a chave — F5 não reexibe o aviso (o storage da aba sobrevive), logar de novo sim.
+ */
+export const AVISOS_CIENTES_SESSAO_KEY = 'avisos_cientes_sessao';
 const REFRESH_MARGIN_SEC = 300;
 const REFRESH_CHECK_MS = 60_000;
 const INACTIVITY_LIMIT_MS = 5_400_000; // 1h30m
@@ -47,6 +54,9 @@ export class AuthService {
           this._user.set(user);
           this._role.set(role);
           localStorage.setItem(USER_KEY, JSON.stringify({ user, role }));
+          // Novo login: os avisos "manter após ciência" voltam a ser exibidos (1× por sessão).
+          // Chave específica — NUNCA sessionStorage.clear(): o guard de reload do app.config usa o mesmo storage.
+          try { sessionStorage.removeItem(AVISOS_CIENTES_SESSAO_KEY); } catch { /* sem storage: nada a limpar */ }
           this.startRefreshTimer();
         }
       }));

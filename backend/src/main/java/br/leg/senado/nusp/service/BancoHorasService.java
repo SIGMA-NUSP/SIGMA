@@ -9,6 +9,7 @@ import br.leg.senado.nusp.entity.PontoSolicitacaoFolga;
 import br.leg.senado.nusp.entity.Tecnico;
 import br.leg.senado.nusp.enums.PapelPessoa;
 import br.leg.senado.nusp.enums.StatusSolicitacaoFolga;
+import br.leg.senado.nusp.enums.SubtipoAviso;
 import br.leg.senado.nusp.enums.TipoDiaMarcacao;
 import br.leg.senado.nusp.enums.TipoPessoaMarcacao;
 import br.leg.senado.nusp.exception.ServiceValidationException;
@@ -439,8 +440,9 @@ public class BancoHorasService {
                 ? "Sua solicitação de folga para " + dia + " foi APROVADA."
                 : "Sua solicitação de folga para " + dia + " foi REJEITADA."
                         + (motivo != null && !motivo.isBlank() ? " Motivo: " + motivo.trim() + "." : "");
+        SubtipoAviso subtipo = aprovado ? SubtipoAviso.SOLICITACAO_APROVADA : SubtipoAviso.SOLICITACAO_REJEITADA;
         avisoService.criarPessoalIndividual(
-                List.of(new AvisoService.DestinatarioAviso(s.getPessoaId(), papel)), mensagem, adminId);
+                List.of(new AvisoService.DestinatarioAviso(s.getPessoaId(), papel)), mensagem, adminId, subtipo);
     }
 
     private static PapelPessoa papelDePessoaTipo(String pessoaTipo) {

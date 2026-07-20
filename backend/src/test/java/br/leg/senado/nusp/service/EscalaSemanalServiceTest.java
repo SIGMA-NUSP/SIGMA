@@ -58,6 +58,7 @@ class EscalaSemanalServiceTest {
     @Mock private SalaRepository salaRepo;
     @Mock private OperadorRepository operadorRepo;
     @Mock private AdministradorRepository adminRepo;
+    @Mock private AvisoService avisoService;
 
     @InjectMocks private EscalaSemanalService service;
 
@@ -465,14 +466,17 @@ class EscalaSemanalServiceTest {
     class Excluir {
 
         @Test
-        @DisplayName("excluirEscala — encontrada: delega ao delete do repositório (CASCADE cuida dos vínculos)")
+        @DisplayName("excluirEscala — encontrada: apaga os avisos vinculados (F59) e delega ao delete do repositório")
         void excluirEscala_sucesso() {
             var escala = escalaDe(5L, INICIO, FIM, null);
             when(escalaRepo.findById(5L)).thenReturn(Optional.of(escala));
 
             service.excluirEscala(5L);
 
-            verify(escalaRepo).delete(escala);
+            // F59: os avisos de ESCALA saem ANTES da escala (a FK ESCALA_ID barraria o delete).
+            var ordem = inOrder(avisoService, escalaRepo);
+            ordem.verify(avisoService).excluirPorEscala(5L);
+            ordem.verify(escalaRepo).delete(escala);
         }
 
         @Test

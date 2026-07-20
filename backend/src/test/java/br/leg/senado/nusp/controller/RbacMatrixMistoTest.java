@@ -74,6 +74,8 @@ class RbacMatrixMistoTest {
         // /api/avisos/pendentes toleraria o default (lista vazia), mas o stub é explícito.
         when(avisoService.buscarPendentes(anyString(), any(PapelPessoa.class), anyString()))
                 .thenReturn(List.of());
+        when(avisoService.escalasDisponiveis()).thenReturn(List.of());
+        when(avisoService.listarPessoas()).thenReturn(List.of());
     }
 
     static Stream<Arguments> matriz() {
@@ -97,7 +99,17 @@ class RbacMatrixMistoTest {
                 Arguments.of("/api/avisos/pendentes", TokenFactory.ADMIN, 200),
                 Arguments.of("/api/avisos/pendentes", TokenFactory.OPERADOR, 200),
                 Arguments.of("/api/avisos/pendentes", TokenFactory.TECNICO, 200),
-                Arguments.of("/api/avisos/pendentes", SEM_TOKEN, 401)
+                Arguments.of("/api/avisos/pendentes", SEM_TOKEN, 401),
+                // escalas-disponiveis (Etapa 3): rota admin do MESMO controller misto → só ADMINISTRADOR
+                Arguments.of("/api/admin/avisos/escalas-disponiveis", TokenFactory.ADMIN, 200),
+                Arguments.of("/api/admin/avisos/escalas-disponiveis", TokenFactory.OPERADOR, 403),
+                Arguments.of("/api/admin/avisos/escalas-disponiveis", TokenFactory.TECNICO, 403),
+                Arguments.of("/api/admin/avisos/escalas-disponiveis", SEM_TOKEN, 401),
+                // pessoas (card Pessoal): rota admin do MESMO controller misto → só ADMINISTRADOR
+                Arguments.of("/api/admin/avisos/pessoas", TokenFactory.ADMIN, 200),
+                Arguments.of("/api/admin/avisos/pessoas", TokenFactory.OPERADOR, 403),
+                Arguments.of("/api/admin/avisos/pessoas", TokenFactory.TECNICO, 403),
+                Arguments.of("/api/admin/avisos/pessoas", SEM_TOKEN, 401)
         );
     }
 
@@ -158,6 +170,31 @@ class RbacMatrixMistoTest {
                     // mensagem exclusiva do branch touched==0 do filtro (com ponto final)
                     .andExpect(jsonPath("$.message").value("Token inválido ou expirado."));
         }
+    }
+
+    /** A matriz principal é GET-only; o "visto" da agenda é POST comum e ganha seu par de casos aqui. */
+    @Nested
+    @DisplayName("rota POST /api/avisos/{id}/visto (AvisoController) — comum: 3 papéis passam, sem token 401")
+    class RotaPostVisto {
+
+        @ParameterizedTest(name = "[{index}] {0} → {1}")
+        @MethodSource("br.leg.senado.nusp.controller.RbacMatrixMistoTest#papeisComuns")
+        void porPapel(String papel, int esperado) throws Exception {
+            MockHttpServletRequestBuilder req = Requests.post("/api/avisos/cad-1/visto");
+            if (!SEM_TOKEN.equals(papel)) {
+                req.header("Authorization", "Bearer " + tokens.valido(papel));
+            }
+            mockMvc.perform(req).andExpect(status().is(esperado));
+        }
+    }
+
+    static Stream<Arguments> papeisComuns() {
+        return Stream.of(
+                Arguments.of(TokenFactory.ADMIN, 200),
+                Arguments.of(TokenFactory.OPERADOR, 200),
+                Arguments.of(TokenFactory.TECNICO, 200),
+                Arguments.of(SEM_TOKEN, 401)
+        );
     }
 
     private ResultActions executar(String rota, String papel) throws Exception {

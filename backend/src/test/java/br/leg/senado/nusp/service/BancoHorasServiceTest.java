@@ -9,6 +9,7 @@ import br.leg.senado.nusp.entity.PontoSolicitacaoFolga;
 import br.leg.senado.nusp.entity.Tecnico;
 import br.leg.senado.nusp.enums.PapelPessoa;
 import br.leg.senado.nusp.enums.StatusSolicitacaoFolga;
+import br.leg.senado.nusp.enums.SubtipoAviso;
 import br.leg.senado.nusp.enums.TipoDiaMarcacao;
 import br.leg.senado.nusp.enums.TipoPessoaMarcacao;
 import br.leg.senado.nusp.exception.ServiceValidationException;
@@ -696,7 +697,7 @@ class BancoHorasServiceTest {
                         && OP.equals(ds.get(0).pessoaId()) && ds.get(0).papel() == PapelPessoa.OPERADOR),
                 argThat((String msg) -> msg.contains("APROVADA")
                         && msg.contains(ReportConfig.fmtDate(HOJE.plusDays(3)))),
-                eq(ADMIN));
+                eq(ADMIN), eq(SubtipoAviso.SOLICITACAO_APROVADA));
     }
 
     @Test
@@ -711,7 +712,7 @@ class BancoHorasServiceTest {
         verify(avisoService).criarPessoalIndividual(
                 argThat((List<AvisoService.DestinatarioAviso> ds) -> ds.size() == 1
                         && "tec-9".equals(ds.get(0).pessoaId()) && ds.get(0).papel() == PapelPessoa.TECNICO),
-                anyString(), eq(ADMIN));
+                anyString(), eq(ADMIN), eq(SubtipoAviso.SOLICITACAO_APROVADA));
     }
 
     // ── POST .../solicitacao/{id}/rejeitar ──
@@ -736,7 +737,7 @@ class BancoHorasServiceTest {
         verify(avisoService).criarPessoalIndividual(anyList(),
                 argThat((String msg) -> msg.contains("REJEITADA")
                         && msg.contains("Motivo: Sem cobertura na sala.")),
-                eq(ADMIN));
+                eq(ADMIN), eq(SubtipoAviso.SOLICITACAO_REJEITADA));
     }
 
     @ParameterizedTest(name = "[{index}] motivo = \"{0}\"")
@@ -861,7 +862,7 @@ class BancoHorasServiceTest {
         verify(avisoService).criarPessoalIndividual(
                 argThat((List<AvisoService.DestinatarioAviso> ds) -> ds.size() == 1
                         && "adm-alvo".equals(ds.get(0).pessoaId()) && ds.get(0).papel() == PapelPessoa.ADMIN),
-                anyString(), eq(ADMIN));
+                anyString(), eq(ADMIN), eq(SubtipoAviso.SOLICITACAO_APROVADA));
     }
 
     @ParameterizedTest(name = "[{index}] status {0} → 400")

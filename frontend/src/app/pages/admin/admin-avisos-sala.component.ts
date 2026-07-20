@@ -7,6 +7,9 @@ import { PaginationComponent } from '../../shared/components/pagination.componen
 import { ColumnFilterComponent, ColumnFilterDef } from '../../shared/components/column-filter.component';
 import { MultiSelectDropdownComponent, MultiSelectOption } from '../../shared/components/multi-select-dropdown.component';
 import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
+import { AvisoEscalaFormComponent } from './aviso-escala-form.component';
+import { AvisoAgendaFormComponent } from './aviso-agenda-form.component';
+import { AvisoPessoalFormComponent } from './aviso-pessoal-form.component';
 import { getDistinct } from '../../core/helpers/table.helpers';
 import { TableStateController } from '../../core/helpers/table-state.controller';
 import { erroCargaMsg, httpErrorMsg } from '../../core/helpers/http.helpers';
@@ -20,7 +23,9 @@ interface AvisoRow {
   criado_em: string;
   criado_por: string;
   expira_em: string | null;
-  status: 'Ativo' | 'Expirado' | 'Desativado';
+  // Verificação/Pessoal/Geral: gravado (Ativo/Expirado/Desativado). Escala: calculado das datas
+  // (Pendente/Ativo/Expirado). Agenda: '—' (sem ciclo temporal) ou Desativado.
+  status: string;
   permanente: number;  // 0/1
 }
 
@@ -28,12 +33,29 @@ interface AvisoRow {
   selector: 'app-admin-avisos-sala',
   standalone: true,
   imports: [FormsModule, RouterLink, PaginationComponent, ColumnFilterComponent, MultiSelectDropdownComponent,
-    ErroCargaComponent, FmtDatePipe],
+    ErroCargaComponent, FmtDatePipe, AvisoEscalaFormComponent, AvisoAgendaFormComponent, AvisoPessoalFormComponent],
   template: `
     <h1>Inserir Avisos</h1>
     <a routerLink="/admin/gestao-pessoas" class="back-link">&larr; Voltar</a>
 
-    <!-- ════════════ FORMULÁRIO DE CADASTRO ════════════ -->
+    <!-- ════════════ CARDS DE SELEÇÃO (1 ativo por vez; reclicar oculta o painel) ════════════ -->
+    <div class="grid-cards cols-auto cards-aviso">
+      <button class="card-custom card-pick" [class.active]="activeCard() === 'verificacao'" (click)="toggleCard('verificacao')">
+        <strong>Verificação</strong>
+      </button>
+      <button class="card-custom card-pick" [class.active]="activeCard() === 'escala'" (click)="toggleCard('escala')">
+        <strong>Escala</strong>
+      </button>
+      <button class="card-custom card-pick" [class.active]="activeCard() === 'agenda'" (click)="toggleCard('agenda')">
+        <strong>Agenda</strong>
+      </button>
+      <button class="card-custom card-pick" [class.active]="activeCard() === 'pessoal'" (click)="toggleCard('pessoal')">
+        <strong>Pessoal</strong>
+      </button>
+    </div>
+
+    <!-- ════════════ PAINEL VERIFICAÇÃO (form atual — comportamento intocado) ════════════ -->
+    @if (activeCard() === 'verificacao') {
     <section class="card-custom" style="max-width:720px; margin: 16px auto 24px;">
       <div class="form-row">
         <label>Local <span class="req">*</span></label>
@@ -101,6 +123,12 @@ interface AvisoRow {
         </button>
       </div>
     </section>
+    }
+
+    <!-- ════════════ PAINÉIS NOVOS (Escala / Agenda / Pessoal) — atrás da flag inserirAvisos via a rota ════════════ -->
+    @if (activeCard() === 'escala') { <app-aviso-escala-form (cadastrado)="onCadastrado()" /> }
+    @if (activeCard() === 'agenda') { <app-aviso-agenda-form (cadastrado)="onCadastrado()" /> }
+    @if (activeCard() === 'pessoal') { <app-aviso-pessoal-form (cadastrado)="onCadastrado()" /> }
 
     <!-- ════════════ LISTAGEM ════════════ -->
     <section>
@@ -162,13 +190,14 @@ interface AvisoRow {
                   <td>{{ a.tipo }}</td>
                   <td>{{ a.criado_em | fmtDate }}</td>
                   <td>{{ a.criado_por }}</td>
-                  <td>{{ a.permanente ? '—' : (a.expira_em | fmtDate) }}</td>
+                  <!-- Escala manda DATA_FIM (permanente no banco); Agenda manda —. Exibe a data sempre que houver. -->
+                  <td>{{ a.expira_em ? (a.expira_em | fmtDate) : '—' }}</td>
                   <td>
-                    <span class="status-dot" [attr.data-status]="a.status"></span>
+                    @if (a.status !== '—') { <span class="status-dot" [attr.data-status]="a.status"></span> }
                     {{ a.status }}
                   </td>
                   <td>
-                    @if (a.status === 'Ativo') {
+                    @if (podeDesativar(a)) {
                       <button class="btn-xs" (click)="desativar(a); $event.stopPropagation()">Desativar</button>
                     } @else { — }
                   </td>
@@ -185,6 +214,7 @@ interface AvisoRow {
   `,
   styles: [`
     section { margin-bottom: 28px; }
+    .cards-aviso { margin: 16px 0 8px; }
     /* especificidade > .duracao-inline input{width:90px}: mantém o campo "Duração" em 100% (a global .form-row input não venceria) */
     .form-row input[type="number"] { width:100%; }
     .form-row textarea { resize: vertical; }
@@ -201,6 +231,7 @@ interface AvisoRow {
     .row-clickable { cursor: pointer; }
     .status-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
     .status-dot[data-status="Ativo"]      { background: var(--color-green, #16a34a); }
+    .status-dot[data-status="Pendente"]   { background: #f59e0b; }
     .status-dot[data-status="Expirado"]   { background: #9ca3af; }
     .status-dot[data-status="Desativado"] { background: #111827; }
   `],
@@ -213,9 +244,10 @@ export class AdminAvisosSalaComponent implements OnInit {
 
   readonly MAX_MENSAGENS = 10;
 
-  // ── Form ──
-  // Tipo travado em VERIFICACAO nesta versão (enviado literal no payload).
-  // A escolha de tipo terá outra UI numa próxima entrega.
+  /** Card de seleção ativo (1 por vez; reclicar oculta). Verificação abre por padrão (o form já existente). */
+  activeCard = signal<'verificacao' | 'escala' | 'agenda' | 'pessoal' | null>('verificacao');
+
+  // ── Form Verificação (inline, intocado) ──
   selectedSalaIds: string[] = [];
   mensagens: string[] = [''];
   permanente = true;
@@ -352,6 +384,23 @@ export class AdminAvisosSalaComponent implements OnInit {
     this.permanente = true;
     this.duracaoDias = null;
     this.manterAposCiencia = false;
+  }
+
+  /** Abre o card; reclicar no ativo fecha (acordeão de 1 aberto). O estado dos forms fica no
+   *  componente/sub-componentes, então trocar de card não descarta rascunho já digitado. */
+  toggleCard(card: 'verificacao' | 'escala' | 'agenda' | 'pessoal'): void {
+    this.activeCard.update(cur => (cur === card ? null : card));
+  }
+
+  /** Um sub-painel (Escala/Agenda/Pessoal) cadastrou um aviso → recarrega a listagem do topo. */
+  onCadastrado(): void {
+    this.ctrl.state.page = 1;
+    this.ctrl.load();
+  }
+
+  /** Desativável = ainda não desativado nem expirado (cobre Ativo, Pendente e o Agenda "—"). */
+  podeDesativar(a: AvisoRow): boolean {
+    return a.status !== 'Desativado' && a.status !== 'Expirado';
   }
 
   abrirDetalhe(a: AvisoRow): void {

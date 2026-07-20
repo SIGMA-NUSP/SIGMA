@@ -109,4 +109,37 @@ describe('MultiSelectDropdownComponent', () => {
     expect(inputA.disabled).toBe(true);
     expect(inputB.disabled).toBe(false);
   });
+
+  it('grouped: sem group, uma única seção sem rótulo (comportamento plano de antes)', async () => {
+    await montar([]);
+    expect(comp.grouped()).toEqual([{ label: null, options: OPCOES }]);
+    comp.toggle();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelectorAll('.ms-section')).toHaveLength(0);
+  });
+
+  it('grouped: agrupa por group na ordem de aparição e o DOM renderiza os cabeçalhos .ms-section', async () => {
+    const comSecoes: MultiSelectOption[] = [
+      { id: 'o1', label: 'Op Um', group: 'Operadores' },
+      { id: 't1', label: 'Tec Um', group: 'Técnicos' },
+      { id: 'o2', label: 'Op Dois', group: 'Operadores' },
+      { id: 'a1', label: 'Adm Um', group: 'Administradores' },
+    ];
+    await TestBed.configureTestingModule({ imports: [MultiSelectDropdownComponent] }).compileComponents();
+    fixture = TestBed.createComponent(MultiSelectDropdownComponent);
+    comp = fixture.componentInstance;
+    fixture.componentRef.setInput('options', comSecoes);
+    fixture.componentRef.setInput('selected', []);
+    fixture.detectChanges();
+
+    // seções na ordem de primeira aparição; opções reagrupadas dentro de cada
+    expect(comp.grouped().map(s => s.label)).toEqual(['Operadores', 'Técnicos', 'Administradores']);
+    expect(comp.grouped()[0].options.map(o => o.id)).toEqual(['o1', 'o2']);
+
+    comp.toggle();
+    fixture.detectChanges();
+    const secoes = Array.from(fixture.nativeElement.querySelectorAll('.ms-section') as NodeListOf<HTMLElement>)
+      .map(e => e.textContent?.trim());
+    expect(secoes).toEqual(['Operadores', 'Técnicos', 'Administradores']);
+  });
 });

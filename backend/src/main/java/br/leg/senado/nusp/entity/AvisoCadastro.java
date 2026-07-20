@@ -1,6 +1,7 @@
 package br.leg.senado.nusp.entity;
 
 import br.leg.senado.nusp.enums.StatusAviso;
+import br.leg.senado.nusp.enums.SubtipoAviso;
 import br.leg.senado.nusp.enums.TipoAviso;
 import jakarta.persistence.*;
 import lombok.Getter;
@@ -57,4 +58,20 @@ public class AvisoCadastro extends AuditableEntity {
      */
     @Column(name = "ORIGEM_LOTE_ID")
     private String origemLoteId;
+
+    /**
+     * Escala à qual este aviso está vinculado. NÃO-NULO só para o aviso de ESCALA (o CHECK
+     * CK_FRM_AVISO_CAD_ESCALA garante a coerência tipo↔escala); nulo para todos os outros tipos.
+     * A vigência (Pendente/Ativo/Expirado) e o destinatário (operadores da escala) do aviso de
+     * escala são derivados desta escala em tempo de consulta, não gravados.
+     */
+    @Column(name = "ESCALA_ID")
+    private Long escalaId;
+
+    /**
+     * Código do subtipo (ver {@link SubtipoAviso}) do qual o backend deriva o título do popup e o
+     * rótulo da tabela. Nulo em Verificação e no legado PESSOAL → fallbacks no label do tipo.
+     */
+    @Column(name = "SUBTIPO")
+    private SubtipoAviso subtipo;
 }

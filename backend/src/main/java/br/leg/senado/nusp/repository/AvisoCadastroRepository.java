@@ -16,4 +16,11 @@ public interface AvisoCadastroRepository extends JpaRepository<AvisoCadastro, St
      * aqui (o desfecho de folga do banco de horas, por exemplo, deixa a coluna NULL).
      */
     List<AvisoCadastro> findByOrigemLoteId(String origemLoteId);
+
+    /**
+     * Cadastros de aviso vinculados a uma escala (FK ESCALA_ID). A exclusão de uma escala os apaga
+     * ANTES de remover a própria escala (F59), senão a FK barraria o delete. Só o aviso de ESCALA
+     * preenche ESCALA_ID.
+     */
+    List<AvisoCadastro> findByEscalaId(Long escalaId);
 }

@@ -6,6 +6,7 @@ import br.leg.senado.nusp.entity.PontoLote;
 import br.leg.senado.nusp.entity.PontoLotePagina;
 import br.leg.senado.nusp.entity.Tecnico;
 import br.leg.senado.nusp.enums.PapelPessoa;
+import br.leg.senado.nusp.enums.SubtipoAviso;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.repository.AdministradorRepository;
 import br.leg.senado.nusp.repository.OperadorRepository;
@@ -543,8 +544,9 @@ public class PontoService {
         if (destinatarios.isEmpty()) return;
         // O lote vai marcado no cadastro (ORIGEM_LOTE_ID): é por essa proveniência, e só por ela, que a
         // exclusão do lote sabe QUAIS avisos são dele (F59) — nunca por autor, tipo ou texto.
+        SubtipoAviso subtipo = "SEMANAL".equals(lote.getTipo()) ? SubtipoAviso.FOLHA_SEMANAL : SubtipoAviso.FOLHA_MENSAL;
         avisoService.criarPessoalIndividual(destinatarios, mensagemFolhaPublicada(lote),
-                lote.getCriadoPorId(), lote.getId());
+                lote.getCriadoPorId(), subtipo, lote.getId());
     }
 
     private String mensagemFolhaPublicada(PontoLote lote) {

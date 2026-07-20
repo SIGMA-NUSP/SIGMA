@@ -130,6 +130,35 @@ class AvisoControllerTest {
 
             verify(avisoService).desativar("av-1");
         }
+
+        @Test
+        @DisplayName("GET /api/admin/avisos/escalas-disponiveis — 200 {ok, data} com o payload do service")
+        void escalasDisponiveis_200() throws Exception {
+            when(avisoService.escalasDisponiveis()).thenReturn(List.of(Map.of("id", 7)));
+
+            mockMvc.perform(Requests.get("/api/admin/avisos/escalas-disponiveis").header("Authorization", admin))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.ok").value(true))
+                    .andExpect(jsonPath("$.data[0].id").value(7));
+
+            verify(avisoService).escalasDisponiveis();
+        }
+
+        @Test
+        @DisplayName("GET /api/admin/avisos/pessoas — 200 {ok, data} com o payload do service")
+        void pessoas_200() throws Exception {
+            when(avisoService.listarPessoas())
+                    .thenReturn(List.of(Map.of("id", "op-1", "nome", "Ana", "tipo", "OPERADOR")));
+
+            mockMvc.perform(Requests.get("/api/admin/avisos/pessoas").header("Authorization", admin))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.ok").value(true))
+                    .andExpect(jsonPath("$.data[0].id").value("op-1"))
+                    .andExpect(jsonPath("$.data[0].nome").value("Ana"))
+                    .andExpect(jsonPath("$.data[0].tipo").value("OPERADOR"));
+
+            verify(avisoService).listarPessoas();
+        }
     }
 
     // ══ Rotas comuns (mesmo arquivo, sem restrição de papel) ═══════════════
@@ -163,6 +192,16 @@ class AvisoControllerTest {
                     .andExpect(jsonPath("$.ok").value(true));
 
             verify(avisoService).registrarCiencia("cad-1", 3, TokenFactory.USER_ID, PapelPessoa.OPERADOR);
+        }
+
+        @Test
+        @DisplayName("POST /api/avisos/{id}/visto — repassa (cadastroId, principal.id, papel) ao service")
+        void registrarVisto_200() throws Exception {
+            mockMvc.perform(Requests.post("/api/avisos/cad-9/visto").header("Authorization", operador))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.ok").value(true));
+
+            verify(avisoService).registrarVisto("cad-9", TokenFactory.USER_ID, PapelPessoa.OPERADOR);
         }
     }
 

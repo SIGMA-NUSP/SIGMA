@@ -64,9 +64,25 @@ public class AvisoController {
                 asStr(payload.get("alvo_tipo")),
                 intList(payload.get("sala_ids")),
                 strList(payload.get("operador_ids")),
-                strList(payload.get("tecnico_ids")));
+                strList(payload.get("tecnico_ids")),
+                strList(payload.get("admin_ids")),
+                asLong(payload.get("escala_id")));
         var data = avisoService.criar(req, principal.getId());
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("ok", true, "data", data));
+    }
+
+    /** Escalas atual+futuras (período, ocupação "Cadastro nº X" e plenários) para o painel do aviso de Escala. */
+    @AdminOnly
+    @GetMapping("/api/admin/avisos/escalas-disponiveis")
+    public ResponseEntity<?> escalasDisponiveis() {
+        return okData(avisoService.escalasDisponiveis());
+    }
+
+    /** Operadores + técnicos + administradores ({id, nome, tipo}, ordem pt-BR) para o card Pessoal. */
+    @AdminOnly
+    @GetMapping("/api/admin/avisos/pessoas")
+    public ResponseEntity<?> pessoas() {
+        return okData(avisoService.listarPessoas());
     }
 
     @AdminOnly
@@ -140,6 +156,17 @@ public class AvisoController {
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
+    /** "Visto" de um aviso de AGENDA (sem sala) pelo usuário logado — registrado na exibição (§6.2). */
+    @PostMapping("/api/avisos/{cadastroId}/visto")
+    public ResponseEntity<?> registrarVisto(
+            @PathVariable("cadastroId") String cadastroId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        PapelPessoa papel = PapelPessoa.fromRole(principal.getRole());
+        if (papel != null)
+            avisoService.registrarVisto(cadastroId, principal.getId(), papel);
+        return ResponseEntity.ok(Map.of("ok", true));
+    }
+
     // ══ Helpers de parsing ══════════════════════════════════════
 
     private ResponseEntity<?> okData(Object data) {
@@ -163,6 +190,12 @@ public class AvisoController {
     private Integer asInt(Object o) {
         if (o == null) return null;
         try { return Integer.valueOf(o.toString().trim()); }
+        catch (NumberFormatException e) { return null; }
+    }
+
+    private Long asLong(Object o) {
+        if (o == null) return null;
+        try { return Long.valueOf(o.toString().trim()); }
         catch (NumberFormatException e) { return null; }
     }
 

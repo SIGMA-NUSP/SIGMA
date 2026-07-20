@@ -3,6 +3,8 @@ import { Component, input, output, signal, computed, ElementRef, inject, HostLis
 export interface MultiSelectOption {
   id: string;
   label: string;
+  /** Seção (optgroup) opcional — quando presente em ao menos uma opção, o dropdown agrupa por ela. */
+  group?: string;
 }
 
 @Component({
@@ -16,13 +18,18 @@ export interface MultiSelectOption {
       </button>
       @if (open()) {
         <div class="ms-dropdown">
-          @for (opt of options(); track opt.id) {
-            <label class="ms-option" [class.ms-locked]="lockedIds().includes(opt.id)" (click)="$event.stopPropagation()">
-              <input type="checkbox" [checked]="selected().includes(opt.id)"
-                [disabled]="lockedIds().includes(opt.id)"
-                (change)="onToggle(opt.id, $event)">
-              {{ opt.label }}
-            </label>
+          @for (section of grouped(); track $index) {
+            @if (section.label) {
+              <div class="ms-section">{{ section.label }}</div>
+            }
+            @for (opt of section.options; track opt.id) {
+              <label class="ms-option" [class.ms-locked]="lockedIds().includes(opt.id)" (click)="$event.stopPropagation()">
+                <input type="checkbox" [checked]="selected().includes(opt.id)"
+                  [disabled]="lockedIds().includes(opt.id)"
+                  (change)="onToggle(opt.id, $event)">
+                {{ opt.label }}
+              </label>
+            }
           }
           @if (options().length === 0) {
             <div class="ms-empty">Nenhuma opção disponível</div>
@@ -61,6 +68,10 @@ export interface MultiSelectOption {
     .ms-locked { color: #9ca3af; cursor: default; }
     .ms-locked input[type="checkbox"] { cursor: default; opacity: .5; }
     .ms-empty { padding: 12px; text-align: center; color: var(--muted, #6b7280); font-size: .85rem; }
+    .ms-section {
+      padding: 6px 12px 2px; font-size: .72rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .04em; color: var(--muted, #6b7280);
+    }
   `],
 })
 export class MultiSelectDropdownComponent {
@@ -104,5 +115,23 @@ export class MultiSelectDropdownComponent {
     const opts = this.options();
     const names = sel.map(id => opts.find(o => o.id === id)?.label || id);
     return names.join(', ');
+  });
+
+  /**
+   * Opções agrupadas por {@link MultiSelectOption.group}, preservando a ordem de primeira aparição
+   * de cada seção. Sem nenhum `group` definido → um único grupo sem rótulo (comportamento plano de
+   * antes, sem cabeçalho de seção).
+   */
+  grouped = computed<{ label: string | null; options: MultiSelectOption[] }[]>(() => {
+    const opts = this.options();
+    if (!opts.some(o => o.group)) return [{ label: null, options: opts }];
+    const order: string[] = [];
+    const byGroup = new Map<string, MultiSelectOption[]>();
+    for (const o of opts) {
+      const g = o.group ?? '';
+      if (!byGroup.has(g)) { byGroup.set(g, []); order.push(g); }
+      byGroup.get(g)!.push(o);
+    }
+    return order.map(g => ({ label: g || null, options: byGroup.get(g)! }));
   });
 }

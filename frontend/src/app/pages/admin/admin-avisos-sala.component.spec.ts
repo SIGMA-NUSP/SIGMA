@@ -374,4 +374,54 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
       expect(toastSuccess).toHaveBeenCalledWith('Aviso cadastrado com sucesso.');
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Cards de seleção (§3) — 4 painéis, 1 ativo por vez, reclique oculta.
+  // Verificação abre por padrão: os testes de cima (que veem o form sem clicar) dependem disso.
+  // ═══════════════════════════════════════════════════════════════════
+  describe('cards de seleção — 4 painéis e alternância', () => {
+    const cardBtns = (f: ComponentFixture<AdminAvisosSalaComponent>) =>
+      f.debugElement.queryAll(By.css('.cards-aviso .card-pick')).map(d => d.nativeElement as HTMLButtonElement);
+
+    it('renderiza os 4 cards; Verificação começa ativo com o form inline visível e nenhum sub-painel', async () => {
+      const fixture = await renderizar();
+      expect(cardBtns(fixture).map(b => b.textContent?.trim())).toEqual(['Verificação', 'Escala', 'Agenda', 'Pessoal']);
+      expect(fixture.componentInstance.activeCard()).toBe('verificacao');
+      expect(cardBtns(fixture)[0].classList.contains('active')).toBe(true);
+      expect(fixture.debugElement.query(By.css('app-multi-select-dropdown'))).not.toBeNull();  // salas (Verificação)
+      expect(fixture.debugElement.query(By.css('app-aviso-escala-form'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('app-aviso-agenda-form'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('app-aviso-pessoal-form'))).toBeNull();
+    });
+
+    it('cada card ativa o seu painel; a tabela "Avisos Cadastrados" continua na tela', async () => {
+      const fixture = await renderizar();
+      const casos: [number, string][] = [[1, 'app-aviso-escala-form'], [2, 'app-aviso-agenda-form'], [3, 'app-aviso-pessoal-form']];
+      for (const [i, sel] of casos) {
+        cardBtns(fixture)[i].click();
+        await estabilizar(fixture);
+        expect(fixture.debugElement.query(By.css(sel))).not.toBeNull();
+        expect(fixture.debugElement.query(By.css('table.data-table'))).not.toBeNull();
+      }
+    });
+
+    it('reclicar no card ativo fecha o painel (nenhum ativo)', async () => {
+      const fixture = await renderizar();
+      cardBtns(fixture)[2].click();          // Agenda
+      await estabilizar(fixture);
+      expect(fixture.componentInstance.activeCard()).toBe('agenda');
+      cardBtns(fixture)[2].click();          // reclique
+      await estabilizar(fixture);
+      expect(fixture.componentInstance.activeCard()).toBeNull();
+      expect(fixture.debugElement.query(By.css('app-aviso-agenda-form'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('table.data-table'))).not.toBeNull();
+    });
+
+    it('coluna "Expira em" exibe a data sempre que o backend a mandar — inclusive num permanente (Escala)', async () => {
+      // Antes: permanente=1 => sempre "—", escondendo o DATA_FIM que a Escala manda. Agora exibe a data.
+      respostas[EP_LISTA] = ok({ ...AVISO_ATIVO, permanente: 1, expira_em: '2026-07-24' });
+      const fixture = await renderizar();
+      expect(textoDaTabela(fixture)).toContain('24/07/2026');
+    });
+  });
 });

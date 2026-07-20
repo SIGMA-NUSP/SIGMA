@@ -37,6 +37,7 @@ import br.leg.senado.nusp.entity.PontoLote;
 import br.leg.senado.nusp.entity.PontoLotePagina;
 import br.leg.senado.nusp.enums.PapelPessoa;
 import br.leg.senado.nusp.enums.StatusSolicitacaoFolga;
+import br.leg.senado.nusp.enums.SubtipoAviso;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.it.support.CenarioFactory;
 import br.leg.senado.nusp.repository.PontoBancoSaldoRepository;
@@ -316,7 +317,7 @@ class PontoExclusaoIT {
             // mesmo tipo, e NENHUMA relação com esta publicação.
             tx.executeWithoutResult(status -> avisoService.criarPessoalIndividual(
                     List.of(new AvisoService.DestinatarioAviso(ana.getId(), PapelPessoa.OPERADOR)),
-                    "Sua folga de 20/06 foi aprovada.", admin.getId()));
+                    "Sua folga de 20/06 foi aprovada.", admin.getId(), SubtipoAviso.SOLICITACAO_APROVADA));
         }
 
         @Test

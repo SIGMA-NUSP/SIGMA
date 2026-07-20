@@ -11,6 +11,7 @@ import br.leg.senado.nusp.entity.Tecnico;
 import br.leg.senado.nusp.enums.AlvoTipoAviso;
 import br.leg.senado.nusp.enums.PapelPessoa;
 import br.leg.senado.nusp.enums.StatusAviso;
+import br.leg.senado.nusp.enums.SubtipoAviso;
 import br.leg.senado.nusp.enums.TipoAviso;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.repository.AdministradorRepository;
@@ -86,6 +87,7 @@ class AvisoServiceTest {
     private static final String CADASTRO_ID = "uuid-cadastro-novo";
     private static final String OPERADOR_ID = "uuid-operador";
     private static final String TECNICO_ID = "uuid-tecnico";
+    private static final String OUTRO_ADMIN_ID = "uuid-admin-2";   // destinatário admin ≠ autor
     private static final int SALA_ID = 3;
     private static final int OUTRA_SALA_ID = 4;
     private static final String SALA_NOME = "Plenário 2";
@@ -164,6 +166,14 @@ class AvisoServiceTest {
         when(tecnicoRepo.findById(id)).thenReturn(Optional.of(t));
     }
 
+    /** Administrador destinatário (≠ o autor stubado por {@link #stubAdminExistente()}). */
+    private void stubAdminExistente(String id) {
+        Administrador a = new Administrador();
+        a.setId(id);
+        a.setNomeCompleto("Admin " + id);
+        when(adminRepo.findById(id)).thenReturn(Optional.of(a));
+    }
+
     /** O save devolve a entidade com ID (o SUT depende de cad.getId() logo depois). */
     private AtomicReference<AvisoCadastro> stubSaveCadastro() {
         AtomicReference<AvisoCadastro> ref = new AtomicReference<>();
@@ -212,12 +222,20 @@ class AvisoServiceTest {
         return m;
     }
 
-    /** Payload de criação: cada teste sobrescreve só o que lhe interessa. */
+    /** Payload de criação: cada teste sobrescreve só o que lhe interessa (adminIds/escalaId nulos). */
     private static CriarAvisoRequest req(String tipo, Boolean permanente, Integer duracaoDias, Boolean manter,
                                          List<String> mensagens, String alvoTipo,
                                          List<Integer> salaIds, List<String> operadorIds, List<String> tecnicoIds) {
         return new CriarAvisoRequest(tipo, permanente, duracaoDias, manter, mensagens, alvoTipo,
-                salaIds, operadorIds, tecnicoIds);
+                salaIds, operadorIds, tecnicoIds, null, null);
+    }
+
+    /** Payload com listas de pessoas (op/téc/adm) — modo PESSOAS ou público ADMIN individual (mensagem fixa). */
+    private static CriarAvisoRequest reqPessoas(String tipo, Boolean permanente, Integer duracaoDias, Boolean manter,
+                                                String alvoTipo, List<String> operadorIds, List<String> tecnicoIds,
+                                                List<String> adminIds) {
+        return new CriarAvisoRequest(tipo, permanente, duracaoDias, manter, List.of(MSG_CRUA), alvoTipo,
+                null, operadorIds, tecnicoIds, adminIds, null);
     }
 
     /** VERIFICACAO permanente, público SALA — o caso real do frontend hoje. */
@@ -370,16 +388,16 @@ class AvisoServiceTest {
         @DisplayName("criar — público OPERADOR: lista vazia é rejeitada e salas/técnicos juntos são proibidos")
         void criar_publicoOperadorExigeOperadorESoOperador() {
             ServiceValidationException semOperador = assertThrows(ServiceValidationException.class,
-                    () -> service.criar(req("ESCALA", null, null, null, List.of(MSG_CRUA), "OPERADOR", null, List.of(), null), ADMIN_ID));
+                    () -> service.criar(req("VERIFICACAO", null, null, null, List.of(MSG_CRUA), "OPERADOR", null, List.of(), null), ADMIN_ID));
             assertEquals("Selecione ao menos um operador.", semOperador.getMessage());
 
             ServiceValidationException comSala = assertThrows(ServiceValidationException.class,
-                    () -> service.criar(req("ESCALA", null, null, null, List.of(MSG_CRUA), "OPERADOR",
+                    () -> service.criar(req("VERIFICACAO", null, null, null, List.of(MSG_CRUA), "OPERADOR",
                             List.of(SALA_ID), List.of(OPERADOR_ID), null), ADMIN_ID));
             assertEquals("Público por operador não aceita salas/técnicos.", comSala.getMessage());
 
             ServiceValidationException comTecnico = assertThrows(ServiceValidationException.class,
-                    () -> service.criar(req("ESCALA", null, null, null, List.of(MSG_CRUA), "OPERADOR",
+                    () -> service.criar(req("VERIFICACAO", null, null, null, List.of(MSG_CRUA), "OPERADOR",
                             null, List.of(OPERADOR_ID), List.of(TECNICO_ID)), ADMIN_ID));
             assertEquals("Público por operador não aceita salas/técnicos.", comTecnico.getMessage());
 
@@ -391,16 +409,16 @@ class AvisoServiceTest {
         @DisplayName("criar — público TECNICO: lista vazia é rejeitada e salas/operadores juntos são proibidos")
         void criar_publicoTecnicoExigeTecnicoESoTecnico() {
             ServiceValidationException semTecnico = assertThrows(ServiceValidationException.class,
-                    () -> service.criar(req("ESCALA", null, null, null, List.of(MSG_CRUA), "TECNICO", null, null, List.of()), ADMIN_ID));
+                    () -> service.criar(req("VERIFICACAO", null, null, null, List.of(MSG_CRUA), "TECNICO", null, null, List.of()), ADMIN_ID));
             assertEquals("Selecione ao menos um técnico.", semTecnico.getMessage());
 
             ServiceValidationException comOperador = assertThrows(ServiceValidationException.class,
-                    () -> service.criar(req("ESCALA", null, null, null, List.of(MSG_CRUA), "TECNICO",
+                    () -> service.criar(req("VERIFICACAO", null, null, null, List.of(MSG_CRUA), "TECNICO",
                             null, List.of(OPERADOR_ID), List.of(TECNICO_ID)), ADMIN_ID));
             assertEquals("Público por técnico não aceita salas/operadores.", comOperador.getMessage());
 
             ServiceValidationException comSala = assertThrows(ServiceValidationException.class,
-                    () -> service.criar(req("ESCALA", null, null, null, List.of(MSG_CRUA), "TECNICO",
+                    () -> service.criar(req("VERIFICACAO", null, null, null, List.of(MSG_CRUA), "TECNICO",
                             List.of(SALA_ID), null, List.of(TECNICO_ID)), ADMIN_ID));
             assertEquals("Público por técnico não aceita salas/operadores.", comSala.getMessage());
 
@@ -449,7 +467,7 @@ class AvisoServiceTest {
             when(operadorRepo.findById(OPERADOR_ID)).thenReturn(Optional.empty());
 
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.criar(req("ESCALA", null, null, null, List.of(MSG_CRUA), "OPERADOR",
+                    () -> service.criar(req("VERIFICACAO", null, null, null, List.of(MSG_CRUA), "OPERADOR",
                             null, List.of(OPERADOR_ID), null), ADMIN_ID));
 
             assertEquals("Operador inválido: " + OPERADOR_ID, ex.getMessage());
@@ -464,7 +482,7 @@ class AvisoServiceTest {
             when(tecnicoRepo.findById(TECNICO_ID)).thenReturn(Optional.empty());
 
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.criar(req("ESCALA", null, null, null, List.of(MSG_CRUA), "TECNICO",
+                    () -> service.criar(req("VERIFICACAO", null, null, null, List.of(MSG_CRUA), "TECNICO",
                             null, null, List.of(TECNICO_ID)), ADMIN_ID));
 
             assertEquals("Técnico inválido: " + TECNICO_ID, ex.getMessage());
@@ -689,7 +707,7 @@ class AvisoServiceTest {
             stubSaveMensagens();
             List<AvisoAlvo> alvos = stubSaveAllAlvos();
 
-            service.criar(req("ESCALA", null, null, null, List.of(MSG_CRUA), "OPERADOR",
+            service.criar(req("VERIFICACAO", null, null, null, List.of(MSG_CRUA), "OPERADOR",
                     null, List.of(OPERADOR_ID, OPERADOR_ID), null), ADMIN_ID);
 
             assertEquals(1, alvos.size());
@@ -700,42 +718,304 @@ class AvisoServiceTest {
         }
 
         @Test
-        @DisplayName("público ADMIN é rejeitado: nada é gravado e a sequence não é consumida")
-        void criar_publicoAdmin_rejeitado() {
-            // AlvoTipoAviso tem 8 constantes; validarAlvo/montarAlvos tratavam 6
-            // (faltavam ADMIN e TODOS_ADMIN) e são switch STATEMENT sobre enum — sem exaustividade e
-            // sem default, os dois escapavam de toda validação e o cadastro nascia ATIVO e SEM alvo.
-            // Agora falham em voz alta. ADMIN segue válido no caminho programático
-            // (criarPessoalIndividual, publicação de folha de ponto) — este é só o cadastro do form.
-            // Ausência de stubs (STRICT_STUBS) é parte da asserção: a rejeição precede a sequence,
-            // o autor e todo save. ⚠️ Quem trava o bug é o assertEquals do STATUS + o contains da
-            // mensagem, NÃO o assertThrows: sem stub, o código antigo também lançaria — mas o 404 de
-            // "Administrador inválido." (adminRepo.findById vazio), e não a rejeição do público. Não
-            // acrescente stubAdminExistente() "para completar o cenário": isso apagaria a diferença.
-            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.criar(req("PESSOAL", null, null, null, List.of(MSG_CRUA), "ADMIN",
-                            null, List.of(OPERADOR_ID), null), ADMIN_ID));
+        @DisplayName("público ADMIN (destravado na decisão 18): grava 1 alvo ADMIN com a FK do administrador")
+        void criar_publicoAdminIndividual_aceito() {
+            // Antes o cadastro do form recusava ADMIN ("público não suportado") por não haver produtor
+            // na UI; a decisão 18 destravou (o card Pessoal passou a oferecer administradores, e parte
+            // das pessoas com folha vive em PES_ADMINISTRADOR). Agora ADMIN individual grava alvo real.
+            stubAdminExistente(OUTRO_ADMIN_ID);   // destinatário
+            stubSequenciaNumero();
+            stubAdminExistente();                 // autor (validarAutor + toResumo)
+            AtomicReference<AvisoCadastro> ref = stubSaveCadastro();
+            stubSaveMensagens();
+            List<AvisoAlvo> alvos = stubSaveAllAlvos();
 
-            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-            assertTrue(ex.getMessage().contains("não suportado"), "mensagem inesperada: " + ex.getMessage());
-            assertTrue(ex.getMessage().contains("ADMIN"));
-            verifyNoInteractions(cadastroRepo, mensagemRepo, alvoRepo, entityManager, adminRepo, operadorRepo);
+            service.criar(reqPessoas("PESSOAL", null, null, null, "ADMIN", null, null, List.of(OUTRO_ADMIN_ID)), ADMIN_ID);
+
+            assertEquals(TipoAviso.PESSOAL, ref.get().getTipo());
+            assertNull(ref.get().getSubtipo());   // PESSOAL + ADMIN individual: sem subtipo de grupo
+            assertEquals(1, alvos.size());
+            assertEquals(AlvoTipoAviso.ADMIN, alvos.get(0).getAlvoTipo());
+            assertEquals(OUTRO_ADMIN_ID, alvos.get(0).getAdminId());
+            assertNull(alvos.get(0).getOperadorId());
         }
 
         @Test
-        @DisplayName("público TODOS_ADMIN (que o banco aceita e buscarPendentes lê) também é rejeitado")
-        void criar_publicoTodosAdmin_rejeitado() {
-            // TODOS_ADMIN é o único valor do enum que NENHUMA linha de código grava: existe no enum, no
-            // CHECK do banco (changelog 021) e na leitura (buscarPendentes do admin filtra por ele;
-            // alvoToMap o rotula "Todos os administradores"), mas montarAlvos não o monta — virava aviso
-            // invisível a todos os administradores. Sem produtor, o cadastro passa a recusá-lo.
-            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.criar(req("GERAL", null, null, null, List.of(MSG_CRUA), "TODOS_ADMIN",
-                            null, null, null), ADMIN_ID));
+        @DisplayName("público TODOS_ADMIN (grupo Administradores): tipo GERAL grava subtipo GRUPO_ADMINISTRADORES e 1 alvo coletivo sem FK")
+        void criar_grupoAdministradores_aceito() {
+            // TODOS_ADMIN existe no enum, no CHECK do banco (021) e na leitura desde sempre, mas nunca
+            // teve produtor — a decisão 18 lhe dá o primeiro (o card Pessoal, modo "Um grupo").
+            stubSequenciaNumero();
+            stubAdminExistente();                 // autor
+            AtomicReference<AvisoCadastro> ref = stubSaveCadastro();
+            stubSaveMensagens();
+            List<AvisoAlvo> alvos = stubSaveAllAlvos();
 
-            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-            assertTrue(ex.getMessage().contains("TODOS_ADMIN"), "mensagem inesperada: " + ex.getMessage());
-            verifyNoInteractions(cadastroRepo, mensagemRepo, alvoRepo, entityManager, adminRepo);
+            service.criar(req("GERAL", null, null, null, List.of(MSG_CRUA), "TODOS_ADMIN", null, null, null), ADMIN_ID);
+
+            assertEquals(SubtipoAviso.GRUPO_ADMINISTRADORES, ref.get().getSubtipo());
+            assertEquals(1, alvos.size());
+            assertEquals(AlvoTipoAviso.TODOS_ADMIN, alvos.get(0).getAlvoTipo());
+            assertNull(alvos.get(0).getAdminId());
+            verifyNoInteractions(salaRepo, operadorRepo, tecnicoRepo);
+        }
+    }
+
+    // ═══ criar — AGENDA, grupo (GERAL) e modo PESSOAS (card Pessoal) ═══
+
+    @Nested
+    @DisplayName("criar — AGENDA, grupo (GERAL) e modo PESSOAS do card Pessoal")
+    class CriarAgendaGrupoPessoas {
+
+        @Test
+        @DisplayName("criar — AGENDA: força alvo TODOS, permanente sem expira, subtipo AGENDA, ignorando alvo_tipo/duração enviados")
+        void criar_agenda_forcaTodos() {
+            stubSequenciaNumero();
+            stubAdminExistente();
+            AtomicReference<AvisoCadastro> ref = stubSaveCadastro();
+            stubSaveMensagens();
+            List<AvisoAlvo> alvos = stubSaveAllAlvos();
+
+            // alvo_tipo="SALA", duracao=5 e sala_ids no payload são IGNORADOS — AGENDA sempre é TODOS/permanente.
+            Map<String, Object> out = service.criar(
+                    req("AGENDA", false, 5, true, List.of(MSG_CRUA), "SALA", List.of(SALA_ID), null, null), ADMIN_ID);
+
+            AvisoCadastro cad = ref.get();
+            assertEquals(TipoAviso.AGENDA, cad.getTipo());
+            assertEquals(SubtipoAviso.AGENDA, cad.getSubtipo());
+            assertTrue(cad.getPermanente());
+            assertNull(cad.getExpiraEm());
+            assertNull(cad.getDuracaoDias());
+            assertFalse(cad.getManterAposCiencia());
+            assertEquals(StatusAviso.ATIVO, cad.getStatus());
+
+            assertEquals(1, alvos.size());
+            assertEquals(AlvoTipoAviso.TODOS, alvos.get(0).getAlvoTipo());
+            assertNull(alvos.get(0).getSalaId());
+            // O alvo_tipo/sala do payload nem são lidos: nenhuma validação de sala/ocupação roda.
+            verifyNoInteractions(salaRepo);
+            assertEquals("AGENDA", out.get("tipo"));
+        }
+
+        @Test
+        @DisplayName("criar — modo grupo (GERAL): cada coletivo grava o subtipo GRUPO_* (§2) e 1 alvo coletivo sem FK, na ordem")
+        void criar_modoGrupo_subtiposEAlvos() {
+            stubSequenciaNumero();
+            stubAdminExistente();
+            List<AvisoCadastro> salvos = new ArrayList<>();
+            when(cadastroRepo.save(any(AvisoCadastro.class))).thenAnswer(inv -> {
+                AvisoCadastro c = inv.getArgument(0); c.setId(CADASTRO_ID); salvos.add(c); return c;
+            });
+            stubSaveMensagens();
+            List<AvisoAlvo> alvos = stubSaveAllAlvos();
+
+            record Caso(String alvoTipo, AlvoTipoAviso alvo, SubtipoAviso subtipo) {}
+            List<Caso> casos = List.of(
+                    new Caso("TODOS_OPERADORES", AlvoTipoAviso.TODOS_OPERADORES, SubtipoAviso.GRUPO_OPERADORES),
+                    new Caso("TODOS_TECNICOS", AlvoTipoAviso.TODOS_TECNICOS, SubtipoAviso.GRUPO_TECNICOS),
+                    new Caso("TODOS", AlvoTipoAviso.TODOS, SubtipoAviso.GRUPO_TODOS),
+                    new Caso("TODOS_ADMIN", AlvoTipoAviso.TODOS_ADMIN, SubtipoAviso.GRUPO_ADMINISTRADORES));
+
+            for (Caso caso : casos)
+                service.criar(req("GERAL", null, null, null, List.of(MSG_CRUA), caso.alvoTipo(), null, null, null), ADMIN_ID);
+
+            assertEquals(4, salvos.size());
+            assertEquals(4, alvos.size());
+            for (int i = 0; i < casos.size(); i++) {
+                assertEquals(casos.get(i).subtipo(), salvos.get(i).getSubtipo(), "subtipo do grupo " + casos.get(i).alvoTipo());
+                assertEquals(casos.get(i).alvo(), alvos.get(i).getAlvoTipo());
+                assertNull(alvos.get(i).getOperadorId());
+                assertNull(alvos.get(i).getTecnicoId());
+                assertNull(alvos.get(i).getAdminId());
+                assertNull(alvos.get(i).getSalaId());
+            }
+            verifyNoInteractions(salaRepo, operadorRepo, tecnicoRepo);
+        }
+
+        @Test
+        @DisplayName("criar — modo PESSOAS: listas mistas (op/téc/adm) viram um cadastro PESSOAL subtipo PESSOAL com um alvo por pessoa")
+        void criar_modoPessoas_alvosMistos() {
+            stubOperadorExistente(OPERADOR_ID);
+            stubTecnicoExistente(TECNICO_ID);
+            stubAdminExistente(OUTRO_ADMIN_ID);
+            stubSequenciaNumero();
+            stubAdminExistente();   // autor
+            AtomicReference<AvisoCadastro> ref = stubSaveCadastro();
+            stubSaveMensagens();
+            List<AvisoAlvo> alvos = stubSaveAllAlvos();
+
+            service.criar(reqPessoas("PESSOAL", null, null, true, "PESSOAS",
+                    List.of(OPERADOR_ID), List.of(TECNICO_ID), List.of(OUTRO_ADMIN_ID)), ADMIN_ID);
+
+            AvisoCadastro cad = ref.get();
+            assertEquals(TipoAviso.PESSOAL, cad.getTipo());
+            assertEquals(SubtipoAviso.PESSOAL, cad.getSubtipo());
+            assertTrue(cad.getManterAposCiencia());
+            assertTrue(cad.getPermanente());
+
+            assertEquals(3, alvos.size());
+            assertEquals(List.of(AlvoTipoAviso.OPERADOR, AlvoTipoAviso.TECNICO, AlvoTipoAviso.ADMIN),
+                    alvos.stream().map(AvisoAlvo::getAlvoTipo).toList());
+            assertEquals(OPERADOR_ID, alvos.get(0).getOperadorId());
+            assertEquals(TECNICO_ID, alvos.get(1).getTecnicoId());
+            assertEquals(OUTRO_ADMIN_ID, alvos.get(2).getAdminId());
+        }
+
+        @Test
+        @DisplayName("criar — modo PESSOAS não-permanente com 10 dias grava DURACAO_DIAS/EXPIRA_EM; manter=false é preservado")
+        void criar_modoPessoas_naoPermanente() {
+            stubOperadorExistente(OPERADOR_ID);
+            stubSequenciaNumero();
+            stubAdminExistente();
+            AtomicReference<AvisoCadastro> ref = stubSaveCadastro();
+            stubSaveMensagens();
+            stubSaveAllAlvos();
+
+            service.criar(reqPessoas("PESSOAL", false, 10, false, "PESSOAS", List.of(OPERADOR_ID), null, null), ADMIN_ID);
+
+            AvisoCadastro cad = ref.get();
+            assertFalse(cad.getPermanente());
+            assertEquals(10, cad.getDuracaoDias());
+            assertNotNull(cad.getExpiraEm());
+            assertFalse(cad.getManterAposCiencia());
+        }
+
+        @Test
+        @DisplayName("criar — modo PESSOAS sem nenhum destinatário é rejeitado, sem consumir a sequence")
+        void criar_modoPessoas_semDestinatarios() {
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.criar(reqPessoas("PESSOAL", null, null, null, "PESSOAS", null, null, null), ADMIN_ID));
+            assertEquals("Selecione ao menos um destinatário.", ex.getMessage());
+            verifyNoInteractions(entityManager);
+            assertNadaEscrito();
+        }
+
+        @Test
+        @DisplayName("criar — modo PESSOAS com operador inexistente responde 404")
+        void criar_modoPessoas_operadorInexistente() {
+            when(operadorRepo.findById(OPERADOR_ID)).thenReturn(Optional.empty());
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.criar(reqPessoas("PESSOAL", null, null, null, "PESSOAS",
+                            List.of(OPERADOR_ID), null, null), ADMIN_ID));
+            assertEquals("Operador inválido: " + OPERADOR_ID, ex.getMessage());
+            assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
+            verifyNoInteractions(entityManager);
+            assertNadaEscrito();
+        }
+    }
+
+    // ═══ listarPessoas — fonte do multi-select do card Pessoal ═══
+
+    @Nested
+    @DisplayName("listarPessoas — pessoas dos 3 papéis para o card Pessoal")
+    class ListarPessoas {
+
+        private Operador operador(String id, String nome) {
+            Operador o = new Operador(); o.setId(id); o.setNomeCompleto(nome); return o;
+        }
+
+        private Tecnico tecnico(String id, String nome) {
+            Tecnico t = new Tecnico(); t.setId(id); t.setNomeCompleto(nome); return t;
+        }
+
+        private Administrador administrador(String id, String nome) {
+            Administrador a = new Administrador(); a.setId(id); a.setNomeCompleto(nome); return a;
+        }
+
+        @Test
+        @DisplayName("listarPessoas — junta os 3 papéis no shape {id, nome, tipo} em ordem pt-BR (caixa e acento não contam)")
+        void listarPessoas_shapeEOrdem() {
+            when(operadorRepo.findAll()).thenReturn(List.of(operador("op-1", "Érica")));
+            when(tecnicoRepo.findAll()).thenReturn(List.of(tecnico("tec-1", "bruno")));
+            when(adminRepo.findAll()).thenReturn(List.of(administrador("adm-1", "Zeca"), administrador("adm-2", "Alvaro")));
+
+            List<Map<String, Object>> out = service.listarPessoas();
+
+            // Ordem única pt-BR (F30): acento e caixa não pesam — "Alvaro" < "bruno" < "Érica" < "Zeca".
+            assertEquals(List.of("Alvaro", "bruno", "Érica", "Zeca"),
+                    out.stream().map(m -> m.get("nome")).toList());
+            assertEquals(List.of("ADMINISTRADOR", "TECNICO", "OPERADOR", "ADMINISTRADOR"),
+                    out.stream().map(m -> m.get("tipo")).toList());
+            assertEquals("adm-2", out.get(0).get("id"));
+            assertEquals(List.of("id", "nome", "tipo"), List.copyOf(out.get(0).keySet()));
+        }
+
+        @Test
+        @DisplayName("listarPessoas — sem ninguém cadastrado devolve lista vazia")
+        void listarPessoas_vazio() {
+            when(operadorRepo.findAll()).thenReturn(List.of());
+            when(tecnicoRepo.findAll()).thenReturn(List.of());
+            when(adminRepo.findAll()).thenReturn(List.of());
+            assertTrue(service.listarPessoas().isEmpty());
+        }
+    }
+
+    // ═══ registrarVisto — visto de AGENDA (só AGENDA, idempotente) ═══
+
+    @Nested
+    @DisplayName("registrarVisto — visto persistente por usuário, exclusivo do AGENDA")
+    class RegistrarVisto {
+
+        @Test
+        @DisplayName("registrarVisto — cadastro inexistente responde 404")
+        void visto_cadastroInexistente() {
+            when(cadastroRepo.findById(CADASTRO_ID)).thenReturn(Optional.empty());
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.registrarVisto(CADASTRO_ID, OPERADOR_ID, PapelPessoa.OPERADOR));
+            assertEquals("Aviso não encontrado.", ex.getMessage());
+            assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
+            verifyNoInteractions(cienciaRepo, cienciaWriter);
+        }
+
+        @Test
+        @DisplayName("registrarVisto — tipo != AGENDA é rejeitado (GERAL, PESSOAL, VERIFICACAO e tipo nulo)")
+        void visto_soAgenda() {
+            when(cadastroRepo.findById(CADASTRO_ID))
+                    .thenReturn(Optional.of(cadastro(TipoAviso.GERAL, StatusAviso.ATIVO)))
+                    .thenReturn(Optional.of(cadastro(TipoAviso.PESSOAL, StatusAviso.ATIVO)))
+                    .thenReturn(Optional.of(cadastro(TipoAviso.VERIFICACAO, StatusAviso.ATIVO)))
+                    .thenReturn(Optional.of(cadastro(null, StatusAviso.ATIVO)));
+            for (int i = 0; i < 4; i++) {
+                ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                        () -> service.registrarVisto(CADASTRO_ID, OPERADOR_ID, PapelPessoa.OPERADOR));
+                assertEquals("Este tipo de aviso não registra visualização.", ex.getMessage());
+                assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            }
+            verifyNoInteractions(cienciaRepo, cienciaWriter);
+        }
+
+        @Test
+        @DisplayName("registrarVisto — AGENDA não-ATIVO (desativado entre exibição e registro) é no-op silencioso")
+        void visto_naoAtivo() {
+            when(cadastroRepo.findById(CADASTRO_ID)).thenReturn(Optional.of(cadastro(TipoAviso.AGENDA, StatusAviso.DESATIVADO)));
+            assertDoesNotThrow(() -> service.registrarVisto(CADASTRO_ID, OPERADOR_ID, PapelPessoa.OPERADOR));
+            verifyNoInteractions(cienciaRepo, cienciaWriter);
+        }
+
+        @Test
+        @DisplayName("registrarVisto — já visto (mesma pessoa, sem sala) é no-op: não regrava")
+        void visto_jaVisto() {
+            when(cadastroRepo.findById(CADASTRO_ID)).thenReturn(Optional.of(cadastro(TipoAviso.AGENDA, StatusAviso.ATIVO)));
+            when(cienciaRepo.findByCadastroIdAndOperadorId(CADASTRO_ID, OPERADOR_ID)).thenReturn(Optional.of(new AvisoCiencia()));
+            service.registrarVisto(CADASTRO_ID, OPERADOR_ID, PapelPessoa.OPERADOR);
+            verifyNoInteractions(cienciaWriter);
+        }
+
+        @Test
+        @DisplayName("registrarVisto — grava sem sala na coluna do papel; corrida (DataIntegrityViolation) é engolida")
+        void visto_gravaColunaCertaECorrida() {
+            when(cadastroRepo.findById(CADASTRO_ID)).thenReturn(Optional.of(cadastro(TipoAviso.AGENDA, StatusAviso.ATIVO)));
+            when(cienciaRepo.findByCadastroIdAndTecnicoId(CADASTRO_ID, TECNICO_ID)).thenReturn(Optional.empty());
+            doThrow(new DataIntegrityViolationException("UK_FRM_AVISO_CIE_TEC")).when(cienciaWriter).inserir(any(AvisoCiencia.class));
+
+            assertDoesNotThrow(() -> service.registrarVisto(CADASTRO_ID, TECNICO_ID, PapelPessoa.TECNICO));
+
+            verify(cienciaWriter).inserir(argThat(c ->
+                    TECNICO_ID.equals(c.getTecnicoId())
+                            && c.getSalaId() == null
+                            && c.getOperadorId() == null
+                            && c.getAdminId() == null
+                            && c.getCienteEm() != null));
         }
     }
 
@@ -753,11 +1033,11 @@ class AvisoServiceTest {
         @DisplayName("criarPessoalIndividual — mensagem nula ou em branco é rejeitada antes de tocar em qualquer repositório")
         void criarPessoal_mensagemObrigatoria() {
             ServiceValidationException nula = assertThrows(ServiceValidationException.class,
-                    () -> service.criarPessoalIndividual(List.of(operador), null, ADMIN_ID));
+                    () -> service.criarPessoalIndividual(List.of(operador), null, ADMIN_ID, SubtipoAviso.FOLHA_SEMANAL));
             assertEquals("Mensagem do aviso é obrigatória.", nula.getMessage());
 
             ServiceValidationException branca = assertThrows(ServiceValidationException.class,
-                    () -> service.criarPessoalIndividual(List.of(operador), "   ", ADMIN_ID));
+                    () -> service.criarPessoalIndividual(List.of(operador), "   ", ADMIN_ID, SubtipoAviso.FOLHA_SEMANAL));
             assertEquals("Mensagem do aviso é obrigatória.", branca.getMessage());
 
             verifyNoInteractions(adminRepo, entityManager);
@@ -770,7 +1050,7 @@ class AvisoServiceTest {
             when(adminRepo.findById(ADMIN_ID)).thenReturn(Optional.empty());
 
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.criarPessoalIndividual(List.of(operador), MSG_CRUA, ADMIN_ID));
+                    () -> service.criarPessoalIndividual(List.of(operador), MSG_CRUA, ADMIN_ID, SubtipoAviso.FOLHA_SEMANAL));
 
             assertEquals("Administrador inválido.", ex.getMessage());
             assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
@@ -787,9 +1067,9 @@ class AvisoServiceTest {
                     new DestinatarioAviso(null, PapelPessoa.OPERADOR),
                     new DestinatarioAviso(OPERADOR_ID, null));
 
-            assertDoesNotThrow(() -> service.criarPessoalIndividual(null, MSG_CRUA, ADMIN_ID));
-            assertDoesNotThrow(() -> service.criarPessoalIndividual(List.of(), MSG_CRUA, ADMIN_ID));
-            assertDoesNotThrow(() -> service.criarPessoalIndividual(incompletos, MSG_CRUA, ADMIN_ID));
+            assertDoesNotThrow(() -> service.criarPessoalIndividual(null, MSG_CRUA, ADMIN_ID, SubtipoAviso.FOLHA_SEMANAL));
+            assertDoesNotThrow(() -> service.criarPessoalIndividual(List.of(), MSG_CRUA, ADMIN_ID, SubtipoAviso.FOLHA_SEMANAL));
+            assertDoesNotThrow(() -> service.criarPessoalIndividual(incompletos, MSG_CRUA, ADMIN_ID, SubtipoAviso.FOLHA_SEMANAL));
 
             // O autor é validado antes (3 leituras), mas a sequence nunca é consumida.
             verify(adminRepo, times(3)).findById(ADMIN_ID);
@@ -809,7 +1089,8 @@ class AvisoServiceTest {
             // OPERADOR_ID aparece 2× como operador (dedup) e 1× como técnico (papel distinto → entra).
             DestinatarioAviso mesmoIdOutroPapel = new DestinatarioAviso(OPERADOR_ID, PapelPessoa.TECNICO);
             service.criarPessoalIndividual(
-                    Arrays.asList(operador, operador, mesmoIdOutroPapel, admin), MSG_CRUA, ADMIN_ID);
+                    Arrays.asList(operador, operador, mesmoIdOutroPapel, admin), MSG_CRUA, ADMIN_ID,
+                    SubtipoAviso.FOLHA_SEMANAL);
 
             assertEquals(3, alvos.size());
             assertEquals(List.of(AlvoTipoAviso.OPERADOR, AlvoTipoAviso.TECNICO, AlvoTipoAviso.ADMIN),
@@ -830,10 +1111,11 @@ class AvisoServiceTest {
             List<AvisoMensagem> mensagens = stubSaveMensagens();
             List<AvisoAlvo> alvos = stubSaveAllAlvos();
 
-            service.criarPessoalIndividual(List.of(tecnico), MSG_CRUA, ADMIN_ID);
+            service.criarPessoalIndividual(List.of(tecnico), MSG_CRUA, ADMIN_ID, SubtipoAviso.FOLHA_MENSAL);
 
             AvisoCadastro cad = ref.get();
             assertEquals(TipoAviso.PESSOAL, cad.getTipo());
+            assertEquals(SubtipoAviso.FOLHA_MENSAL, cad.getSubtipo()); // §2: o subtipo passado é gravado
             assertTrue(cad.getPermanente());
             assertFalse(cad.getManterAposCiencia());
             assertEquals(StatusAviso.ATIVO, cad.getStatus());
@@ -869,7 +1151,7 @@ class AvisoServiceTest {
             stubSaveMensagens();
             stubSaveAllAlvos();
 
-            service.criarPessoalIndividual(List.of(operador), MSG_CRUA, ADMIN_ID, "lote-42");
+            service.criarPessoalIndividual(List.of(operador), MSG_CRUA, ADMIN_ID, SubtipoAviso.FOLHA_SEMANAL, "lote-42");
 
             assertEquals("lote-42", ref.get().getOrigemLoteId());
         }
@@ -883,7 +1165,7 @@ class AvisoServiceTest {
             stubSaveMensagens();
             stubSaveAllAlvos();
 
-            service.criarPessoalIndividual(List.of(operador), MSG_CRUA, ADMIN_ID);
+            service.criarPessoalIndividual(List.of(operador), MSG_CRUA, ADMIN_ID, SubtipoAviso.SOLICITACAO_APROVADA);
 
             assertNull(ref.get().getOrigemLoteId());
         }
@@ -1047,9 +1329,13 @@ class AvisoServiceTest {
     @DisplayName("buscarPendentes(tipos) — contrato do SQL e filtragem por ciência")
     class BuscarPendentes {
 
-        /** Linha do SELECT: ID, MANTER_APOS_CIENCIA (NUMBER(1) → BigDecimal), TIPO. */
+        /** Linha do SELECT: ID, MANTER_APOS_CIENCIA (NUMBER(1) → BigDecimal), TIPO, SUBTIPO. */
         private Object[] row(String id, int manter, TipoAviso tipo) {
-            return new Object[]{id, BigDecimal.valueOf(manter), tipo.name()};
+            return row(id, manter, tipo, null);
+        }
+
+        private Object[] row(String id, int manter, TipoAviso tipo, SubtipoAviso subtipo) {
+            return new Object[]{id, BigDecimal.valueOf(manter), tipo.name(), subtipo == null ? null : subtipo.name()};
         }
 
         private Query stubPendentes(String condAlvoFragmento, List<Object[]> rows) {
@@ -1129,6 +1415,8 @@ class AvisoServiceTest {
             assertEquals(1, out.size());
             assertEquals("cad-pendente", out.get(0).get("cadastro_id"));
             assertEquals("PESSOAL", out.get(0).get("tipo"));
+            // Legado sem subtipo (row com SUBTIPO nulo): título cai no fallback do label do tipo (§2).
+            assertEquals("Pessoal", out.get(0).get("titulo"));
             // exige_ciencia=true é o que faz o front renderizar o botão "Ciente" (o par false está
             // no caso GERAL abaixo — sem os dois, um hardcode do campo passaria despercebido).
             assertEquals(true, out.get(0).get("exige_ciencia"));
@@ -1162,6 +1450,7 @@ class AvisoServiceTest {
             Map<String, Object> aviso = out.get(0);
             assertEquals("cad-geral", aviso.get("cadastro_id"));
             assertEquals("GERAL", aviso.get("tipo"));
+            assertEquals("Geral", aviso.get("titulo")); // sem subtipo → fallback no label do tipo
             assertEquals(false, aviso.get("exige_ciencia"));
             assertEquals(false, aviso.get("manter_apos_ciencia"));
 
@@ -1173,6 +1462,45 @@ class AvisoServiceTest {
             assertEquals("Segunda", mensagens.get(1).get("texto"));
 
             verifyNoInteractions(cienciaRepo);
+        }
+
+        @Test
+        @DisplayName("buscarPendentes — quando o cadastro tem SUBTIPO, o título do popup vem do subtipo (§2), não do label do tipo")
+        void buscarPendentes_tituloVemDoSubtipo() {
+            stubPendentes("al.OPERADOR_ID = ?",
+                    List.<Object[]>of(row("cad-folha", 1, TipoAviso.PESSOAL, SubtipoAviso.FOLHA_SEMANAL)));
+            when(mensagemRepo.findByCadastroIdOrderByOrdem("cad-folha"))
+                    .thenReturn(List.of(mensagem(1, "Sua folha de ponto semanal foi publicada.")));
+
+            List<Map<String, Object>> out = service.buscarPendentes(OPERADOR_ID, PapelPessoa.OPERADOR, List.of(TipoAviso.PESSOAL));
+
+            assertEquals(1, out.size());
+            // FOLHA_SEMANAL → "Folha semanal disponível" (popup), distinto do label do tipo ("Pessoal").
+            assertEquals("Folha semanal disponível", out.get(0).get("titulo"));
+        }
+
+        @Test
+        @DisplayName("buscarPendentes — AGENDA some depois do visto do usuário (temCiencia sem sala); antes do visto, aparece")
+        void buscarPendentes_agendaFiltraPorVisto() {
+            // 2 avisos de AGENDA: um já visto pelo operador (some), outro ainda não (aparece). AGENDA não
+            // exige ciência, mas o "visto" persistente (§6.2) reusa a mesma tabela e filtra no servidor.
+            stubPendentes("al.OPERADOR_ID = ?", List.of(
+                    row("cad-visto", 0, TipoAviso.AGENDA, SubtipoAviso.AGENDA),
+                    row("cad-novo", 0, TipoAviso.AGENDA, SubtipoAviso.AGENDA)));
+            when(cienciaRepo.findByCadastroIdAndOperadorId("cad-visto", OPERADOR_ID)).thenReturn(Optional.of(new AvisoCiencia()));
+            when(cienciaRepo.findByCadastroIdAndOperadorId("cad-novo", OPERADOR_ID)).thenReturn(Optional.empty());
+            when(mensagemRepo.findByCadastroIdOrderByOrdem("cad-novo")).thenReturn(List.of(mensagem(1, "Confira a agenda")));
+
+            List<Map<String, Object>> out = service.buscarPendentes(OPERADOR_ID, PapelPessoa.OPERADOR, List.of(TipoAviso.AGENDA));
+
+            assertEquals(1, out.size());
+            assertEquals("cad-novo", out.get(0).get("cadastro_id"));
+            assertEquals("AGENDA", out.get(0).get("tipo"));
+            assertEquals(false, out.get(0).get("exige_ciencia"));
+            // Subtipo AGENDA → título "Agenda Legislativa" (§2), não o label do tipo ("Agenda").
+            assertEquals("Agenda Legislativa", out.get(0).get("titulo"));
+            // O visto usa a chave sem sala (cadastro+pessoa), nunca a variante com sala.
+            verify(cienciaRepo, never()).findByCadastroIdAndSalaIdAndOperadorId(anyString(), anyInt(), anyString());
         }
     }
 

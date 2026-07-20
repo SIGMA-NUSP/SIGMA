@@ -33,6 +33,7 @@ public class EscalaSemanalService {
     private final SalaRepository salaRepo;
     private final OperadorRepository operadorRepo;
     private final AdministradorRepository adminRepo;
+    private final AvisoService avisoService;
 
     /** Tipos de função aceitos em OPR_ESCALA_FUNCAO. */
     private static final Set<String> TIPOS_FUNCAO = Set.of("APOIO_COMISSOES", "FECHAMENTO");
@@ -218,7 +219,10 @@ public class EscalaSemanalService {
     public void excluirEscala(Long id) {
         var escala = escalaRepo.findById(id)
                 .orElseThrow(() -> new ServiceValidationException("Escala não encontrada.", HttpStatus.NOT_FOUND));
-        escalaRepo.delete(escala); // CASCADE deleta os vínculos
+        // F59: o aviso de ESCALA aponta para esta escala (FK ESCALA_ID) — apaga-o ANTES (com
+        // mensagens/alvos/ciências), senão a FK barra o delete da escala.
+        avisoService.excluirPorEscala(id);
+        escalaRepo.delete(escala); // CASCADE deleta os vínculos de operador/função
         log.info("Escala #{} excluída", id);
     }
 
