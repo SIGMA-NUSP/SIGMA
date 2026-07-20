@@ -2,6 +2,7 @@ package br.leg.senado.nusp.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -227,6 +228,18 @@ class AvisoAgendaPessoalIT {
         }
 
         @Test
+        @DisplayName("detalhe: status é '—' (coerente com a listagem) e vira 'Desativado' após desativar; sem bloco de destinatários")
+        void detalheStatus() {
+            String id = criarAgenda("x");
+            assertEquals("—", service.obterDetalhe(id).get("status"));
+            assertEquals(linhaListagem(id).get("status"), service.obterDetalhe(id).get("status"));
+            assertNull(service.obterDetalhe(id).get("destinatarios"), "AGENDA não tem bloco de destinatários");
+
+            service.desativar(id);
+            assertEquals("Desativado", service.obterDetalhe(id).get("status"));
+        }
+
+        @Test
         @DisplayName("registrarVisto rejeita tipo que não é AGENDA (ex.: um grupo GERAL)")
         void vistoSoAgenda() {
             String idGeral = criarGrupo("TODOS_OPERADORES", "x");
@@ -277,6 +290,17 @@ class AvisoAgendaPessoalIT {
             assertEquals("Operadores e Técnicos", linhaListagem(criarGrupo("TODOS", "x")).get("tipo"));
             assertEquals("Administradores", linhaListagem(criarGrupo("TODOS_ADMIN", "x")).get("tipo"));
         }
+
+        @Test
+        @DisplayName("detalhe: GERAL não tem tabela — sem 'destinatarios' e 'cientes' vazio; subtipo/tipo_tabela do grupo")
+        void detalheGrupoSemTabela() {
+            String id = criarGrupo("TODOS_OPERADORES", "Comunicado geral");
+            Map<String, Object> det = service.obterDetalhe(id);
+            assertEquals("GRUPO_OPERADORES", det.get("subtipo"));
+            assertEquals("Operadores", det.get("tipo_tabela"));
+            assertNull(det.get("destinatarios"), "GERAL não tem bloco de destinatários");
+            assertTrue(((List<?>) det.get("cientes")).isEmpty(), "GERAL não exige ciência");
+        }
     }
 
     // ═══ Card Pessoal — modo "Pessoas específicas" (PESSOAL) ═══
@@ -323,6 +347,49 @@ class AvisoAgendaPessoalIT {
             Operador op = CenarioFactory.novoOperador(emReal());
             String id = criarPessoas(List.of(op.getId()), List.of(), List.of(), false, "x");
             assertEquals("Pessoal", linhaListagem(id).get("tipo"));
+        }
+
+        @Test
+        @DisplayName("detalhe: destinatários mistos com pendentes (papel por pessoa), subtipo/tipo_tabela do payload; sem plenários")
+        void detalheDestinatariosMisto() {
+            Operador op = CenarioFactory.novoOperador(emReal());
+            Tecnico tec = CenarioFactory.novoTecnico(emReal());
+            String id = criarPessoas(List.of(op.getId()), List.of(tec.getId()), List.of(), false, "Aviso pessoal");
+            darCiencia(id, PapelPessoa.OPERADOR, op.getId());
+
+            Map<String, Object> det = service.obterDetalhe(id);
+            assertEquals("PESSOAL", det.get("subtipo"));
+            assertEquals("Pessoal", det.get("tipo_tabela"));
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> dest = (List<Map<String, Object>>) det.get("destinatarios");
+            assertEquals(2, dest.size());
+            Map<String, Object> lOp = dest.stream().filter(d -> op.getNomeCompleto().equals(d.get("nome"))).findFirst().orElseThrow();
+            Map<String, Object> lTec = dest.stream().filter(d -> tec.getNomeCompleto().equals(d.get("nome"))).findFirst().orElseThrow();
+            assertEquals("Operador", lOp.get("papel"));
+            assertEquals("Técnico", lTec.get("papel"));
+            assertNotNull(lOp.get("ciente_em"), "o operador deu ciência");
+            assertNull(lTec.get("ciente_em"), "o técnico ainda está pendente");
+            assertFalse(dest.stream().anyMatch(d -> d.containsKey("plenarios")), "PESSOAL não tem plenários");
+        }
+
+        @Test
+        @DisplayName("detalhe: ciência de quem não é destinatário aparece marcada fora_do_publico, no fim da lista")
+        void detalheCienciaForaDoPublico() {
+            Operador alvo = CenarioFactory.novoOperador(emReal());
+            Operador estranho = CenarioFactory.novoOperador(emReal());
+            String id = criarPessoas(List.of(alvo.getId()), List.of(), List.of(), false, "x");
+            darCiencia(id, PapelPessoa.OPERADOR, estranho.getId());   // ciência "contaminada" (§5.e)
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> dest = (List<Map<String, Object>>) service.obterDetalhe(id).get("destinatarios");
+            Map<String, Object> lAlvo = dest.stream().filter(d -> alvo.getNomeCompleto().equals(d.get("nome"))).findFirst().orElseThrow();
+            Map<String, Object> lEstranho = dest.stream().filter(d -> estranho.getNomeCompleto().equals(d.get("nome"))).findFirst().orElseThrow();
+            assertNull(lAlvo.get("fora_do_publico"));
+            assertNull(lAlvo.get("ciente_em"), "o alvo não deu ciência");
+            assertEquals(Boolean.TRUE, lEstranho.get("fora_do_publico"));
+            assertNotNull(lEstranho.get("ciente_em"));
+            assertTrue(dest.indexOf(lEstranho) > dest.indexOf(lAlvo), "marcado vai para o fim");
         }
     }
 }

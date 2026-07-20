@@ -510,5 +510,95 @@ class AvisoEscalaIT {
             List<Map<String, Object>> cientes = (List<Map<String, Object>>) det.get("cientes");
             assertEquals(1, cientes.size());
         }
+
+        private String semearNovo(LocalDate ini, LocalDate fim) {
+            Sala pleno = CenarioFactory.novaSala(emReal(), "Plenario02");
+            Operador op = CenarioFactory.novoOperador(emReal());
+            EscalaSemanal esc = novaEscala(ini, fim);
+            vincular(esc.getId(), pleno.getId(), op.getId(), "M");
+            return criarAvisoEscala(esc.getId(), List.of(pleno.getId()), false, "Confira sua escala");
+        }
+
+        private String statusListagem(String id) {
+            return (String) service.listarTodosPaginado(1, 100, "", "data", "desc", null).data().stream()
+                    .filter(m -> id.equals(m.get("id"))).findFirst().orElseThrow().get("status");
+        }
+
+        @Test
+        @DisplayName("status/expira do detalhe batem com a listagem: Pendente, Ativo, Expirado e Desativado")
+        void statusExpiraCoerentesComListagem() {
+            String pendente = semearNovo(HOJE.plusDays(2), HOJE.plusDays(6));
+            assertEquals("Pendente", service.obterDetalhe(pendente).get("status"));
+            assertEquals(statusListagem(pendente), service.obterDetalhe(pendente).get("status"));
+            assertTrue(String.valueOf(service.obterDetalhe(pendente).get("expira_em"))
+                    .startsWith(HOJE.plusDays(6).toString()), "expira_em = DATA_FIM da escala");
+
+            String ativo = semearNovo(HOJE.minusDays(1), HOJE.plusDays(1));
+            assertEquals("Ativo", service.obterDetalhe(ativo).get("status"));
+            assertEquals(statusListagem(ativo), service.obterDetalhe(ativo).get("status"));
+
+            String expirado = semearNovo(HOJE.minusDays(6), HOJE.minusDays(2));
+            assertEquals("Expirado", service.obterDetalhe(expirado).get("status"));
+            assertEquals(statusListagem(expirado), service.obterDetalhe(expirado).get("status"));
+
+            service.desativar(ativo);   // Desativado gravado prevalece sobre o cálculo
+            assertEquals("Desativado", service.obterDetalhe(ativo).get("status"));
+            assertEquals(statusListagem(ativo), service.obterDetalhe(ativo).get("status"));
+        }
+
+        @Test
+        @DisplayName("destinatários: os operadores vinculados ao plenário aparecem; quem deu ciência traz ciente_em, quem não deu fica pendente")
+        void destinatariosVinculadosComCiencia() {
+            Sala pleno = CenarioFactory.novaSala(emReal(), "Plenario02");
+            Operador op1 = CenarioFactory.novoOperador(emReal());
+            Operador op2 = CenarioFactory.novoOperador(emReal());
+            EscalaSemanal esc = novaEscala(HOJE.minusDays(1), HOJE.plusDays(3));
+            vincular(esc.getId(), pleno.getId(), op1.getId(), "M");
+            vincular(esc.getId(), pleno.getId(), op2.getId(), "V");
+
+            String id = criarAvisoEscala(esc.getId(), List.of(pleno.getId()), false, "Confira sua escala");
+            darCiencia(id, op1.getId());
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> dest = (List<Map<String, Object>>) service.obterDetalhe(id).get("destinatarios");
+            assertEquals(2, dest.size(), "os 2 operadores vinculados ao plenário");
+            assertTrue(dest.stream().allMatch(d -> "Operador".equals(d.get("papel"))));
+            assertTrue(dest.stream().allMatch(d -> ((List<?>) d.get("plenarios")).contains(pleno.getNome())),
+                    "cada linha traz o plenário");
+            Map<String, Object> ciente = dest.stream().filter(d -> d.get("ciente_em") != null).findFirst().orElseThrow();
+            Map<String, Object> pendente = dest.stream().filter(d -> d.get("ciente_em") == null).findFirst().orElseThrow();
+            assertEquals(op1.getNomeCompleto(), ciente.get("nome"), "o ciente é quem deu ciência");
+            assertEquals(op2.getNomeCompleto(), pendente.get("nome"));
+            assertNull(ciente.get("fora_do_publico"));
+            assertNull(pendente.get("fora_do_publico"));
+        }
+
+        @Test
+        @DisplayName("troca de operador: quem deu ciência e saiu da escala vem marcado fora_do_publico no fim; o novo entra pendente")
+        void destinatariosTrocaDeOperador() {
+            Sala pleno = CenarioFactory.novaSala(emReal(), "Plenario02");
+            Operador antigo = CenarioFactory.novoOperador(emReal());
+            Operador novo = CenarioFactory.novoOperador(emReal());
+            EscalaSemanal esc = novaEscala(HOJE.minusDays(1), HOJE.plusDays(3));
+            vincular(esc.getId(), pleno.getId(), antigo.getId(), "M");
+
+            String id = criarAvisoEscala(esc.getId(), List.of(pleno.getId()), false, "Confira sua escala");
+            darCiencia(id, antigo.getId());
+
+            // Troca: o antigo sai do vínculo, o novo assume o plenário — sem tocar no aviso.
+            escalaOpRepo.deleteByEscalaId(esc.getId());
+            emReal().flush();
+            vincular(esc.getId(), pleno.getId(), novo.getId(), "M");
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> dest = (List<Map<String, Object>>) service.obterDetalhe(id).get("destinatarios");
+            Map<String, Object> lNovo = dest.stream().filter(d -> novo.getNomeCompleto().equals(d.get("nome"))).findFirst().orElseThrow();
+            Map<String, Object> lAntigo = dest.stream().filter(d -> antigo.getNomeCompleto().equals(d.get("nome"))).findFirst().orElseThrow();
+            assertNull(lNovo.get("ciente_em"), "o novo ainda não deu ciência");
+            assertNull(lNovo.get("fora_do_publico"), "o novo é o público atual");
+            assertEquals(Boolean.TRUE, lAntigo.get("fora_do_publico"), "o antigo saiu da escala mas manteve a ciência");
+            assertNotNull(lAntigo.get("ciente_em"));
+            assertTrue(dest.indexOf(lAntigo) > dest.indexOf(lNovo), "marcados vão para o fim");
+        }
     }
 }

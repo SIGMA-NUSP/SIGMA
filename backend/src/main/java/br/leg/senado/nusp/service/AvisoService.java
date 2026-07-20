@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 /**
@@ -561,38 +562,82 @@ public class AvisoService {
                 "c.ID DESC");
     }
 
-    /** Detalhe completo de um cadastro (cabeçalho + mensagens + alvos + cientes). */
+    /** Detalhe completo de um cadastro (cabeçalho + mensagens + alvos + cientes + destinatários por tipo). */
     public Map<String, Object> obterDetalhe(String id) {
         AvisoCadastro cad = cadastroRepo.findById(id).orElseThrow(() ->
                 new ServiceValidationException("Aviso não encontrado.", HttpStatus.NOT_FOUND));
         Map<String, Object> m = toResumo(cad);
+        // Rótulo "Tipo de Aviso" derivado do subtipo (§5.a) — mesma regra da listagem (subtipo → fallback no tipo).
+        m.put("subtipo", cad.getSubtipo() != null ? cad.getSubtipo().name() : null);
+        m.put("tipo_tabela", labelTabela(cad));
         m.put("mensagens", mensagemRepo.findByCadastroIdOrderByOrdem(id).stream()
                 .map(this::mensagemToMap).toList());
         // Resolve nomes de alvos/ciências com mapas carregados no máx. 1× por tipo (lazy) — evita N+1 (Q18).
         ResolvedorNomes nomes = new ResolvedorNomes();
         List<AvisoAlvo> alvos = alvoRepo.findByCadastroId(id);
         m.put("alvos", alvos.stream().map(a -> alvoToMap(a, nomes)).toList());
+        // Carrega as ciências/vistos 1× (tipos com ciência OU AGENDA) — reusadas por cientes/destinatarios/exibido.
+        boolean temRegistro = cad.getTipo() != null && (cad.getTipo().exigeCiencia() || cad.getTipo() == TipoAviso.AGENDA);
+        List<AvisoCiencia> ciencias = temRegistro ? cienciaRepo.findByCadastroIdOrderByCienteEm(id) : List.of();
         m.put("cientes", cad.getTipo() != null && cad.getTipo().exigeCiencia()
-                ? cienciaRepo.findByCadastroIdOrderByCienteEm(id).stream().map(c -> cienciaToMap(c, nomes)).toList()
+                ? ciencias.stream().map(c -> cienciaToMap(c, nomes)).toList()
                 : List.of());
-        // ESCALA: período da escala + plenários selecionados — deixa a API pronta p/ a futura tela de detalhe.
-        if (cad.getTipo() == TipoAviso.ESCALA && cad.getEscalaId() != null)
-            m.put("escala", montarBlocoEscala(cad.getEscalaId(), alvos, nomes));
+        // Escala do aviso carregada 1× — alimenta o bloco 'escala', o status/expira calculados e os destinatários.
+        EscalaSemanal esc = (cad.getTipo() == TipoAviso.ESCALA && cad.getEscalaId() != null)
+                ? escalaRepo.findById(cad.getEscalaId()).orElse(null) : null;
+        // Status/expira COERENTES com a listagem (§5.b): sobrescrevem o valor gravado que o toResumo trouxe.
+        m.put("status", statusDetalhe(cad, esc));
+        m.put("expira_em", expiraDetalhe(cad, esc, (String) m.get("expira_em")));
+        // ESCALA: período da escala + plenários selecionados (§3.2/§3.3).
+        if (esc != null) m.put("escala", montarBlocoEscala(esc, alvos, nomes));
+        // Destinatários resolvidos por tipo (§5.d) — cruzados por ID no backend (nomes têm homônimos).
+        if (cad.getTipo() == TipoAviso.ESCALA)
+            m.put("destinatarios", destinatariosEscala(cad, alvos, ciencias, nomes));
+        else if (cad.getTipo() == TipoAviso.PESSOAL)
+            m.put("destinatarios", destinatariosPessoal(alvos, ciencias, nomes));
         // AGENDA: a lista de "visto" (reusa FRM_AVISO_CIENCIA) aparece como "Exibido para" (§6.3).
         if (cad.getTipo() == TipoAviso.AGENDA)
-            m.put("exibido_para", cienciaRepo.findByCadastroIdOrderByCienteEm(id).stream()
-                    .map(c -> cienciaToMap(c, nomes)).toList());
+            m.put("exibido_para", ciencias.stream().map(c -> cienciaToMap(c, nomes)).toList());
         return m;
     }
 
+    /** Rótulo "Tipo de Aviso" do detalhe: subtipo ({@code getLabelTabela}) com fallback no label do tipo (§5.a). */
+    private String labelTabela(AvisoCadastro cad) {
+        if (cad.getSubtipo() != null) return cad.getSubtipo().getLabelTabela();
+        return cad.getTipo() != null ? cad.getTipo().getLabel() : null;
+    }
+
+    /**
+     * Status exibido no detalhe, coerente com o da listagem (§5.b / {@code STATUS_EXPR}): DESATIVADO gravado
+     * prevalece; AGENDA é "—"; ESCALA é Pendente/Ativo/Expirado calculado das datas da escala; demais usam o
+     * STATUS gravado. Sem repetir SQL — a escala já veio carregada.
+     */
+    private String statusDetalhe(AvisoCadastro cad, EscalaSemanal esc) {
+        if (cad.getStatus() == StatusAviso.DESATIVADO) return StatusAviso.DESATIVADO.getValor();
+        if (cad.getTipo() == TipoAviso.AGENDA) return "—";
+        if (cad.getTipo() == TipoAviso.ESCALA && esc != null
+                && esc.getDataInicio() != null && esc.getDataFim() != null) {
+            LocalDate hoje = LocalDate.now();
+            if (esc.getDataInicio().isAfter(hoje)) return "Pendente";
+            if (esc.getDataFim().isBefore(hoje)) return "Expirado";
+            return "Ativo";
+        }
+        return cad.getStatus() != null ? cad.getStatus().getValor() : null;
+    }
+
+    /** "Expira em" do detalhe: ESCALA usa o DATA_FIM da escala; os demais mantêm o EXPIRA_EM gravado (§5.b). */
+    private String expiraDetalhe(AvisoCadastro cad, EscalaSemanal esc, String expiraGravado) {
+        if (cad.getTipo() == TipoAviso.ESCALA)
+            return (esc != null && esc.getDataFim() != null) ? esc.getDataFim().toString() : null;
+        return expiraGravado;
+    }
+
     /** Bloco "escala" do detalhe do aviso de ESCALA: período da escala + plenários (linhas de alvo SALA). */
-    private Map<String, Object> montarBlocoEscala(Long escalaId, List<AvisoAlvo> alvos, ResolvedorNomes nomes) {
+    private Map<String, Object> montarBlocoEscala(EscalaSemanal esc, List<AvisoAlvo> alvos, ResolvedorNomes nomes) {
         Map<String, Object> e = new LinkedHashMap<>();
-        e.put("id", escalaId);
-        escalaRepo.findById(escalaId).ifPresent(esc -> {
-            e.put("data_inicio", esc.getDataInicio() != null ? esc.getDataInicio().toString() : null);
-            e.put("data_fim", esc.getDataFim() != null ? esc.getDataFim().toString() : null);
-        });
+        e.put("id", esc.getId());
+        e.put("data_inicio", esc.getDataInicio() != null ? esc.getDataInicio().toString() : null);
+        e.put("data_fim", esc.getDataFim() != null ? esc.getDataFim().toString() : null);
         List<Map<String, Object>> plenarios = alvos.stream()
                 .filter(a -> a.getAlvoTipo() == AlvoTipoAviso.SALA && a.getSalaId() != null)
                 .map(a -> {
@@ -603,6 +648,105 @@ public class AvisoService {
                 }).toList();
         e.put("plenarios", plenarios);
         return e;
+    }
+
+    /**
+     * Destinatários da ESCALA (§5.d): operadores ATUALMENTE vinculados aos plenários-alvo na escala do
+     * aviso (idioma do JOIN de {@code buscarPendentes}), cada um com seus plenários e a ciência
+     * (pendente = {@code ciente_em} nulo); + os cientes que já não estão na escala (troca de operador ou
+     * ciência "contaminada"), marcados {@code fora_do_publico}. A ordenação final é do front (§4.6).
+     */
+    private List<Map<String, Object>> destinatariosEscala(AvisoCadastro cad, List<AvisoAlvo> alvos,
+                                                          List<AvisoCiencia> ciencias, ResolvedorNomes nomes) {
+        Set<Integer> salasAlvo = alvos.stream()
+                .filter(a -> a.getAlvoTipo() == AlvoTipoAviso.SALA && a.getSalaId() != null)
+                .map(AvisoAlvo::getSalaId).collect(Collectors.toSet());
+        // Operador → plenários-alvo aos quais está vinculado na escala do aviso (agrega M/V na mesma linha).
+        Map<String, Set<Integer>> plenariosPorOperador = new LinkedHashMap<>();
+        if (cad.getEscalaId() != null)
+            for (EscalaOperador eo : escalaOpRepo.findByEscalaId(cad.getEscalaId()))
+                if (eo.getOperadorId() != null && eo.getSalaId() != null && salasAlvo.contains(eo.getSalaId()))
+                    plenariosPorOperador.computeIfAbsent(eo.getOperadorId(), k -> new TreeSet<>()).add(eo.getSalaId());
+        // Ciência por operador (a ciência da ESCALA é sem sala, na coluna OPERADOR_ID).
+        Map<String, LocalDateTime> cienciaPorOperador = new HashMap<>();
+        for (AvisoCiencia c : ciencias)
+            if (c.getOperadorId() != null) cienciaPorOperador.put(c.getOperadorId(), c.getCienteEm());
+
+        List<Map<String, Object>> out = new ArrayList<>();
+        // Vinculados atuais (o público de hoje): pendentes e cientes.
+        for (Map.Entry<String, Set<Integer>> e : plenariosPorOperador.entrySet()) {
+            List<String> plenarios = e.getValue().stream().map(nomes::sala).toList();
+            out.add(linhaDestinatario(nomes.operador(e.getKey()), "Operador", plenarios,
+                    cienciaPorOperador.get(e.getKey()), false));
+        }
+        // Cientes que não estão mais no público atual → fim da tabela, marcados (decisão 4).
+        for (AvisoCiencia c : ciencias) {
+            if (c.getOperadorId() != null && plenariosPorOperador.containsKey(c.getOperadorId())) continue;
+            out.add(linhaDestinatario(nomeDaCiencia(c, nomes), papelDaCiencia(c), List.of(), c.getCienteEm(), true));
+        }
+        return out;
+    }
+
+    /**
+     * Destinatários do PESSOAL (§5.d): os alvos individuais (operador/técnico/admin) cruzados POR ID com as
+     * ciências (pendente = {@code ciente_em} nulo); + as ciências de quem não é destinatário, marcadas
+     * {@code fora_do_publico}. Cobre também os programáticos (Folha/Solicitação) e o legado (mesmo tipo PESSOAL).
+     */
+    private List<Map<String, Object>> destinatariosPessoal(List<AvisoAlvo> alvos,
+                                                           List<AvisoCiencia> ciencias, ResolvedorNomes nomes) {
+        Map<String, LocalDateTime> cienciaPorChave = new HashMap<>();
+        for (AvisoCiencia c : ciencias) cienciaPorChave.put(chaveCiencia(c), c.getCienteEm());
+
+        List<Map<String, Object>> out = new ArrayList<>();
+        Set<String> chavesAlvo = new HashSet<>();
+        for (AvisoAlvo a : alvos) {
+            String nome, papel, chave;
+            switch (a.getAlvoTipo()) {
+                case OPERADOR -> { nome = nomes.operador(a.getOperadorId()); papel = "Operador"; chave = "OPERADOR:" + a.getOperadorId(); }
+                case TECNICO  -> { nome = nomes.tecnico(a.getTecnicoId());   papel = "Técnico";       chave = "TECNICO:" + a.getTecnicoId(); }
+                case ADMIN    -> { nome = nomes.admin(a.getAdminId());       papel = "Administrador"; chave = "ADMIN:" + a.getAdminId(); }
+                default -> { continue; }   // PESSOAL não tem alvo coletivo/SALA — ignora defensivamente
+            }
+            chavesAlvo.add(chave);
+            out.add(linhaDestinatario(nome, papel, null, cienciaPorChave.get(chave), false));
+        }
+        // Ciência de quem não é destinatário (a API aceita — §5.e) → visível e marcada, no fim.
+        for (AvisoCiencia c : ciencias) {
+            if (chavesAlvo.contains(chaveCiencia(c))) continue;
+            out.add(linhaDestinatario(nomeDaCiencia(c, nomes), papelDaCiencia(c), null, c.getCienteEm(), true));
+        }
+        return out;
+    }
+
+    /** Linha de destinatário: {@code {nome, papel, plenarios?, ciente_em, fora_do_publico?}} (§5.d). */
+    private Map<String, Object> linhaDestinatario(String nome, String papel, List<String> plenarios,
+                                                  LocalDateTime cienteEm, boolean foraDoPublico) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("nome", nome);
+        m.put("papel", papel);
+        if (plenarios != null) m.put("plenarios", plenarios);   // só a ESCALA tem plenários
+        m.put("ciente_em", cienteEm != null ? cienteEm.toString() : null);
+        if (foraDoPublico) m.put("fora_do_publico", true);
+        return m;
+    }
+
+    /** Chave (papel:id) da ciência para cruzar com os alvos individuais do PESSOAL. */
+    private String chaveCiencia(AvisoCiencia c) {
+        if (c.getOperadorId() != null) return "OPERADOR:" + c.getOperadorId();
+        if (c.getTecnicoId() != null) return "TECNICO:" + c.getTecnicoId();
+        return "ADMIN:" + c.getAdminId();
+    }
+
+    private String nomeDaCiencia(AvisoCiencia c, ResolvedorNomes nomes) {
+        if (c.getOperadorId() != null) return nomes.operador(c.getOperadorId());
+        if (c.getTecnicoId() != null) return nomes.tecnico(c.getTecnicoId());
+        return nomes.admin(c.getAdminId());
+    }
+
+    private String papelDaCiencia(AvisoCiencia c) {
+        if (c.getOperadorId() != null) return "Operador";
+        if (c.getTecnicoId() != null) return "Técnico";
+        return "Administrador";
     }
 
     // ═══ Consulta pelo destinatário (verificação) ═══════════════
@@ -1100,6 +1244,9 @@ public class AvisoService {
         }
         m.put("nome", nome);
         m.put("papel", papel);
+        // Sala da ciência (§5.c): a Verificação registra por sala → coluna Local na tabela; nulo nos demais.
+        m.put("sala_id", c.getSalaId());
+        m.put("sala_nome", c.getSalaId() != null ? nomes.sala(c.getSalaId()) : null);
         m.put("ciente_em", c.getCienteEm() != null ? c.getCienteEm().toString() : null);
         return m;
     }
