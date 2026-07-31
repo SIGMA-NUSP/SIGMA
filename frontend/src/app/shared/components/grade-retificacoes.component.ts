@@ -64,7 +64,7 @@ interface GradeData {
         <option value="administradores">Administradores</option>
       </select>
 
-      <!-- [F37]: em janeiro a grade precisa alcançar dezembro (folha publicada, prazo correndo) -->
+      <!-- O seletor compartilhado mantém a grade no range mensal válido do Ponto. -->
       <app-mes-ano-selector [anos]="anosSeletor" (mudou)="onMesAno($event)" />
 
       <button type="button" class="btn-outline" (click)="abrirConfigurar()">Ocorrências</button>
@@ -298,7 +298,7 @@ export class GradeRetificacoesComponent implements OnInit {
   private hoje = new Date();
   categoria = signal<Categoria>('operadores');
   anoMes = signal<MesAno>({ ano: this.hoje.getFullYear(), mes: this.hoje.getMonth() + 1 });
-  /** Anos ofertados no seletor (F37/C14): a virada do ano só se abre em dezembro e janeiro. */
+  /** Anos desde a implantação do Ponto até o mês local corrente mais dois. */
   readonly anosSeletor = anosNavegaveis(this.hoje);
 
   grade = signal<GradeData | null>(null);

@@ -314,7 +314,7 @@ describe('BancoHorasPessoalComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // estadoDia — contrato com o <app-mini-calendario> (Q24/C-3.2/C-3.3)
+  // estadoDia — contrato com o <app-mini-calendario>
   // ═══════════════════════════════════════════════════════════════════
   describe('estadoDia (contrato com o mini-calendário)', () => {
     it('antes da resposta do mês, todo dia vem desabilitado com "Carregando..."', () => {
@@ -338,6 +338,22 @@ describe('BancoHorasPessoalComponent', () => {
       expect(estadoDe(comp, '2026-07-20')).toEqual({
         desabilitado: true, rotulo: 'Já existe solicitação para este dia',
       });
+    });
+
+    it('dia bloqueado com motivo nulo vem desabilitado sem rótulo', () => {
+      apiGet.mockReturnValue(of({ data: payloadBanco({
+        dias_bloqueados: [{ data: '2026-07-13', motivo: null }],
+      }) }));
+      const comp = criarCarregado();
+      expect(estadoDe(comp, '2026-07-13')).toEqual({ desabilitado: true });
+    });
+
+    it('dia bloqueado com motivo omitido vem desabilitado sem rótulo', () => {
+      apiGet.mockReturnValue(of({ data: payloadBanco({
+        dias_bloqueados: [{ data: '2026-07-13' }],
+      }) }));
+      const comp = criarCarregado();
+      expect(estadoDe(comp, '2026-07-13')).toEqual({ desabilitado: true });
     });
 
     it('dia livre com saldo suficiente não tem override (null → comportamento base)', () => {
@@ -702,6 +718,40 @@ describe('BancoHorasPessoalComponent', () => {
       if (!botao) throw new Error(`dia ${n} não encontrado no calendário`);
       return botao;
     }
+
+    function verificarBloqueioSemRotulo(bloqueio: { data: string; motivo?: string | null }): void {
+      apiGet.mockReturnValue(of({ data: payloadBanco({ dias_bloqueados: [bloqueio] }) }));
+      const fixture = renderizar();
+      const dia13 = botaoDia(fixture, 13);
+
+      expect(dia13.disabled).toBe(true);
+      expect(dia13.getAttribute('title')).toBeNull();
+      expect(dia13.getAttribute('aria-label')).toBeNull();
+
+      dia13.click();
+      fixture.detectChanges();
+      expect(fixture.componentInstance.selecionados().size).toBe(0);
+    }
+
+    it('motivo nulo: botão fica desabilitado sem title/aria-label e ignora o clique', () => {
+      verificarBloqueioSemRotulo({ data: '2026-07-13', motivo: null });
+    });
+
+    it('motivo omitido: botão fica desabilitado sem title/aria-label e ignora o clique', () => {
+      verificarBloqueioSemRotulo({ data: '2026-07-13' });
+    });
+
+    it('motivo preenchido preserva o bloqueio e o tooltip do botão', () => {
+      apiGet.mockReturnValue(of({ data: payloadBanco({
+        dias_bloqueados: [{ data: '2026-07-13', motivo: 'Solicitação pendente' }],
+      }) }));
+      const fixture = renderizar();
+      const dia13 = botaoDia(fixture, 13);
+
+      expect(dia13.disabled).toBe(true);
+      expect(dia13.getAttribute('title')).toBe('Solicitação pendente');
+      expect(dia13.getAttribute('aria-label')).toBe('Solicitação pendente');
+    });
 
     it('erro transitório: caixa com retry DENTRO do card, e o seletor de mês continua no DOM', () => {
       apiGet.mockReturnValue(throwError(() => ERRO_500));

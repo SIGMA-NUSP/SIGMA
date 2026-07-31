@@ -213,16 +213,40 @@ class BancoHorasServiceTest {
         return dias;
     }
 
+    private static List<LocalDate> primeirosDiasUteis(YearMonth competencia, int quantidade) {
+        List<LocalDate> dias = new ArrayList<>();
+        for (LocalDate d = competencia.atDay(1); YearMonth.from(d).equals(competencia)
+                && dias.size() < quantidade; d = d.plusDays(1)) {
+            if (d.getDayOfWeek() != DayOfWeek.SATURDAY && d.getDayOfWeek() != DayOfWeek.SUNDAY) {
+                dias.add(d);
+            }
+        }
+        assertEquals(quantidade, dias.size(), "a competência precisa conter os dias úteis da fixture");
+        return dias;
+    }
+
+    private static LocalDate primeiroDiaDaSemana(YearMonth competencia, DayOfWeek diaDaSemana) {
+        for (LocalDate d = competencia.atDay(1); YearMonth.from(d).equals(competencia); d = d.plusDays(1)) {
+            if (d.getDayOfWeek() == diaDaSemana) return d;
+        }
+        throw new AssertionError("dia da semana ausente na competência: " + diaDaSemana);
+    }
+
     @SuppressWarnings("unchecked")
     private static List<Map<String, Object>> bloqueados(Map<String, Object> out) {
         return (List<Map<String, Object>>) out.get("dias_bloqueados");
     }
 
-    private static String motivoDe(Map<String, Object> out, LocalDate dia) {
+    private static Optional<Map<String, Object>> bloqueioDe(Map<String, Object> out, LocalDate dia) {
         return bloqueados(out).stream()
                 .filter(b -> dia.toString().equals(b.get("data")))
+                .findFirst();
+    }
+
+    private static String motivoDe(Map<String, Object> out, LocalDate dia) {
+        return bloqueioDe(out, dia)
                 .map(b -> (String) b.get("motivo"))
-                .findFirst().orElse(null);
+                .orElse(null);
     }
 
     // ── formatarSaldo (Q23) ───────────────────────────────────────
@@ -282,7 +306,7 @@ class BancoHorasServiceTest {
         assertFalse(out.containsKey("sem_folha_oficial"));   // chave ausente ≠ chave false
         assertEquals(40, out.get("carga_horaria"));
         assertEquals(1L, out.get("folgas_mes"));
-        assertEquals("Dia já transcorrido", motivoDe(out, HOJE));   // passado/hoje (Q12)
+        assertEquals("Dia já transcorrido", motivoDe(out, HOJE));
     }
 
     @Test
@@ -299,22 +323,46 @@ class BancoHorasServiceTest {
         assertEquals(30, out.get("carga_horaria"));
     }
 
-    @Test
-    @DisplayName("consultar mês ≠ corrente: mês inteiro bloqueado como fora do mês (Q12)")
-    void consultarMesNaoCorrente() {
+    @ParameterizedTest
+    @ValueSource(ints = {-1, 3})
+    @DisplayName("consultar fora da janela: mês inteiro bloqueado com motivo Java nulo")
+    void consultarForaDaJanela(int deslocamentoMeses) {
         mockCarga(40);
         when(saldoRepo.findByPessoaIdAndPessoaTipo(OP, "OPERADOR")).thenReturn(Optional.empty());
-        YearMonth anterior = YearMonth.from(HOJE).minusMonths(1);   // junho/2026
+        YearMonth competencia = YearMonth.from(HOJE).plusMonths(deslocamentoMeses);
 
-        Map<String, Object> out = service.consultar(OP, ROLE, anterior.getYear(), anterior.getMonthValue());
+        Map<String, Object> out = service.consultar(
+                OP, ROLE, competencia.getYear(), competencia.getMonthValue());
 
         List<Map<String, Object>> dias = bloqueados(out);
-        assertEquals(anterior.lengthOfMonth(), dias.size());
-        assertTrue(dias.stream().allMatch(b -> "Fora do mês corrente".equals(b.get("motivo"))));
+        assertEquals(competencia.lengthOfMonth(), dias.size());
+        assertTrue(dias.stream().allMatch(b -> b.containsKey("motivo") && b.get("motivo") == null));
+        verifyNoInteractions(tipoMarcacaoRepo, diaMarcacaoRepo, pessoaMarcacaoRepo);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2})
+    @DisplayName("consultar corrente+1/+2: avalia dias normalmente")
+    void consultarMesFuturoDentroDaJanela(int deslocamentoMeses) {
+        mockCarga(40);
+        when(saldoRepo.findByPessoaIdAndPessoaTipo(OP, "OPERADOR")).thenReturn(Optional.empty());
+        YearMonth competencia = YearMonth.from(HOJE).plusMonths(deslocamentoMeses);
+        LocalDate diaUtil = primeirosDiasUteis(competencia, 1).get(0);
+        LocalDate sabado = primeiroDiaDaSemana(competencia, DayOfWeek.SATURDAY);
+
+        Map<String, Object> out = service.consultar(
+                OP, ROLE, competencia.getYear(), competencia.getMonthValue());
+
+        assertTrue(bloqueioDe(out, diaUtil).isEmpty(), "dia útil futuro sem impedimento fica solicitável");
+        assertEquals("Fim de semana", motivoDe(out, sabado));
+        verify(diaMarcacaoRepo).findByDataGreaterThanEqualAndDataLessThanOrderByData(
+                competencia.atDay(1), competencia.plusMonths(1).atDay(1));
+        verify(pessoaMarcacaoRepo).findByPessoaIdAndPessoaTipoAndDataGreaterThanEqualAndDataLessThan(
+                OP, "OPERADOR", competencia.atDay(1), competencia.plusMonths(1).atDay(1));
     }
 
     @Test
-    @DisplayName("consultar: marcação global/pessoal e pedido vivo bloqueiam com o rótulo certo (Q12/F#4)")
+    @DisplayName("consultar: marcação global/pessoal e pedido vivo bloqueiam com o rótulo certo")
     void consultarBloqueiosDoMes() {
         List<LocalDate> dias = uteis(4);   // 16, 17, 20, 21/07 — com o clock fixo, sempre existem
         mockCarga(40);
@@ -345,6 +393,40 @@ class BancoHorasServiceTest {
         // O sábado e o domingo entre os dias úteis acima: única asserção do ramo FDS no calendário.
         assertEquals("Fim de semana", motivoDe(out, LocalDate.of(2026, 7, 18)));
         assertEquals("Fim de semana", motivoDe(out, LocalDate.of(2026, 7, 19)));
+    }
+
+    @Test
+    @DisplayName("consultar mês futuro: preserva motivos de ocorrência, pedido vivo e fim de semana")
+    void consultarBloqueiosDoMesFuturo() {
+        YearMonth competencia = YearMonth.from(HOJE).plusMonths(1);
+        List<LocalDate> dias = primeirosDiasUteis(competencia, 4);
+        mockCarga(40);
+        when(saldoRepo.findByPessoaIdAndPessoaTipo(OP, "OPERADOR")).thenReturn(Optional.empty());
+
+        PontoTipoMarcacao global = tipoMarcacao(
+                "t-global-futuro", "Evento institucional", PontoTipoMarcacao.ESCOPO_GLOBAL);
+        PontoTipoMarcacao pessoal = tipoMarcacao(
+                "t-pessoal-futuro", "Afastamento", PontoTipoMarcacao.ESCOPO_INDIVIDUAL);
+        when(tipoMarcacaoRepo.findAll()).thenReturn(List.of(global, pessoal));
+        when(diaMarcacaoRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(any(), any()))
+                .thenReturn(List.of(marcacaoGlobal(dias.get(0), global)));
+        when(pessoaMarcacaoRepo.findByPessoaIdAndPessoaTipoAndDataGreaterThanEqualAndDataLessThan(
+                eq(OP), eq("OPERADOR"), any(), any()))
+                .thenReturn(List.of(marcacaoPessoal(OP, "OPERADOR", dias.get(1), pessoal)));
+        when(solicitacaoRepo.findPorStatusNoRange(eq(OP), eq("OPERADOR"), anyCollection(), any(), any()))
+                .thenReturn(List.of(
+                        solicitacao(dias.get(2), StatusSolicitacaoFolga.PENDENTE),
+                        solicitacao(dias.get(3), StatusSolicitacaoFolga.APROVADO)));
+
+        Map<String, Object> out = service.consultar(
+                OP, ROLE, competencia.getYear(), competencia.getMonthValue());
+
+        assertEquals("Evento institucional", motivoDe(out, dias.get(0)));
+        assertEquals("Afastamento", motivoDe(out, dias.get(1)));
+        assertEquals("Solicitação pendente", motivoDe(out, dias.get(2)));
+        assertEquals("Folga aprovada", motivoDe(out, dias.get(3)));
+        assertEquals("Fim de semana", motivoDe(
+                out, primeiroDiaDaSemana(competencia, DayOfWeek.SATURDAY)));
     }
 
     @Test
@@ -380,17 +462,17 @@ class BancoHorasServiceTest {
     }
 
     @Test
-    @DisplayName("consultar: mesmo mês de OUTRO ano → mês inteiro fora do mês corrente (o ano conta, não só o mês)")
+    @DisplayName("consultar: mesmo número de mês em outro ano continua fora da janela")
     void consultarMesmoMesDeOutroAno() {
         mockCarga(40);
         when(saldoRepo.findByPessoaIdAndPessoaTipo(OP, "OPERADOR")).thenReturn(Optional.empty());
 
-        Map<String, Object> out = service.consultar(OP, ROLE, 2027, 7);   // julho de 2027, clock em julho/2026
+        Map<String, Object> out = service.consultar(OP, ROLE, 2027, 7);
 
         List<Map<String, Object>> dias = bloqueados(out);
         assertEquals(31, dias.size());
-        assertTrue(dias.stream().allMatch(b -> "Fora do mês corrente".equals(b.get("motivo"))),
-                "julho do ano que vem não é o mês corrente — sem o ano na comparação, o calendário o liberaria");
+        assertTrue(dias.stream().allMatch(b -> b.containsKey("motivo") && b.get("motivo") == null),
+                "o ano participa da comparação da janela");
     }
 
     @Test
@@ -482,7 +564,7 @@ class BancoHorasServiceTest {
     }
 
     @Test
-    @DisplayName("solicitar: sábado → 400 fim de semana (só dia útil é solicitável — Q12)")
+    @DisplayName("solicitar: sábado → 400 fim de semana")
     void solicitarFimDeSemana() {
         mockCarga(40);
         when(saldoAberturaService.reancorar(OP, "OPERADOR")).thenReturn(saldoDe(1000, null));
@@ -492,6 +574,44 @@ class BancoHorasServiceTest {
 
         assertTrue(ex.getMessage().contains("Fim de semana"));
         verify(solicitacaoRepo, never()).saveAllAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("solicitar mês futuro: preserva todos os bloqueios por dia")
+    void solicitarBloqueiosDoMesFuturo() {
+        YearMonth competencia = YearMonth.from(HOJE).plusMonths(1);
+        List<LocalDate> dias = primeirosDiasUteis(competencia, 4);
+        LocalDate sabado = primeiroDiaDaSemana(competencia, DayOfWeek.SATURDAY);
+        mockCarga(40);
+        when(saldoAberturaService.reancorar(OP, "OPERADOR")).thenReturn(saldoDe(5000, null));
+
+        PontoTipoMarcacao global = tipoMarcacao(
+                "t-global-futuro", "Evento institucional", PontoTipoMarcacao.ESCOPO_GLOBAL);
+        PontoTipoMarcacao pessoal = tipoMarcacao(
+                "t-pessoal-futuro", "Afastamento", PontoTipoMarcacao.ESCOPO_INDIVIDUAL);
+        when(tipoMarcacaoRepo.findAll()).thenReturn(List.of(global, pessoal));
+        when(diaMarcacaoRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(any(), any()))
+                .thenReturn(List.of(marcacaoGlobal(dias.get(0), global)));
+        when(pessoaMarcacaoRepo.findByPessoaIdAndPessoaTipoAndDataGreaterThanEqualAndDataLessThan(
+                eq(OP), eq("OPERADOR"), any(), any()))
+                .thenReturn(List.of(marcacaoPessoal(OP, "OPERADOR", dias.get(1), pessoal)));
+        when(solicitacaoRepo.findPorStatusNoRange(eq(OP), eq("OPERADOR"), anyCollection(), any(), any()))
+                .thenReturn(List.of(
+                        solicitacao(dias.get(2), StatusSolicitacaoFolga.PENDENTE),
+                        solicitacao(dias.get(3), StatusSolicitacaoFolga.APROVADO)));
+
+        assertSolicitacaoBloqueada(dias.get(0), "Evento institucional");
+        assertSolicitacaoBloqueada(dias.get(1), "Afastamento");
+        assertSolicitacaoBloqueada(dias.get(2), "Solicitação pendente");
+        assertSolicitacaoBloqueada(dias.get(3), "Folga aprovada");
+        assertSolicitacaoBloqueada(sabado, "Fim de semana");
+        verify(solicitacaoRepo, never()).saveAllAndFlush(any());
+    }
+
+    private void assertSolicitacaoBloqueada(LocalDate dia, String motivo) {
+        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                () -> service.solicitar(OP, ROLE, bodyDias(dia.toString())));
+        assertTrue(ex.getMessage().contains(motivo), ex::getMessage);
     }
 
     @Test
@@ -509,20 +629,71 @@ class BancoHorasServiceTest {
     }
 
     @Test
-    @DisplayName("solicitar: dia de outro mês → 400 fora do mês corrente (Q12)")
-    void solicitarForaDoMes() {
+    @DisplayName("solicitar: saldo insuficiente considera um lote distribuído entre os três meses")
+    void solicitarSaldoInsuficienteEntreMeses() {
+        LocalDate corrente = uteis(1).get(0);
+        LocalDate seguinte = primeirosDiasUteis(YearMonth.from(HOJE).plusMonths(1), 1).get(0);
+        LocalDate segundoSeguinte = primeirosDiasUteis(YearMonth.from(HOJE).plusMonths(2), 1).get(0);
         mockCarga(40);
-        when(saldoAberturaService.reancorar(OP, "OPERADOR")).thenReturn(saldoDe(1000, null));
-        LocalDate outroMes = HOJE.plusMonths(1).withDayOfMonth(15);
+        when(saldoAberturaService.reancorar(OP, "OPERADOR")).thenReturn(saldoDe(1439, null));
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.solicitar(OP, ROLE, bodyDias(outroMes.toString())));
-        assertTrue(ex.getMessage().contains("Fora do mês corrente"));
+                () -> service.solicitar(OP, ROLE,
+                        bodyDias(corrente.toString(), seguinte.toString(), segundoSeguinte.toString())));
+
+        assertTrue(ex.getMessage().contains("Saldo insuficiente"));
+        assertTrue(ex.getMessage().contains("+24:00"), "três débitos de 480 minutos compõem o lote");
         verify(solicitacaoRepo, never()).saveAllAndFlush(any());
     }
 
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2})
+    @DisplayName("solicitar: dia útil em corrente+1/+2 é aceito")
+    void solicitarMesFuturoDentroDaJanela(int deslocamentoMeses) {
+        mockCarga(40);
+        when(saldoAberturaService.reancorar(OP, "OPERADOR"))
+                .thenReturn(saldoDe(1000, null), saldoDe(520, null));
+        YearMonth competencia = YearMonth.from(HOJE).plusMonths(deslocamentoMeses);
+        LocalDate dia = primeirosDiasUteis(competencia, 1).get(0);
+
+        Map<String, Object> out = service.solicitar(OP, ROLE, bodyDias(dia.toString()));
+
+        verify(solicitacaoRepo).findPorStatusNoRange(
+                eq(OP), eq("OPERADOR"), anyCollection(),
+                eq(LocalDate.of(2026, 7, 1)), eq(LocalDate.of(2026, 10, 1)));
+        verify(diaMarcacaoRepo).findByDataGreaterThanEqualAndDataLessThanOrderByData(
+                LocalDate.of(2026, 7, 1), LocalDate.of(2026, 10, 1));
+        verify(pessoaMarcacaoRepo).findByPessoaIdAndPessoaTipoAndDataGreaterThanEqualAndDataLessThan(
+                OP, "OPERADOR", LocalDate.of(2026, 7, 1), LocalDate.of(2026, 10, 1));
+        verify(solicitacaoRepo).saveAllAndFlush(argThat((List<PontoSolicitacaoFolga> novas) ->
+                novas.size() == 1 && dia.equals(novas.get(0).getDataFolga())));
+        assertEquals(1, ((List<?>) out.get("criadas")).size());
+    }
+
+    @ParameterizedTest
+    @MethodSource("datasForaDaJanela")
+    @DisplayName("solicitar: passado e corrente+3 são rejeitados pela mesma mensagem")
+    void solicitarForaDaJanela(LocalDate dia) {
+        mockCarga(40);
+        when(saldoAberturaService.reancorar(OP, "OPERADOR")).thenReturn(saldoDe(1000, null));
+
+        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                () -> service.solicitar(OP, ROLE, bodyDias(dia.toString())));
+
+        assertEquals("O dia " + ReportConfig.fmtDate(dia)
+                + " não pode ser solicitado: Fora da janela de solicitação.", ex.getMessage());
+        verify(solicitacaoRepo, never()).saveAllAndFlush(any());
+    }
+
+    private static Stream<Arguments> datasForaDaJanela() {
+        return Stream.of(
+                Arguments.of(LocalDate.of(2026, 6, 15)),
+                Arguments.of(LocalDate.of(2026, 10, 1)),
+                Arguments.of(LocalDate.of(2026, 10, 15)));
+    }
+
     @Test
-    @DisplayName("solicitar: dia já transcorrido → 400 com o motivo (Q12)")
+    @DisplayName("solicitar: dia já transcorrido → 400 com o motivo")
     void solicitarDiaPassado() {
         mockCarga(40);
         when(saldoAberturaService.reancorar(OP, "OPERADOR")).thenReturn(saldoDe(1000, null));
@@ -602,41 +773,54 @@ class BancoHorasServiceTest {
     }
 
     @Test
-    @DisplayName("solicitar em 31/07 (último dia do mês): não há dia solicitável — hoje é passado e agosto é fora do mês")
+    @DisplayName("solicitar no último dia do mês: hoje bloqueia, mas o mês seguinte permanece disponível")
     void solicitarNoUltimoDiaDoMes() {
         BancoHorasService ultimoDia = criarService(clockEm(LocalDate.of(2026, 7, 31)));
         mockCarga(40);
-        when(saldoAberturaService.reancorar(OP, "OPERADOR")).thenReturn(saldoDe(1000, null));
+        when(saldoAberturaService.reancorar(OP, "OPERADOR"))
+                .thenReturn(saldoDe(1000, null), saldoDe(1000, null), saldoDe(520, null));
 
         ServiceValidationException hoje = assertThrows(ServiceValidationException.class,
                 () -> ultimoDia.solicitar(OP, ROLE, bodyDias("2026-07-31")));
         assertTrue(hoje.getMessage().contains("Dia já transcorrido"));
 
-        ServiceValidationException amanha = assertThrows(ServiceValidationException.class,
-                () -> ultimoDia.solicitar(OP, ROLE, bodyDias("2026-08-03")));   // 1ª segunda de agosto
-        assertTrue(amanha.getMessage().contains("Fora do mês corrente"),
-                "no último dia do mês, o mês seguinte continua bloqueado (Q12) — a janela fecha");
+        Map<String, Object> mesSeguinte = ultimoDia.solicitar(OP, ROLE, bodyDias("2026-08-03"));
 
-        verify(solicitacaoRepo, never()).saveAllAndFlush(any());
+        assertEquals(1, ((List<?>) mesSeguinte.get("criadas")).size());
+        verify(solicitacaoRepo).saveAllAndFlush(argThat((List<PontoSolicitacaoFolga> novas) ->
+                novas.size() == 1 && LocalDate.of(2026, 8, 3).equals(novas.get(0).getDataFolga())));
     }
 
-    @Test
-    @DisplayName("virada de ano (31/12): dezembro inteiro bloqueado no consultar e janeiro/2027 fora do mês no solicitar")
-    void bordaViradaDeAno() {
-        BancoHorasService reveillon = criarService(clockEm(LocalDate.of(2026, 12, 31)));
+    @ParameterizedTest
+    @MethodSource("janelasNaViradaDoAno")
+    @DisplayName("solicitar na virada do ano: aceita corrente+2 e rejeita o primeiro dia de corrente+3")
+    void solicitarNaViradaDoAno(LocalDate hoje, LocalDate permitido, LocalDate foraDaJanela) {
+        BancoHorasService serviceNaVirada = criarService(clockEm(hoje));
         mockCarga(40);
-        when(saldoRepo.findByPessoaIdAndPessoaTipo(OP, "OPERADOR")).thenReturn(Optional.empty());
-        when(saldoAberturaService.reancorar(OP, "OPERADOR")).thenReturn(saldoDe(1000, null));
+        when(saldoAberturaService.reancorar(OP, "OPERADOR"))
+                .thenReturn(saldoDe(1000, null), saldoDe(520, null), saldoDe(1000, null));
 
-        Map<String, Object> dezembro = reveillon.consultar(OP, ROLE, 2026, 12);
-        assertEquals(31, bloqueados(dezembro).size(),
-                "no último dia do ano nenhum dia de dezembro sobra — todos já transcorreram");
-        assertEquals("Dia já transcorrido", motivoDe(dezembro, LocalDate.of(2026, 12, 31)));
-
+        Map<String, Object> out = serviceNaVirada.solicitar(OP, ROLE, bodyDias(permitido.toString()));
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> reveillon.solicitar(OP, ROLE, bodyDias("2027-01-04")));   // 1ª segunda de 2027
-        assertTrue(ex.getMessage().contains("Fora do mês corrente"),
-                "o mês corrente é o do CLOCK — janeiro do ano seguinte não é solicitável em dezembro");
+                () -> serviceNaVirada.solicitar(OP, ROLE, bodyDias(foraDaJanela.toString())));
+
+        assertEquals(1, ((List<?>) out.get("criadas")).size());
+        assertEquals("O dia " + ReportConfig.fmtDate(foraDaJanela)
+                + " não pode ser solicitado: Fora da janela de solicitação.", ex.getMessage());
+        verify(solicitacaoRepo).saveAllAndFlush(argThat((List<PontoSolicitacaoFolga> novas) ->
+                novas.size() == 1 && permitido.equals(novas.get(0).getDataFolga())));
+    }
+
+    private static Stream<Arguments> janelasNaViradaDoAno() {
+        return Stream.of(
+                Arguments.of(
+                        LocalDate.of(2026, 11, 15),
+                        LocalDate.of(2027, 1, 4),
+                        LocalDate.of(2027, 2, 1)),
+                Arguments.of(
+                        LocalDate.of(2026, 12, 15),
+                        LocalDate.of(2027, 2, 1),
+                        LocalDate.of(2027, 3, 1)));
     }
 
     @Test

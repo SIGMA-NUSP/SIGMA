@@ -61,12 +61,12 @@ public class BancoHorasService {
     /** Teto do motivo de rejeição (F47) — o mesmo da observação da retificação (RetificacaoService). */
     private static final int MAX_MOTIVO_REJEICAO = 300;
 
-    // Motivos de bloqueio de dia (Q12/F#4) — textos exibidos no calendário.
+    // Motivos explicáveis de bloqueio exibidos no calendário e nas validações.
     private static final String MOTIVO_PASSADO   = "Dia já transcorrido";
     private static final String MOTIVO_FDS       = "Fim de semana";
     private static final String MOTIVO_PENDENTE  = "Solicitação pendente";
     private static final String MOTIVO_APROVADO  = "Folga aprovada";
-    private static final String MOTIVO_FORA_MES  = "Fora do mês corrente";
+    private static final String MOTIVO_FORA_JANELA = "Fora da janela de solicitação";
 
     /** Mensagem única do gate de carga horária (Q17) — NULL ou fora de {30, 40}. */
     private static final String MSG_CARGA_INVALIDA =
@@ -121,7 +121,7 @@ public class BancoHorasService {
 
     /**
      * Saldo atual + situação do mês pedido ({ano, mes} do seletor): folgas
-     * APROVADAS (Q13) e os dias bloqueados para solicitação (Q12/F#4). Lê o
+     * aprovadas e dias bloqueados para solicitação. Lê o
      * cache de PNT_BANCO_SALDO — sem linha (pessoa nunca ancorada nem com
      * pedido) o saldo é 0 e "sem folha oficial".
      */
@@ -154,11 +154,9 @@ public class BancoHorasService {
     // ══ POST /api/ponto/banco/solicitar ═══════════════════════════
 
     /**
-     * Cria 1 solicitação PENDENTE por dia (C-5.3/C-5.4), TRANSACIONAL:
-     * revalida cada dia contra as regras do calendário + saldo suficiente para
-     * a soma, com recálculo do saldo DENTRO da transação (Q10); débito
-     * congelado 360/480 pela CARGA_HORARIA na criação (Q3). Corrida de dia
-     * duplicado morre na FBI UQ_PNT_SOLF_VIVA → 400 amigável (gotcha 3).
+     * Cria uma solicitação pendente por dia, revalidando em uma única transação
+     * a janela, os bloqueios do calendário e o saldo do lote inteiro. O débito
+     * diário fica congelado conforme a carga horária vigente na criação.
      */
     @Transactional
     public Map<String, Object> solicitar(String pessoaId, String role, Map<String, Object> body) {
@@ -169,18 +167,18 @@ public class BancoHorasService {
         // Serializa pedidos concorrentes da MESMA pessoa (dias distintos não colidem
         // na FBI; sem o lock, dois pedidos simultâneos validariam o mesmo saldo).
         saldoRepo.lockPorPessoa(pessoaId, pessoaTipo);
-        // Q10: o saldo vigente é recalculado agora, dentro da transação.
+        // O saldo vigente é recalculado dentro da transação, depois do lock.
         int saldoVigente = saldoAberturaService.reancorar(pessoaId, pessoaTipo).getSaldoBancoMin();
 
         LocalDate hoje = LocalDate.now(clock);
-        LocalDate ini = hoje.withDayOfMonth(1);
-        LocalDate fim = ini.plusMonths(1);
-        Bloqueios bloqueios = carregarBloqueios(pessoaId, pessoaTipo, ini, fim,
-                vivasPorDia(solicitacaoRepo.findPorStatusNoRange(pessoaId, pessoaTipo, STATUS_VIVOS, ini, fim)));
+        JanelaSolicitacao janela = janelaSolicitacao(hoje);
+        Bloqueios bloqueios = carregarBloqueios(pessoaId, pessoaTipo, janela.inicio(), janela.fimExclusivo(),
+                vivasPorDia(solicitacaoRepo.findPorStatusNoRange(
+                        pessoaId, pessoaTipo, STATUS_VIVOS, janela.inicio(), janela.fimExclusivo())));
         for (LocalDate d : dias) {
-            String motivo = d.isBefore(ini) || !d.isBefore(fim)
-                    ? MOTIVO_FORA_MES
-                    : motivoBloqueio(d, hoje, bloqueios);
+            String motivo = janela.contem(d)
+                    ? motivoBloqueio(d, hoje, bloqueios)
+                    : MOTIVO_FORA_JANELA;
             if (motivo != null) {
                 throw new ServiceValidationException("O dia " + ReportConfig.fmtDate(d)
                         + " não pode ser solicitado: " + motivo + ".");
@@ -206,8 +204,8 @@ public class BancoHorasService {
         try {
             solicitacaoRepo.saveAllAndFlush(novas);   // flush força a FBI a decidir agora
         } catch (DataIntegrityViolationException e) {
-            // corrida (pedido concorrente do mesmo dia entre a validação e o insert):
-            // a FBI é a autoridade final — mesma resposta amigável da validação (gotcha 3).
+            // Em uma corrida entre validação e insert, a FBI é a autoridade final
+            // e mantém a mesma resposta amigável da validação.
             throw new ServiceValidationException(
                     "Já existe solicitação em andamento para um dos dias selecionados.");
         }
@@ -548,6 +546,18 @@ public class BancoHorasService {
                              Map<LocalDate, String> pessoais,
                              Map<LocalDate, StatusSolicitacaoFolga> vivas) {}
 
+    private record JanelaSolicitacao(LocalDate inicio, LocalDate fimExclusivo) {
+        private boolean contem(LocalDate dia) {
+            return !dia.isBefore(inicio) && dia.isBefore(fimExclusivo);
+        }
+    }
+
+    /** Janela comum ao calendário e ao POST: mês corrente e os dois seguintes. */
+    private static JanelaSolicitacao janelaSolicitacao(LocalDate hoje) {
+        LocalDate inicio = hoje.withDayOfMonth(1);
+        return new JanelaSolicitacao(inicio, inicio.plusMonths(3));
+    }
+
     private Bloqueios carregarBloqueios(String pessoaId, String pessoaTipo, LocalDate ini, LocalDate fim,
                                         Map<LocalDate, StatusSolicitacaoFolga> vivas) {
         Map<String, String> nomeDoTipo = new HashMap<>();
@@ -572,9 +582,9 @@ public class BancoHorasService {
     }
 
     /**
-     * Motivo de bloqueio do dia (Q12/F#4), na ordem do plano: passado/hoje →
-     * fim de semana → marcação global → marcação pessoa-dia → pedido vivo.
-     * {@code null} = dia solicitável.
+     * Motivo de bloqueio na ordem de precedência: passado/hoje, fim de semana,
+     * marcação global, marcação pessoal e pedido vivo. {@code null} indica dia
+     * solicitável.
      */
     private String motivoBloqueio(LocalDate d, LocalDate hoje, Bloqueios b) {
         if (!d.isAfter(hoje)) return MOTIVO_PASSADO;
@@ -591,10 +601,8 @@ public class BancoHorasService {
     }
 
     /**
-     * Dias bloqueados do mês pedido, com motivo (para o calendário desabilitar
-     * e explicar). Mês diferente do corrente: bloqueia o mês inteiro (Q12 —
-     * só dias úteis futuros do MÊS CORRENTE são solicitáveis); as folgas
-     * aprovadas seguem visíveis pela contagem/tabela.
+     * Dias bloqueados do mês pedido. Dentro da janela, cada regra preserva seu
+     * motivo; fora dela, todos os dias ficam bloqueados sem motivo exibível.
      */
     private List<Map<String, Object>> diasBloqueados(String pessoaId, String pessoaTipo,
                                                      LocalDate ini, List<PontoSolicitacaoFolga> vivasMes) {
@@ -602,10 +610,10 @@ public class BancoHorasService {
         LocalDate fim = ini.plusMonths(1);
         List<Map<String, Object>> out = new ArrayList<>();
 
-        boolean mesCorrente = ini.getYear() == hoje.getYear() && ini.getMonth() == hoje.getMonth();
-        if (!mesCorrente) {
+        JanelaSolicitacao janela = janelaSolicitacao(hoje);
+        if (!janela.contem(ini)) {
             for (LocalDate d = ini; d.isBefore(fim); d = d.plusDays(1)) {
-                out.add(diaBloqueado(d, MOTIVO_FORA_MES));
+                out.add(diaBloqueado(d, null));
             }
             return out;
         }
@@ -621,7 +629,7 @@ public class BancoHorasService {
 
     private Map<String, Object> diaBloqueado(LocalDate d, String motivo) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("data", d.toString());   // YYYY-MM-DD (gotcha 4)
+        m.put("data", d.toString());
         m.put("motivo", motivo);
         return m;
     }

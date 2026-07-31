@@ -15,8 +15,8 @@ interface DiaLinha {
  *
  * Mobile-first: em vez de uma tabela larga de colunas fixas, cada DIA é um
  * mini-grid próprio (5 colunas × 3 linhas) empilhado verticalmente. Navega-se
- * por mês/ano com o app-mes-ano-selector, no range de `anosNavegaveis` (relógio
- * local; o ano vizinho só entra no range em dezembro e janeiro — F37).
+ * por mês/ano com o app-mes-ano-selector, desde janeiro de implantação até o
+ * mês local corrente mais dois.
  *
  * Sem dados / sem backend ainda: os campos de hora e os botões de câmera são
  * placeholders visuais; os saldos mostram "±--:--". A persistência, o cálculo
@@ -28,7 +28,7 @@ interface DiaLinha {
   imports: [MesAnoSelectorComponent],
   template: `
     <section class="reg-manual">
-      <!-- ═══ Seletor de mês/ano (centralizado; [F37]: dez ↔ jan navegáveis) ═══ -->
+      <!-- ═══ Seletor de mês/ano compartilhado pelo módulo Ponto ═══ -->
       <app-mes-ano-selector [anos]="anosSeletor" (mudou)="onMesAno($event)" />
 
       <!-- ═══ Lista de dias (1 mini-grid por dia) ═══ -->
@@ -146,7 +146,7 @@ export class RegistroManualPontoComponent {
   private hoje = new Date();
   ano = signal<number>(this.hoje.getFullYear());
   mes = signal<number>(this.hoje.getMonth() + 1);
-  /** Anos ofertados no seletor (F37/C14): a virada do ano só se abre em dezembro e janeiro. */
+  /** Anos desde a implantação do Ponto até o mês local corrente mais dois. */
   readonly anosSeletor = anosNavegaveis(this.hoje);
 
   /** Uma linha por dia do mês, no formato "dd/mm - xxx". */
