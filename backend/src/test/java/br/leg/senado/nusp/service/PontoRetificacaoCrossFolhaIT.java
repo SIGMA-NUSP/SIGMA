@@ -34,12 +34,14 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
 /**
- * IT das facetas EXIBIÇÃO e PRAZO da retificação contra Oracle real, no cenário que o unitário não
- * alcança: a MESMA pessoa com DUAS folhas publicadas cobrindo o mesmo dia (folhas SEMANAIS são
- * cumulativas — sobrepor período é o normal). Exibição: a listagem lê pela chave da UK
+ * IT das facetas EXIBIÇÃO, PRAZO e EDIÇÃO da retificação contra Oracle real, no cenário que o
+ * unitário não alcança: a MESMA pessoa com DUAS folhas publicadas cobrindo o mesmo dia (folhas
+ * SEMANAIS são cumulativas — sobrepor período é o normal). Exibição: a listagem lê pela chave da UK
  * (pessoa+tipo+dia) recortada pelo PERÍODO da folha consultada, não por PAGINA_ID. Prazo: a janela
  * de 5 dias é DA FOLHA (âncora: PUBLICADO_EM do lote da página usada); folha nova reabre a janela
  * SÓ por ela e SÓ para os dias ainda não retificados — a folha antiga vencida segue vencida.
+ * Edição: o PUT usa o MESMO recorte da listagem e a MESMA janela da folha consultada, e o UPDATE
+ * commita de verdade sem mudar a página de origem.
  *
  * <p>Harness igual ao de {@link PontoRetificacaoLoteIT}: {@code @SpringBootTest} (não o slice
  * {@code @OracleIT}) para que o {@code @Transactional} do service commite de verdade, e limpeza
@@ -158,6 +160,36 @@ class PontoRetificacaoCrossFolhaIT {
         return rs.stream().map(m -> String.valueOf(m.get("data"))).toList();
     }
 
+    /** O id que a LISTAGEM da folha devolve para o dia — o mesmo que identifica o registro na edição. */
+    @SuppressWarnings("unchecked")
+    private String idListado(PontoLotePagina pagina, LocalDate data) {
+        List<Map<String, Object>> rs = (List<Map<String, Object>>) listar(pagina).get("retificacoes");
+        return rs.stream()
+                .filter(m -> data.toString().equals(String.valueOf(m.get("data"))))
+                .map(m -> String.valueOf(m.get("id")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("o dia " + data + " não veio na listagem"));
+    }
+
+    /** ENT1, SAI1 e PAGINA_ID como o BANCO guardou — lidos em transação nova, depois do commit. */
+    private Object[] retificacaoNoBanco(LocalDate data) {
+        return tx.execute(status -> (Object[]) em.createNativeQuery(
+                        "SELECT ENT1, SAI1, PAGINA_ID FROM PNT_RETIFICACAO "
+                                + "WHERE PESSOA_ID = :pessoa AND DATA = :data")
+                .setParameter("pessoa", operador.getId())
+                .setParameter("data", data)
+                .getSingleResult());
+    }
+
+    /** Edita a retificação pela folha indicada, sobrescrevendo o par 1 (o PUT da tela). */
+    private Map<String, Object> editarVia(PontoLotePagina pagina, String retificacaoId,
+                                          String ent1, String sai1) {
+        Map<String, Object> corpo = new LinkedHashMap<>();
+        corpo.put("ent1", ent1);
+        corpo.put("sai1", sai1);
+        return service.editarRetificacao(pagina.getId(), retificacaoId, operador.getId(), corpo);
+    }
+
     /**
      * Retrocede o PUBLICADO_EM do lote em 10 dias: a janela de 5 dias DELE vence, sem tocar na do
      * outro lote. É como se a folha A tivesse sido publicada há mais de uma semana — que é o caso
@@ -272,5 +304,58 @@ class PontoRetificacaoCrossFolhaIT {
         assertEquals(Boolean.FALSE, folhaB.get("prazo_expirado"), "a janela de B está aberta");
         assertFalse(String.valueOf(folhaB.get("limite_fmt")).equals(String.valueOf(folhaA.get("limite_fmt"))),
                 "cada folha tem o SEU dia-limite: o da consultada, não o de onde a retificação nasceu");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // EDIÇÃO — o PUT usa o recorte da listagem e a janela da folha consultada
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("a retificação nascida na folha A é EDITADA pela folha B (janela de B aberta): o UPDATE commita e a PAGINA_ID de origem não muda")
+    void edicaoPelaFolhaSobrepostaCommitaSemMudarAOrigem() {
+        diaRetificadoPelaFolhaAQueDepoisVenceu();
+        String id = idListado(paginaB, DIA_05);
+
+        Map<String, Object> res = editarVia(paginaB, id, "09:00", "15:00");
+
+        assertEquals(id, String.valueOf(res.get("id")));
+        assertEquals("2026-06-05", String.valueOf(res.get("data")), "a edição não muda o dia");
+        Object[] row = retificacaoNoBanco(DIA_05);
+        assertEquals("09:00", row[0], "o horário novo tem de estar COMMITADO no banco");
+        assertEquals("15:00", row[1]);
+        assertEquals(paginaA.getId(), row[2],
+                "a página de origem é a da CRIAÇÃO: editar pela folha B não reanexa a retificação");
+    }
+
+    @Test
+    @DisplayName("editar pela folha A (janela vencida) leva PRAZO_EXPIRADO e o banco fica intacto")
+    void edicaoPelaFolhaVencidaNaoAltera() {
+        diaRetificadoPelaFolhaAQueDepoisVenceu();
+        String id = idListado(paginaB, DIA_05);
+
+        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                () -> editarVia(paginaA, id, "09:00", "15:00"));
+
+        assertEquals("PRAZO_EXPIRADO", ex.getMessage());
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+        Object[] row = retificacaoNoBanco(DIA_05);
+        assertEquals("08:00", row[0], "a recusa por prazo não pode ter alterado o banco");
+        assertEquals("12:00", row[1]);
+    }
+
+    @Test
+    @DisplayName("o dia 15 (fora do período da folha A) não é editável por ela: 404, o mesmo recorte da listagem")
+    void edicaoForaDoPeriodoDaFolhaLeva404() {
+        retificarVia(paginaB, DIA_15);
+        String id = idListado(paginaB, DIA_15);
+
+        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                () -> editarVia(paginaA, id, "09:00", "15:00"));
+
+        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
+        assertEquals("Retificação não encontrada.", ex.getMessage());
+        Object[] row = retificacaoNoBanco(DIA_15);
+        assertEquals("08:00", row[0], "o 404 não pode ter alterado o banco");
+        assertEquals("12:00", row[1]);
     }
 }

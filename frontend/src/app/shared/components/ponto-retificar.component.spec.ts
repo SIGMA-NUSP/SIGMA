@@ -4,14 +4,18 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { Subject, of, throwError } from 'rxjs';
 import { ApiService } from '../../core/services/api.service';
 import { PontoRetificarComponent } from './ponto-retificar.component';
+import { ToastService } from './toast.component';
 
 /**
  * PontoRetificarComponent: carga da folha e dos dias já retificados (fail-closed com retry),
  * prazo calculado no BACKEND (o front só lê `limite_fmt`/`prazo_expirado` de
  * `GET /api/ponto/folha/{id}/retificacoes`), validação de pares Ent./Saí., teto de 300
  * caracteres na observação e gravação em UM POST de LOTE (`{dias:[…]}`, transacional), com
- * trava de duplo clique e timer de navegação cancelado no destroy. TestBed sem
- * `detectChanges()`; `ApiService`/`Router`/`ActivatedRoute` mockados via `useValue` (o
+ * trava de duplo clique e timer de navegação cancelado no destroy. Dia JÁ retificado chega da
+ * listagem com o conteúdo gravado (`retif`, com id), a linha expande em LEITURA no clique e,
+ * dentro do prazo, é editável — sobrescrita via PUT; o sucesso da edição vai ao TOAST e a
+ * recusa ao sinal `erro`, permanecendo em edição. TestBed sem `detectChanges()`;
+ * `ApiService`/`Router`/`ActivatedRoute`/`ToastService` mockados via `useValue` (o
  * `RouterLink` do template resolve os mesmos mocks na criação). Fake timers COMPLETOS (não só
  * `Date`) — o `salvar()` feliz agenda `setTimeout(…, 1400)` — instalados APÓS
  * `compileComponents()`, que exige timers reais. ⚠️ Zoneless: `TestBed.createComponent` deixa
@@ -23,6 +27,8 @@ import { PontoRetificarComponent } from './ponto-retificar.component';
 describe('PontoRetificarComponent', () => {
   let apiGet: ReturnType<typeof vi.fn>;
   let apiPost: ReturnType<typeof vi.fn>;
+  let apiPut: ReturnType<typeof vi.fn>;
+  let toastSuccess: ReturnType<typeof vi.fn>;
   let navigateByUrl: ReturnType<typeof vi.fn>;
   let paginaId: string | null;
 
@@ -42,6 +48,17 @@ describe('PontoRetificarComponent', () => {
   /** URL única de gravação: um POST de lote com todos os dias. */
   const URL_LOTE = '/api/ponto/folha/pag-1/retificacoes';
 
+  /** Retificação já gravada do dia 08/07 (quarta), como a listagem devolve: id + conteúdo. */
+  const RETIF_QUA = {
+    id: 'ret-8',
+    data: '2026-07-08',
+    ent1: '08:00', sai1: '12:00', ent2: '13:00', sai2: '17:00',
+    observacoes: 'esqueci de bater',
+  };
+
+  /** URL do PUT que sobrescreve a retificação gravada (a edição não passa pelo lote). */
+  const URL_EDICAO = '/api/ponto/folha/pag-1/retificacoes/ret-8';
+
   beforeEach(async () => {
     paginaId = 'pag-1';
     apiGet = vi.fn().mockImplementation((url: string) =>
@@ -50,12 +67,15 @@ describe('PontoRetificarComponent', () => {
         : of({ data: { limite_fmt: null, prazo_expirado: false, retificacoes: [] } }),
     );
     apiPost = vi.fn().mockReturnValue(of({ ok: true }));
+    apiPut = vi.fn().mockReturnValue(of({ ok: true, data: structuredClone(RETIF_QUA) }));
+    toastSuccess = vi.fn();
     navigateByUrl = vi.fn();
 
     await TestBed.configureTestingModule({
       imports: [PontoRetificarComponent],
       providers: [
-        { provide: ApiService, useValue: { get: apiGet, post: apiPost } },
+        { provide: ApiService, useValue: { get: apiGet, post: apiPost, put: apiPut } },
+        { provide: ToastService, useValue: { error: vi.fn(), success: toastSuccess, warning: vi.fn(), show: vi.fn() } },
         { provide: Router, useValue: { navigateByUrl } },
         {
           provide: ActivatedRoute,
@@ -113,6 +133,24 @@ describe('PontoRetificarComponent', () => {
 
   /** Os dias do corpo do lote (o único POST). */
   const diasEnviados = (chamada = 0) => apiPost.mock.calls[chamada][1].dias;
+
+  /** Folha carregada com a retificação de 08/07 já gravada (conteúdo completo, com id). */
+  function criarComRetifGravada(extra: Record<string, unknown> = {}, prazoExpirado = false): PontoRetificarComponent {
+    respostaRetificacoes({
+      limite_fmt: '17/07/2026',
+      prazo_expirado: prazoExpirado,
+      retificacoes: [{ ...structuredClone(RETIF_QUA), ...extra }],
+    });
+    return criarCarregado();
+  }
+
+  /** A linha do dia retificado (08/07), já expandida e com os campos habilitados para edição. */
+  function linhaEmEdicao(comp: PontoRetificarComponent) {
+    const l = comp.linhas()[2];
+    comp.toggleRetif(l);
+    comp.iniciarEdicao(l);
+    return l;
+  }
 
   // ═══════════════════════════════════════════════════════════════════
   // ngOnInit — carga da folha pela rota
@@ -916,6 +954,324 @@ describe('PontoRetificarComponent', () => {
         observacoes: '',
       }]);
       expect(comp.erro()).toBe('');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // retificação gravada — a listagem traz o CONTEÚDO (com id) e a linha
+  // do dia expande em LEITURA, sempre a partir do servidor
+  // ═══════════════════════════════════════════════════════════════════
+  describe('retificação gravada: conteúdo por dia e expansão (toggleRetif)', () => {
+    it('guarda a retificação (com id) na linha do dia correspondente; os demais ficam sem conteúdo', () => {
+      const comp = criarComRetifGravada();
+      expect(comp.linhas()[2].retif).toEqual(RETIF_QUA);
+      expect(comp.linhas()[2].ja_retificado).toBe(true);
+      expect(comp.linhas()[0].retif).toBeUndefined();
+      expect(comp.linhas()[1].retif).toBeUndefined();
+    });
+
+    it('o clique expande em LEITURA com os valores do servidor nos campos', () => {
+      const comp = criarComRetifGravada();
+      const l = comp.linhas()[2];
+      comp.toggleRetif(l);
+      expect(l.retifExpandida).toBe(true);
+      expect(l.editando).toBe(false);
+      expect([l.r_ent1, l.r_sai1, l.r_ent2, l.r_sai2]).toEqual(['08:00', '12:00', '13:00', '17:00']);
+      expect(l.observacoes).toBe('esqueci de bater');
+    });
+
+    it('par 2 e observação NULOS viram campos vazios (nunca "null" na tela)', () => {
+      const comp = criarComRetifGravada({ ent2: null, sai2: null, observacoes: null });
+      const l = comp.linhas()[2];
+      comp.toggleRetif(l);
+      expect([l.r_ent2, l.r_sai2]).toEqual(['', '']);
+      expect(l.observacoes).toBe('');
+    });
+
+    it('o 2º clique colapsa a área', () => {
+      const comp = criarComRetifGravada();
+      const l = comp.linhas()[2];
+      comp.toggleRetif(l);
+      comp.toggleRetif(l);
+      expect(l.retifExpandida).toBe(false);
+    });
+
+    it('colapsar no meio da edição DESCARTA o digitado: re-expandir volta aos valores gravados', () => {
+      const comp = criarComRetifGravada();
+      const l = comp.linhas()[2];
+      comp.toggleRetif(l);
+      comp.iniciarEdicao(l);
+      Object.assign(l, { r_ent1: '09:30', observacoes: 'rascunho abandonado' });
+
+      comp.toggleRetif(l);   // fecha (o gesto de desistir)
+      comp.toggleRetif(l);   // reabre
+
+      expect(l.editando).toBe(false);
+      expect(l.r_ent1).toBe('08:00');
+      expect(l.observacoes).toBe('esqueci de bater');
+    });
+
+    it('linha SEM retificação gravada: toggleRetif é inerte (nada expande)', () => {
+      const comp = criarComRetifGravada();
+      const l = comp.linhas()[0];
+      comp.toggleRetif(l);
+      expect(l.retifExpandida).toBeUndefined();
+    });
+
+    it('com o PUT de edição no ar o clique NÃO colapsa a área (a linha está travada)', () => {
+      apiPut.mockReturnValue(new Subject<any>());   // o PUT fica em voo
+      const comp = criarComRetifGravada();
+      const l = linhaEmEdicao(comp);
+      comp.salvarEdicao(l);
+
+      comp.toggleRetif(l);
+
+      expect(l.retifExpandida).toBe(true);
+      expect(l.editando).toBe(true);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // edição da retificação gravada — Editar habilita, Cancelar restaura
+  // ═══════════════════════════════════════════════════════════════════
+  describe('edição da retificação gravada: iniciar/cancelar', () => {
+    it('iniciarEdicao habilita os campos (editando) sem mexer nos valores', () => {
+      const comp = criarComRetifGravada();
+      const l = comp.linhas()[2];
+      comp.toggleRetif(l);
+      comp.iniciarEdicao(l);
+      expect(l.editando).toBe(true);
+      expect([l.r_ent1, l.r_sai1, l.r_ent2, l.r_sai2]).toEqual(['08:00', '12:00', '13:00', '17:00']);
+    });
+
+    it('cancelarEdicao RESTAURA os valores gravados e volta à leitura, com a área ainda aberta', () => {
+      const comp = criarComRetifGravada();
+      const l = linhaEmEdicao(comp);
+      Object.assign(l, { r_ent1: '09:30', r_sai2: '', observacoes: 'texto abandonado' });
+
+      comp.cancelarEdicao(l);
+
+      expect(l.editando).toBe(false);
+      expect(l.retifExpandida).toBe(true);
+      expect([l.r_ent1, l.r_sai1, l.r_ent2, l.r_sai2]).toEqual(['08:00', '12:00', '13:00', '17:00']);
+      expect(l.observacoes).toBe('esqueci de bater');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // salvarEdicao — PUT de sobrescrita (payload, sucesso, recusa e a
+  // MESMA validação de conteúdo da criação)
+  // ═══════════════════════════════════════════════════════════════════
+  describe('salvarEdicao — submit', () => {
+    it('payload exato: UM PUT na URL com o id, null nos pares vazios e observação com trim', () => {
+      const comp = criarComRetifGravada();
+      const l = linhaEmEdicao(comp);
+      Object.assign(l, { r_ent1: '07:30', r_sai1: '11:30', r_ent2: '', r_sai2: '', observacoes: '  ajustei os horários  ' });
+
+      comp.salvarEdicao(l);
+
+      expect(apiPut).toHaveBeenCalledTimes(1);
+      expect(apiPut.mock.calls[0][0]).toBe(URL_EDICAO);
+      expect(apiPut.mock.calls[0][1]).toEqual({
+        ent1: '07:30', sai1: '11:30',
+        ent2: null, sai2: null,
+        observacoes: 'ajustei os horários', // trim aplicado
+      });
+      expect(apiPost).not.toHaveBeenCalled();   // a edição não passa pelo POST de lote
+    });
+
+    it('espaços em volta do horário são tolerados (trim antes da validação e do envio)', () => {
+      const comp = criarComRetifGravada();
+      const l = linhaEmEdicao(comp);
+      Object.assign(l, { r_ent1: ' 07:30 ', r_sai1: '11:30 ', r_ent2: '', r_sai2: '' });
+      comp.salvarEdicao(l);
+      expect(apiPut.mock.calls[0][1]).toMatchObject({ ent1: '07:30', sai1: '11:30' });
+    });
+
+    it('sucesso: guarda a resposta do servidor, volta à LEITURA e avisa no toast', () => {
+      const atualizada = { ...RETIF_QUA, ent1: '07:30', sai1: '11:30', ent2: null, sai2: null, observacoes: 'ajustei' };
+      apiPut.mockReturnValue(of({ ok: true, data: atualizada }));
+      const comp = criarComRetifGravada();
+      comp.erro.set('sujeira de antes');
+      const l = linhaEmEdicao(comp);
+      Object.assign(l, { r_ent1: '07:30', r_sai1: '11:30', r_ent2: '', r_sai2: '', observacoes: 'ajustei' });
+
+      comp.salvarEdicao(l);
+
+      expect(l.retif).toEqual(atualizada);              // a verdade volta do servidor
+      expect(l.editando).toBe(false);
+      expect(l.salvandoEdicao).toBe(false);
+      expect(l.retifExpandida).toBe(true);              // a área segue aberta, agora em leitura
+      expect([l.r_ent1, l.r_sai1, l.r_ent2, l.r_sai2]).toEqual(['07:30', '11:30', '', '']);
+      expect(l.observacoes).toBe('ajustei');
+      expect(comp.erro()).toBe('');
+      expect(toastSuccess).toHaveBeenCalledWith('Retificação atualizada.');
+    });
+
+    it('recusa do backend: guia + motivo no sinal erro, PERMANECE em edição e a trava libera', () => {
+      apiPut.mockReturnValue(throwError(() => ({ status: 404, error: { ok: false, error: 'Retificação não encontrada.' } })));
+      const comp = criarComRetifGravada();
+      const l = linhaEmEdicao(comp);
+      Object.assign(l, { r_ent1: '07:30', r_sai1: '11:30' });
+
+      comp.salvarEdicao(l);
+
+      expect(comp.erro()).toBe('Não foi possível salvar a edição — a retificação não foi alterada. (Retificação não encontrada.)');
+      expect(l.editando).toBe(true);                    // o usuário não perde o que digitou
+      expect(l.r_ent1).toBe('07:30');
+      expect(l.salvandoEdicao).toBe(false);
+      expect(l.retif).toEqual(RETIF_QUA);               // o gravado não muda
+      expect(toastSuccess).not.toHaveBeenCalled();
+    });
+
+    it('erro sem corpo (500 mudo): só a guia da tela', () => {
+      apiPut.mockReturnValue(throwError(() => new Error('rede')));
+      const comp = criarComRetifGravada();
+      const l = linhaEmEdicao(comp);
+      comp.salvarEdicao(l);
+      expect(comp.erro()).toBe('Não foi possível salvar a edição — a retificação não foi alterada.');
+    });
+
+    it('2º clique com o PUT no ar NÃO dispara outro (trava salvandoEdicao)', () => {
+      apiPut.mockReturnValue(new Subject<any>());
+      const comp = criarComRetifGravada();
+      const l = linhaEmEdicao(comp);
+
+      comp.salvarEdicao(l);
+      comp.salvarEdicao(l);
+
+      expect(apiPut).toHaveBeenCalledTimes(1);
+      expect(l.salvandoEdicao).toBe(true);
+    });
+
+    it('apagar TODOS os horários recusa nomeando o dia — a edição não vira exclusão', () => {
+      const comp = criarComRetifGravada();
+      const l = linhaEmEdicao(comp);
+      Object.assign(l, { r_ent1: '', r_sai1: '', r_ent2: '', r_sai2: '' });
+
+      comp.salvarEdicao(l);
+
+      expect(comp.erro()).toBe(
+        'Informe ao menos o par Ent. 1 / Saí. 1 em 08/07/26 - qua: não é possível retificar um dia sem horários.');
+      expect(apiPut).not.toHaveBeenCalled();
+      expect(l.editando).toBe(true);
+    });
+
+    it('par incompleto recusa com a MESMA mensagem da criação', () => {
+      const comp = criarComRetifGravada();
+      const l = linhaEmEdicao(comp);
+      Object.assign(l, { r_ent1: '07:30', r_sai1: '', r_ent2: '', r_sai2: '' });
+      comp.salvarEdicao(l);
+      expect(comp.erro()).toBe('Preencha os pares Ent./Saí. completos em 08/07/26 - qua.');
+      expect(apiPut).not.toHaveBeenCalled();
+    });
+
+    it('horário fora de HH:MM recusa com a MESMA mensagem da criação', () => {
+      const comp = criarComRetifGravada();
+      const l = linhaEmEdicao(comp);
+      Object.assign(l, { r_ent1: '25:00' });
+      comp.salvarEdicao(l);
+      expect(comp.erro()).toBe('Horário inválido em 08/07/26 - qua (use HH:MM).');
+      expect(apiPut).not.toHaveBeenCalled();
+    });
+
+    it('prazo expirado: recusa antes de qualquer validação de conteúdo, sem PUT', () => {
+      const comp = criarComRetifGravada({}, true);   // a folha já chega com o prazo vencido
+      const l = linhaEmEdicao(comp);
+      comp.salvarEdicao(l);
+      expect(comp.erro()).toBe('Prazo de retificação encerrado.');
+      expect(apiPut).not.toHaveBeenCalled();
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // RENDER — o dia retificado é clicável, expande somente-leitura e o
+  // Editar habilita os campos (e some com o prazo vencido)
+  // ═══════════════════════════════════════════════════════════════════
+  describe('render do dia retificado (expansão, leitura e edição)', () => {
+    function renderizarComRetif(prazoExpirado = false): ComponentFixture<PontoRetificarComponent> {
+      respostaRetificacoes({
+        limite_fmt: '17/07/2026',
+        prazo_expirado: prazoExpirado,
+        retificacoes: [structuredClone(RETIF_QUA)],
+      });
+      const fixture = TestBed.createComponent(PontoRetificarComponent);
+      fixture.detectChanges();   // ngOnInit + render (as respostas do mock são síncronas)
+      return fixture;
+    }
+
+    /** Clica na linha retificada (desktop) e estabiliza os bindings da área expandida. */
+    async function expandirPorClique(fixture: ComponentFixture<PontoRetificarComponent>): Promise<void> {
+      const linha = fixture.debugElement.queryAll(By.css('.vista-desktop tbody tr'))[2];
+      (linha.nativeElement as HTMLTableRowElement).click();
+      fixture.detectChanges();
+      await fixture.whenStable();     // bindings do template (o disabled do NgModel é assíncrono)
+      fixture.detectChanges();
+    }
+
+    const inputsDesktop = (fixture: ComponentFixture<PontoRetificarComponent>) =>
+      fixture.debugElement.queryAll(By.css('.vista-desktop .retif-area input'))
+        .map(i => i.nativeElement as HTMLInputElement);
+
+    const textareaDesktop = (fixture: ComponentFixture<PontoRetificarComponent>) =>
+      fixture.debugElement.query(By.css('.vista-desktop .retif-area textarea'))!.nativeElement as HTMLTextAreaElement;
+
+    const botaoAcao = (fixture: ComponentFixture<PontoRetificarComponent>, rotulo: string) =>
+      fixture.debugElement.queryAll(By.css('.vista-desktop .retif-acoes button'))
+        .find(b => (b.nativeElement as HTMLButtonElement).textContent?.trim() === rotulo);
+
+    it('a linha retificada é clicável nas DUAS vistas: classe própria e title "Ver retificação"', () => {
+      const fixture = renderizarComRetif();
+
+      const linhas = fixture.debugElement.queryAll(By.css('.vista-desktop tbody tr'));
+      expect(linhas[2].nativeElement.classList.contains('row-retif')).toBe(true);
+      expect(linhas[2].nativeElement.getAttribute('title')).toBe('Ver retificação');
+      expect(linhas[0].nativeElement.classList.contains('row-retif')).toBe(false);
+      expect(linhas[0].nativeElement.getAttribute('title')).toBeNull();
+
+      const cards = fixture.debugElement.queryAll(By.css('.vista-mobile .dia-card'));
+      expect(cards[2].nativeElement.classList.contains('retif')).toBe(true);
+      expect(cards[2].nativeElement.getAttribute('title')).toBe('Ver retificação');
+      expect(cards[0].nativeElement.classList.contains('retif')).toBe(false);
+    });
+
+    it('o clique expande a área SOMENTE-LEITURA com os valores gravados — e o selo permanece', async () => {
+      const fixture = renderizarComRetif();
+      await expandirPorClique(fixture);
+
+      const inputs = inputsDesktop(fixture);
+      expect(inputs).toHaveLength(4);
+      expect(inputs.map(i => i.value)).toEqual(['08:00', '12:00', '13:00', '17:00']);
+      expect(inputs.every(i => i.disabled)).toBe(true);
+      expect(textareaDesktop(fixture).disabled).toBe(true);
+      expect(textareaDesktop(fixture).value).toBe('esqueci de bater');
+      expect(fixture.debugElement.query(By.css('.vista-desktop .badge-retif'))?.nativeElement.textContent)
+        .toContain('Retificado');
+    });
+
+    it('"Editar" HABILITA os campos e troca os botões por Cancelar/Salvar', async () => {
+      const fixture = renderizarComRetif();
+      await expandirPorClique(fixture);
+
+      (botaoAcao(fixture, 'Editar')!.nativeElement as HTMLButtonElement).click();
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(inputsDesktop(fixture).every(i => !i.disabled)).toBe(true);
+      expect(textareaDesktop(fixture).disabled).toBe(false);
+      expect(botaoAcao(fixture, 'Editar')).toBeUndefined();
+      expect(botaoAcao(fixture, 'Cancelar')).not.toBeUndefined();
+      expect(botaoAcao(fixture, 'Salvar')).not.toBeUndefined();
+    });
+
+    it('com o prazo VENCIDO a área ainda expande (consulta), mas SEM o botão Editar', async () => {
+      const fixture = renderizarComRetif(true);
+      await expandirPorClique(fixture);
+
+      expect(inputsDesktop(fixture)).toHaveLength(4);          // a leitura continua disponível
+      expect(inputsDesktop(fixture).every(i => i.disabled)).toBe(true);
+      expect(fixture.debugElement.queryAll(By.css('.vista-desktop .retif-acoes button'))).toEqual([]);
     });
   });
 

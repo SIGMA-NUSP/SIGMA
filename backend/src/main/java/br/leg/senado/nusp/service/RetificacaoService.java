@@ -30,11 +30,11 @@ import static br.leg.senado.nusp.service.NativeQueryUtils.clean;
 import static br.leg.senado.nusp.service.NativeQueryUtils.textoLimitado;
 
 /**
- * Retificação de folha de ponto publicada (Bloco B-1). O dono da folha registra,
- * por dia dentro do prazo, os horários corretos (pares Ent./Saí. — ao menos um par
- * completo, 2 ou 4 horários; Q32 + F31).
- * Sem edição nem exclusão na v1 (Q1); 1 retificação por (pessoa, dia) — UK.
- * A gravação é SEMPRE em lote e transacional (F39) — ver {@link #criarRetificacoes}.
+ * Retificação de folha de ponto publicada. O dono da folha registra, por dia dentro
+ * do prazo, os horários corretos (pares Ent./Saí. — ao menos um par completo, 2 ou 4
+ * horários). 1 retificação por (pessoa, dia) — UK; dentro do prazo ela pode ser
+ * EDITADA in-place ({@link #editarRetificacao}); exclusão não existe.
+ * A criação é SEMPRE em lote e transacional — ver {@link #criarRetificacoes}.
  */
 @Service
 @RequiredArgsConstructor
@@ -69,10 +69,9 @@ public class RetificacaoService {
      * grava, ou nada grava. Corpo: {@code {"dias": [{data, ent1, sai1, ent2, sai2, observacoes}, …]}}.
      *
      * <p>Antes eram N requisições (1 por dia), cada uma em transação própria: um dia recusado
-     * no meio deixava os anteriores gravados — e, como a v1 não tem edição nem exclusão (Q1),
-     * o estado parcial era DEFINITIVO, enquanto a tela dizia que nada fora salvo. Aqui a recusa
-     * de um dia qualquer derruba o lote inteiro, e a mensagem NOMEIA o dia e o motivo (é o que
-     * o usuário precisa para consertar e reenviar).
+     * no meio deixava os anteriores gravados, enquanto a tela dizia que nada fora salvo. Aqui a
+     * recusa de um dia qualquer derruba o lote inteiro, e a mensagem NOMEIA o dia e o motivo (é
+     * o que o usuário precisa para consertar e reenviar).
      *
      * <p>Validações: acesso do dono (a), uma vez para o lote; depois, por dia, em
      * {@link #criarDia} — período (b) → prazo (c) → formato/pares (d) → dia inédito (e) →
@@ -137,7 +136,7 @@ public class RetificacaoService {
         validarPares(ent1, sai1, ent2, sai2, data);
 
         // (e) dia inédito: primeiro no próprio lote (o corpo pode repetir o dia), depois no
-        // banco (UK PESSOA_ID+PESSOA_TIPO+DATA — Q1, sem edição na v1)
+        // banco (UK PESSOA_ID+PESSOA_TIPO+DATA — dia já retificado se corrige pela edição)
         if (!vistos.add(data)) {
             throw new ServiceValidationException("O dia " + ReportConfig.fmtDate(data)
                     + " aparece mais de uma vez na retificação.");
@@ -187,8 +186,8 @@ public class RetificacaoService {
      * publicadas da mesma pessoa podem cobrir o mesmo dia (semanais 01–05, 01–12…: cumulativas por
      * decisão). Filtrando por PAGINA_ID, o dia retificado pela folha A aparecia livre na folha B; ao
      * enviar, o usuário levava 400 "O dia … já foi retificado" sem enxergar retificação alguma na
-     * tela — e, sem edição nem exclusão na v1 (Q1), o dia ficava congelado sem explicação. Agora ele
-     * aparece retificado nas DUAS folhas, e o front nem chega a mandá-lo.
+     * tela — o dia ficava congelado sem explicação. Agora ele aparece retificado nas DUAS folhas,
+     * e o front nem chega a mandá-lo.
      *
      * <p>{@code limite}/{@code prazo_expirado} continuam sendo os do lote da folha CONSULTADA: a
      * janela de 5 dias é DA FOLHA (a publicação de uma folha nova reabre a janela só através dela e
@@ -204,14 +203,7 @@ public class RetificacaoService {
         List<Map<String, Object>> retificacoes = new ArrayList<>();
         for (PontoRetificacao r : retificacaoRepo.findByPessoaIdAndPessoaTipoAndDataBetweenOrderByData(
                 solicitanteId, fa.pagina().getPessoaTipo(), lote.getDataInicio(), lote.getDataFim())) {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("data", r.getData().toString());   // YYYY-MM-DD
-            m.put("ent1", r.getEnt1());
-            m.put("sai1", r.getSai1());
-            m.put("ent2", r.getEnt2());
-            m.put("sai2", r.getSai2());
-            m.put("observacoes", r.getObservacoes());
-            retificacoes.add(m);
+            retificacoes.add(retificacaoMap(r));
         }
 
         Map<String, Object> out = new LinkedHashMap<>();
@@ -222,7 +214,78 @@ public class RetificacaoService {
         return out;
     }
 
+    /**
+     * Edita (sobrescreve) uma retificação existente do próprio dono, dentro do mesmo prazo
+     * da criação. A DATA não muda — editar é corrigir os horários/observação daquele dia; o
+     * valor anterior não é preservado (o registro é atualizado in-place).
+     *
+     * <p>A retificação é localizada pela MESMA chave de leitura da listagem — a edição vale
+     * para qualquer retificação da pessoa cujo dia caia no período da folha consultada,
+     * ainda que ela tenha sido criada por outra folha sobreposta. PAGINA_ID permanece o da
+     * criação: é a proveniência original, insumo da exclusão de publicações.
+     *
+     * <p>Validações: acesso do dono (a) → retificação da pessoa dentro do período (b) →
+     * prazo da folha consultada (c) → formato/pares (d) → tamanho da observação (f).
+     */
+    @Transactional
+    public Map<String, Object> editarRetificacao(String paginaId, String retificacaoId,
+                                                 String solicitanteId, Map<String, Object> body) {
+        FolhaAlvo fa = folhaDoDono(paginaId, solicitanteId);      // (a)
+        PontoLote lote = fa.lote();
+
+        PontoRetificacao r = retificacaoRepo.findById(retificacaoId == null ? "" : retificacaoId)
+                .orElseThrow(() -> new ServiceValidationException("Retificação não encontrada.", HttpStatus.NOT_FOUND));
+        // (b) da própria pessoa e visível nesta folha (mesmo recorte da listagem). 404 nos dois
+        // casos: para quem não é o dono, a existência do registro alheio não deve transparecer.
+        if (!r.getPessoaId().equals(solicitanteId) || !r.getPessoaTipo().equals(fa.pagina().getPessoaTipo())
+                || r.getData().isBefore(lote.getDataInicio()) || r.getData().isAfter(lote.getDataFim())) {
+            throw new ServiceValidationException("Retificação não encontrada.", HttpStatus.NOT_FOUND);
+        }
+
+        // (c) prazo: o mesmo gate da criação, pela folha consultada
+        LocalDate limite = limiteRetificacao(lote);
+        if (limite == null || LocalDate.now().isAfter(limite)) {
+            throw new ServiceValidationException("PRAZO_EXPIRADO", HttpStatus.BAD_REQUEST,
+                    Map.of("message", "Prazo de retificação encerrado"
+                            + (limite != null ? " em " + ReportConfig.fmtDate(limite) : "") + "."));
+        }
+
+        // (d) formato/pares e (f) observação — as mesmas regras de conteúdo da criação
+        Map<String, Object> item = body == null ? Map.of() : body;
+        LocalDate data = r.getData();
+        String ent1 = horaOuNull(clean(item, "ent1"), data);
+        String sai1 = horaOuNull(clean(item, "sai1"), data);
+        String ent2 = horaOuNull(clean(item, "ent2"), data);
+        String sai2 = horaOuNull(clean(item, "sai2"), data);
+        validarPares(ent1, sai1, ent2, sai2, data);
+        // Observação validada ANTES dos setters: a entidade managed só é tocada com tudo aprovado.
+        String obs = textoLimitado(blankToNull(clean(item, "observacoes")), MAX_OBSERVACOES,
+                "A observação do dia " + ReportConfig.fmtDate(data));
+
+        r.setEnt1(ent1);
+        r.setSai1(sai1);
+        r.setEnt2(ent2);
+        r.setSai2(sai2);
+        r.setObservacoes(obs);
+        retificacaoRepo.save(r);
+
+        return retificacaoMap(r);
+    }
+
     // ══════════════════════════════════════════════════════════════
+
+    /** Forma pública de uma retificação (a mesma na listagem e na resposta da edição). */
+    private static Map<String, Object> retificacaoMap(PontoRetificacao r) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", r.getId());
+        m.put("data", r.getData().toString());   // YYYY-MM-DD
+        m.put("ent1", r.getEnt1());
+        m.put("sai1", r.getSai1());
+        m.put("ent2", r.getEnt2());
+        m.put("sai2", r.getSai2());
+        m.put("observacoes", r.getObservacoes());
+        return m;
+    }
 
     /**
      * Localiza a página + lote garantindo que o solicitante é o DONO da folha e
@@ -271,9 +334,8 @@ public class RetificacaoService {
      * <p><b>Zero horários deixou de ser válido (F31).</b> Antes, os 4 nulos passavam (par de nulos
      * é "completo" por vacuidade) e nasciam retificações VAZIAS: a jusante, a grade e a planilha da
      * chefia tratam "existe retificação" como "tem horários", então o dia que exibia "Banco de
-     * horas"/"Férias"/"Feriado" virava célula vazia e a contagem de folgas caía 1 — sem edição nem
-     * exclusão na v1 (Q1) e com a UK barrando o refazer, só o DBA desfazia. A rota escolhida foi
-     * proibir o estado na entrada, e não remendar a precedência a jusante.
+     * horas"/"Férias"/"Feriado" virava célula vazia e a contagem de folgas caía 1. A rota
+     * escolhida foi proibir o estado na entrada, e não remendar a precedência a jusante.
      *
      * <p>{@code par1Completo} exige os DOIS horários do par 1, o que já implica a antiga cláusula
      * {@code par2SemPar1} (par 2 sozinho ⇒ par 1 incompleto ⇒ recusa).

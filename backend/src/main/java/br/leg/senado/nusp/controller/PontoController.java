@@ -263,10 +263,10 @@ public class PontoController {
     }
 
     /**
-     * Registra a retificação da própria folha publicada (Bloco B-1) — TODOS os dias num corpo só
-     * ({@code {"dias":[…]}}), gravados numa única transação: ou o lote inteiro entra, ou nada entra
-     * (F39). Substituiu o antigo POST por dia, que gravava N transações independentes e deixava
-     * estado parcial IRREVERSÍVEL (a v1 não tem edição nem exclusão — Q1).
+     * Registra a retificação da própria folha publicada — TODOS os dias num corpo só
+     * ({@code {"dias":[…]}}), gravados numa única transação: ou o lote inteiro entra, ou nada
+     * entra. Substituiu o antigo POST por dia, que gravava N transações independentes e
+     * deixava estado parcial.
      */
     @PostMapping("/api/ponto/folha/{paginaId}/retificacoes")
     public ResponseEntity<?> criarRetificacoes(@PathVariable String paginaId,
@@ -274,6 +274,19 @@ public class PontoController {
                                                @AuthenticationPrincipal UserPrincipal principal) {
         Map<String, Object> data = retificacaoService.criarRetificacoes(paginaId, principal.getId(), body);
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("ok", true, "data", data));
+    }
+
+    /**
+     * Edita (sobrescreve) uma retificação existente do próprio dono, dentro do mesmo prazo
+     * da criação. A data do dia não muda; corpo: {@code {ent1, sai1, ent2, sai2, observacoes}}.
+     */
+    @PutMapping("/api/ponto/folha/{paginaId}/retificacoes/{retificacaoId}")
+    public ResponseEntity<?> editarRetificacao(@PathVariable String paginaId,
+                                               @PathVariable String retificacaoId,
+                                               @RequestBody(required = false) Map<String, Object> body,
+                                               @AuthenticationPrincipal UserPrincipal principal) {
+        Map<String, Object> data = retificacaoService.editarRetificacao(paginaId, retificacaoId, principal.getId(), body);
+        return ResponseEntity.ok(Map.of("ok", true, "data", data));
     }
 
     // ══ Banco de Horas (Bloco C / E7) ═══════════════════════════
