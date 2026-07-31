@@ -96,6 +96,13 @@ public final class ReportConfig {
         return s;
     }
 
+    /** Competência por extenso de uma folha mensal: "Junho/2026". */
+    public static String fmtCompetencia(java.time.LocalDate d) {
+        String mes = d.getMonth().getDisplayName(java.time.format.TextStyle.FULL,
+                java.util.Locale.forLanguageTag("pt-BR"));
+        return Character.toUpperCase(mes.charAt(0)) + mes.substring(1) + "/" + d.getYear();
+    }
+
     /** Formata hora para HH:MM. Aceita LocalTime, String "HH:MM:SS", null. */
     public static String fmtTime(Object v) {
         if (v == null || "".equals(v)) return "--";

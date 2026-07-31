@@ -10,7 +10,7 @@ import { ToastService } from './toast.component';
  * GradeRetificacoesComponent (card admin "Retificações"): carga da grade, montagem das células
  * fiel ao payload (a precedência por célula é do BACKEND — nada é recalculado aqui), paginação
  * client-side de 8 colunas, troca de categoria/mês, download do XLSX (o erro vai ao TOAST,
- * canal separado do erro da grade) e o modal Configurar (marcações, diff aplicar/remover, gate
+ * canal separado do erro da grade) e o modal Ocorrências (marcações, diff aplicar/remover, gate
  * do Aplicar, retry). TestBed sem `detectChanges()` por padrão — `ngOnInit` à mão, filhos não
  * instanciados; `ApiService` mockado via `useValue`, com `get` roteado por endpoint. Relógio
  * congelado (`{toFake:['Date']}`) ANTES de `createComponent`: `hoje`/`anoMes` são lidos no
@@ -103,7 +103,7 @@ describe('GradeRetificacoesComponent', () => {
     return comp;
   }
 
-  /** Componente + modal Configurar aberto (marcações já carregadas). */
+  /** Componente + modal Ocorrências aberto (marcações já carregadas). */
   function criarComConfigurar(): GradeRetificacoesComponent {
     const comp = criarCarregado();
     comp.abrirConfigurar();
@@ -354,9 +354,9 @@ describe('GradeRetificacoesComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Configurar (B-4) — marcações globais e pessoa-dia
+  // Ocorrências — marcações globais e pessoa-dia
   // ═══════════════════════════════════════════════════════════════════
-  describe('Configurar — abertura e escopo', () => {
+  describe('Ocorrências — abertura e escopo', () => {
     it('abrir carrega as marcações do mês e começa no escopo "todos" (globais)', () => {
       const comp = criarComConfigurar();
 
@@ -473,9 +473,9 @@ describe('GradeRetificacoesComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Configurar — clique no dia (toggle) e estado do calendário
+  // Ocorrências — clique no dia (toggle) e estado do calendário
   // ═══════════════════════════════════════════════════════════════════
-  describe('Configurar — marcação do dia', () => {
+  describe('Ocorrências — marcação do dia', () => {
     it('clicar num dia livre aplica o modo ativo', () => {
       const comp = criarComConfigurar();
       const antes = comp.marcacoesEscopo();
@@ -543,9 +543,9 @@ describe('GradeRetificacoesComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Configurar — Aplicar: envia o DIFF (aplicar + remover) do escopo
+  // Ocorrências — Aplicar: envia o DIFF (aplicar + remover) do escopo
   // ═══════════════════════════════════════════════════════════════════
-  describe('Configurar — aplicar', () => {
+  describe('Ocorrências — aplicar', () => {
     it('sem mudanças: fecha o modal sem chamar a API', () => {
       const comp = criarComConfigurar();
       comp.aplicarConfig();
@@ -664,9 +664,9 @@ describe('GradeRetificacoesComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // O Configurar não reabre com o estado do mês/escopo anterior
+  // O modal de Ocorrências não reabre com o estado do mês/escopo anterior
   // ═══════════════════════════════════════════════════════════════════
-  describe('reabertura do Configurar sem estado velho', () => {
+  describe('reabertura do modal de Ocorrências sem estado velho', () => {
     /** Faz o GET das marcações falhar (a grade continua respondendo normalmente). */
     function marcacoesFalham(msg = 'Erro no servidor') {
       apiGet.mockImplementation((url: string) =>
@@ -748,7 +748,7 @@ describe('GradeRetificacoesComponent', () => {
 
     it('reabrir com um PUT em voo: o modal NÃO volta preso em "Aplicando..." — e a resposta velha não o fecha', () => {
       // O reset esquecia `aplicandoConfig`, e o PUT não
-      // tinha token. Aplicar (PUT lento) → Cancelar → Configurar de novo devolvia um modal INÚTIL (botão
+      // tinha token. Aplicar (PUT lento) → Cancelar → Ocorrências de novo devolvia um modal INÚTIL (botão
       // travado em "Aplicando...") que a resposta velha depois FECHAVA sozinha — ou enchia de erro
       // fantasma de uma ação que o usuário não repetiu nesta sessão.
       const comp = criarComConfigurar();
@@ -925,6 +925,62 @@ describe('GradeRetificacoesComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
+  // RENDER — os textos da barra e do modal de Ocorrências
+  //
+  // O rebatismo Configurar→Ocorrências vive SÓ no template (os identificadores
+  // abrirConfigurar/configurarAberto não mudaram): sem render, os rótulos antigos —
+  // inclusive a label solta "Funcionário" e o parágrafo de instrução, removidos de
+  // propósito — poderiam voltar com a suíte verde.
+  // ═══════════════════════════════════════════════════════════════════
+  describe('render — textos do modal de Ocorrências', () => {
+    function renderizar(): ComponentFixture<GradeRetificacoesComponent> {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-07-12T10:00:00-03:00'));
+      const fixture = TestBed.createComponent(GradeRetificacoesComponent);
+      fixture.detectChanges();   // ngOnInit + render (as respostas do mock são síncronas)
+      return fixture;
+    }
+
+    /** Renderiza com o modal de Ocorrências já aberto (marcações carregadas na hora). */
+    function renderizarAberto(): ComponentFixture<GradeRetificacoesComponent> {
+      const fixture = renderizar();
+      fixture.componentInstance.abrirConfigurar();
+      fixture.detectChanges();
+      return fixture;
+    }
+
+    it('o botão da barra diz "Ocorrências" (o rótulo "Configurar" não existe mais)', () => {
+      const botoes = renderizar().debugElement.queryAll(By.css('.barra button'))
+        .map(b => (b.nativeElement as HTMLButtonElement).textContent?.trim());
+      expect(botoes).toContain('Ocorrências');
+      expect(botoes).not.toContain('Configurar');
+    });
+
+    it('o título do modal é "Ocorrências — <mês selecionado>"', () => {
+      const fixture = renderizarAberto();
+      expect((fixture.debugElement.query(By.css('.modal-title')).nativeElement as HTMLElement)
+        .textContent?.trim()).toBe('Ocorrências — Julho de 2026');
+    });
+
+    it('o escopo global se chama "Todos os Funcionários" e o select carrega aria-label "Funcionário"', () => {
+      const fixture = renderizarAberto();
+      const sel = fixture.debugElement.query(By.css('.modal-card select[aria-label="Funcionário"]'));
+      expect(sel).not.toBeNull();
+
+      const opcaoTodos = (sel.nativeElement as HTMLSelectElement).options[0];
+      expect(opcaoTodos.value).toBe('todos');
+      expect(opcaoTodos.textContent?.trim()).toBe('Todos os Funcionários');
+    });
+
+    it('a label visível "Funcionário" e o parágrafo de instrução do calendário saíram do modal', () => {
+      const fixture = renderizarAberto();
+      // a orientação do select vive só no aria-label — nenhuma <label> sobrou no modal
+      expect(fixture.debugElement.queryAll(By.css('.modal-card label'))).toHaveLength(0);
+      expect(fixture.debugElement.query(By.css('.modal-card .legenda'))).toBeNull();
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
   // RENDER — a grade alcança o mês vivo na virada do ano
   //
   // A correção está no TEMPLATE (`[anos]="anosSeletor"`): sem render, apagar esse binding deixaria
@@ -960,7 +1016,7 @@ describe('GradeRetificacoesComponent', () => {
       expect(apiGet).toHaveBeenCalledWith('/api/admin/ponto/retificacoes/grade', {
         categoria: 'operadores', ano: 2026, mes: 12,
       });
-      expect(comp.tituloMesAno()).toBe('Dezembro de 2026');    // o modal Configurar segue o mês exibido
+      expect(comp.tituloMesAno()).toBe('Dezembro de 2026');    // o modal Ocorrências segue o mês exibido
     });
 
     it('regressão: em julho o seletor da barra segue preso ao ano corrente (uma <option>, ‹ dentro do ano)', () => {

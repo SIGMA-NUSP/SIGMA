@@ -108,6 +108,22 @@ describe('FolhasPontoListaComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
+  // periodo() — a coluna "Período" da tabela
+  // ═══════════════════════════════════════════════════════════════════
+  describe('periodo', () => {
+    it('folha mensal: exibe a competência ("Junho/2026"), não as datas', () => {
+      const { comp } = criar([FOLHA]);
+      expect(comp.periodo(FOLHA)).toBe('Junho/2026');
+    });
+
+    it('folha semanal: exibe o intervalo "dd/mm/aaaa — dd/mm/aaaa"', () => {
+      const { comp } = criar([]);
+      expect(comp.periodo({ ...FOLHA, tipo: 'SEMANAL', data_inicio: '2026-06-08', data_fim: '2026-06-14' }))
+        .toBe('08/06/2026 — 14/06/2026');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
   // ver() — abre o PDF da folha inline (nova aba)
   // ═══════════════════════════════════════════════════════════════════
   describe('ver', () => {
@@ -132,14 +148,20 @@ describe('FolhasPontoListaComponent', () => {
   // baixar() — mesmo endpoint, salva como arquivo com nome derivado da folha
   // ═══════════════════════════════════════════════════════════════════
   describe('baixar', () => {
-    it('salva o blob com o nome ponto-{tipo}-{inicio}_a_{fim}.pdf', () => {
+    it('folha mensal: salva o blob como ponto-mensal-<competência>.pdf (sem as datas)', () => {
       const { comp } = criar([FOLHA]);
       comp.baixar(FOLHA);
       expect(apiGetBlob).toHaveBeenCalledWith('/api/ponto/folha/f-1/download');
-      expect(baixarBlob).toHaveBeenCalledWith(BLOB, 'ponto-mensal-2026-06-01_a_2026-06-30.pdf');
+      expect(baixarBlob).toHaveBeenCalledWith(BLOB, 'ponto-mensal-junho-2026.pdf');
     });
 
-    it('o tipo entra em minúsculas no nome (SEMANAL → semanal)', () => {
+    it('a competência do nome sai minúscula e sem acento (Março → marco)', () => {
+      const { comp } = criar([]);
+      comp.baixar({ ...FOLHA, id: 'f-3', data_inicio: '2026-03-01', data_fim: '2026-03-31' });
+      expect(baixarBlob).toHaveBeenCalledWith(BLOB, 'ponto-mensal-marco-2026.pdf');
+    });
+
+    it('folha semanal: mantém as datas no nome (ponto-semanal-<ini>_a_<fim>.pdf)', () => {
       const { comp } = criar([]);
       comp.baixar({ ...FOLHA, id: 'f-9', tipo: 'SEMANAL', data_inicio: '2026-06-08', data_fim: '2026-06-14' });
       expect(baixarBlob).toHaveBeenCalledWith(BLOB, 'ponto-semanal-2026-06-08_a_2026-06-14.pdf');

@@ -550,10 +550,14 @@ public class PontoService {
     }
 
     private String mensagemFolhaPublicada(PontoLote lote) {
-        String periodo = "SEMANAL".equals(lote.getTipo()) ? "semanal" : "mensal";
+        boolean semanal = "SEMANAL".equals(lote.getTipo());
+        // Mensal é identificada pela competência ("Junho/2026"); semanal, pelo intervalo de datas.
+        String periodoTxt = semanal
+                ? ReportConfig.fmtDate(lote.getDataInicio()) + " a " + ReportConfig.fmtDate(lote.getDataFim())
+                : ReportConfig.fmtCompetencia(lote.getDataInicio());
         LocalDate limite = retificacaoService.limiteRetificacao(lote);
-        return "Sua folha de ponto " + periodo + " (" + ReportConfig.fmtDate(lote.getDataInicio())
-                + " a " + ReportConfig.fmtDate(lote.getDataFim()) + ") foi publicada. "
+        return "Sua folha de ponto " + (semanal ? "semanal" : "mensal") + " (" + periodoTxt
+                + ") foi publicada. "
                 + "Acesse \"Minhas Folhas\" para visualizá-la."
                 + (limite != null ? " Retificações até " + ReportConfig.fmtDate(limite) + "." : "");
     }

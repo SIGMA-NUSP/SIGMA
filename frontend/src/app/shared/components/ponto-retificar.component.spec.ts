@@ -437,7 +437,7 @@ describe('PontoRetificarComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Helpers de exibição — isStatus / tipoLabel / diaParaISO
+  // Helpers de exibição — isStatus / tipoLabel / periodoFolhaLabel / diaParaISO
   // ═══════════════════════════════════════════════════════════════════
   describe('helpers', () => {
     it('isStatus: dia com letras em ENT.1 é status; horário e vazio não são', () => {
@@ -458,6 +458,15 @@ describe('PontoRetificarComponent', () => {
       expect(comp.tipoLabel()).toBe('semanal'); // sem folha também cai no "semanal"
     });
 
+    it('periodoFolhaLabel: semanal junta as datas com " a "; mensal usa a competência; sem folha é vazio', () => {
+      const comp = criarCarregado();
+      expect(comp.periodoFolhaLabel()).toBe('06/07/2026 a 10/07/2026'); // a folha da fixture é SEMANAL
+      comp.dados.set({ ...comp.dados()!, tipo: 'MENSAL', data_inicio: '2026-06-01', data_fim: '2026-06-30' });
+      expect(comp.periodoFolhaLabel()).toBe('Junho/2026');
+      comp.dados.set(null);
+      expect(comp.periodoFolhaLabel()).toBe('');
+    });
+
     it('diaParaISO: "dd/mm/aa - diasem" vira ISO; formato inesperado vira ""', () => {
       const comp = criarCarregado();
       const iso = (d: string) => (comp as any).diaParaISO(d);
@@ -469,6 +478,33 @@ describe('PontoRetificarComponent', () => {
 
     it('voltarLink é sempre /ponto (inclusive para o admin com folha)', () => {
       expect(criar().voltarLink).toBe('/ponto');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // RENDER — cabeçalho "Folha {tipo} — {período}" (o período vem pronto
+  // de periodoFolhaLabel(); mensal mostra a competência, nunca as datas)
+  // ═══════════════════════════════════════════════════════════════════
+  describe('render do cabeçalho da folha', () => {
+    const cabecalho = (fixture: ComponentFixture<PontoRetificarComponent>) =>
+      (fixture.debugElement.query(By.css('p.periodo')).nativeElement as HTMLElement)
+        .textContent!.replace(/\s+/g, ' ').trim();
+
+    it('folha semanal: "Folha semanal — dd/mm/aaaa a dd/mm/aaaa"', () => {
+      const fixture = TestBed.createComponent(PontoRetificarComponent);
+      fixture.detectChanges();   // ngOnInit + render (as respostas do mock são síncronas)
+      expect(cabecalho(fixture)).toBe('Folha semanal — 06/07/2026 a 10/07/2026');
+    });
+
+    it('folha mensal: "Folha mensal — Junho/2026" (a competência substitui as datas)', () => {
+      apiGet.mockImplementation((url: string) =>
+        url.endsWith('/dados')
+          ? of({ data: { ...structuredClone(FOLHA), tipo: 'MENSAL', data_inicio: '2026-06-01', data_fim: '2026-06-30' } })
+          : of({ data: { limite_fmt: null, prazo_expirado: false, retificacoes: [] } }),
+      );
+      const fixture = TestBed.createComponent(PontoRetificarComponent);
+      fixture.detectChanges();
+      expect(cabecalho(fixture)).toBe('Folha mensal — Junho/2026');
     });
   });
 

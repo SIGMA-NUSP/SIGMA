@@ -2,6 +2,7 @@ import { Component, inject, input } from '@angular/core';
 import { Router } from '@angular/router';
 import { ApiService } from '../../core/services/api.service';
 import { ClientPager } from '../../core/helpers/client-pager';
+import { competenciaMensalSlug, periodoFolha } from '../../core/helpers/table.helpers';
 import { FmtDatePipe } from '../pipes/fmt-date.pipe';
 import { PaginationComponent } from './pagination.component';
 
@@ -34,7 +35,7 @@ export interface MinhaFolha {
         <tbody>
           @for (f of pager.rows(); track f.id) {
             <tr>
-              <td><strong>{{ f.data_inicio | fmtDate }} — {{ f.data_fim | fmtDate }}</strong></td>
+              <td><strong>{{ periodo(f) }}</strong></td>
               <td>{{ f.tipo === 'MENSAL' ? 'Mensal' : 'Semanal' }}</td>
               <td>{{ f.publicado_em | fmtDate }}</td>
               <td class="acoes-cell">
@@ -83,6 +84,11 @@ export class FolhasPontoListaComponent {
   private api = inject(ApiService);
   private router = inject(Router);
 
+  /** Período da folha: mensal = "Junho/2026"; semanal = intervalo de datas. */
+  periodo(f: MinhaFolha): string {
+    return periodoFolha(f.tipo, f.data_inicio, f.data_fim);
+  }
+
   retificar(f: MinhaFolha): void {
     this.router.navigate(['/ponto/retificar', f.id]);
   }
@@ -94,9 +100,16 @@ export class FolhasPontoListaComponent {
     });
   }
 
+  /** Nome do PDF baixado: mensal = "ponto-mensal-junho-2026.pdf"; semanal mantém as datas. */
+  private nomeArquivo(f: MinhaFolha): string {
+    return f.tipo === 'MENSAL'
+      ? `ponto-mensal-${competenciaMensalSlug(f.data_inicio)}.pdf`
+      : `ponto-${f.tipo.toLowerCase()}-${f.data_inicio}_a_${f.data_fim}.pdf`;
+  }
+
   baixar(f: MinhaFolha): void {
     this.api.getBlob(`/api/ponto/folha/${f.id}/download`).subscribe({
-      next: blob => this.api.baixarBlob(blob, `ponto-${f.tipo.toLowerCase()}-${f.data_inicio}_a_${f.data_fim}.pdf`),
+      next: blob => this.api.baixarBlob(blob, this.nomeArquivo(f)),
       error: () => alert('Não foi possível baixar a folha de ponto.'),
     });
   }

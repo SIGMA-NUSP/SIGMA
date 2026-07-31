@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -37,7 +38,8 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Unitários de {@link PontoService#publicar} — as duas guardas da publicação.
+ * Unitários de {@link PontoService#publicar} — as duas guardas da publicação e o texto do aviso
+ * que ela dispara.
  *
  * <p><b>Concorrência:</b> aqui se prova apenas que a publicação lê o lote pelo caminho que SEGURA a
  * linha ({@code lockPorId} → {@code SELECT ... FOR UPDATE}), nunca pelo {@code findById} solto. Que
@@ -555,6 +557,71 @@ class PontoServiceTest {
             verify(paginaRepo, never()).findPessoasComMensalPublicadaNoPeriodo(any(), anyCollection(), any(), any());
             // Sem pessoa, não há a quem avisar nem quem re-ancorar.
             verifyNoInteractions(avisoService, saldoAberturaService);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // O texto do aviso de publicação
+    // ══════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("o texto do aviso identifica a folha: mensal pela competência, semanal pelas datas")
+    class TextoDoAvisoDePublicacao {
+
+        /** O texto entregue ao aviso é contrato com quem lê a notificação — captura-o inteiro. */
+        private String textoDoAviso() {
+            ArgumentCaptor<String> texto = ArgumentCaptor.forClass(String.class);
+            verify(avisoService).criarPessoalIndividual(anyList(), texto.capture(), eq(ADMIN),
+                    any(SubtipoAviso.class), eq(LOTE));
+            return texto.getValue();
+        }
+
+        @Test
+        @DisplayName("mensal cita a competência por extenso (\"Junho/2026\") e o limite de retificação")
+        void mensalCitaACompetencia() {
+            PontoLote lote = emRevisao("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
+            cenario(lote, pagina(1, OP, "OPERADOR"));
+            nenhumaMensalPublicada();
+            when(retificacaoService.limiteRetificacao(lote)).thenReturn(LocalDate.of(2026, 7, 10));
+
+            service.publicar(LOTE, true);
+
+            // A folha mensal É a competência inteira: o intervalo 01/06–30/06 em datas seria redundante
+            // e ilegível — o aviso diz o MÊS; o intervalo de datas é identidade só da semanal.
+            assertEquals("Sua folha de ponto mensal (Junho/2026) foi publicada. "
+                    + "Acesse \"Minhas Folhas\" para visualizá-la. Retificações até 10/07/2026.",
+                    textoDoAviso());
+        }
+
+        @Test
+        @DisplayName("a competência preserva o acento do mês (Março/2026); sem limite, sem frase de retificação")
+        void mensalPreservaAcentoDoMes() {
+            PontoLote lote = emRevisao("MENSAL", LocalDate.of(2026, 3, 1), LocalDate.of(2026, 3, 31));
+            cenario(lote, pagina(1, OP, "OPERADOR"));
+            nenhumaMensalPublicada();
+            // Sem limite de retificação, a última frase simplesmente não existe — nada de "até null".
+            when(retificacaoService.limiteRetificacao(lote)).thenReturn(null);
+
+            service.publicar(LOTE, true);
+
+            assertEquals("Sua folha de ponto mensal (Março/2026) foi publicada. "
+                    + "Acesse \"Minhas Folhas\" para visualizá-la.",
+                    textoDoAviso());
+        }
+
+        @Test
+        @DisplayName("semanal segue citando o intervalo de datas (dd/mm/aaaa a dd/mm/aaaa)")
+        void semanalCitaOIntervaloDeDatas() {
+            PontoLote lote = emRevisao("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5));
+            cenario(lote, pagina(1, OP, "OPERADOR"));
+            nenhumaMensalPublicada();
+            when(retificacaoService.limiteRetificacao(lote)).thenReturn(LocalDate.of(2026, 6, 12));
+
+            service.publicar(LOTE, true);
+
+            assertEquals("Sua folha de ponto semanal (01/06/2026 a 05/06/2026) foi publicada. "
+                    + "Acesse \"Minhas Folhas\" para visualizá-la. Retificações até 12/06/2026.",
+                    textoDoAviso());
         }
     }
 }

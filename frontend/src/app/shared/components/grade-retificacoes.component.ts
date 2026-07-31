@@ -51,7 +51,7 @@ interface GradeData {
   standalone: true,
   imports: [MesAnoSelectorComponent, MiniCalendarioComponent, ErroCargaComponent],
   template: `
-    <!-- B-3.1: combobox categoria · seletor mês/ano · Configurar -->
+    <!-- B-3.1: combobox categoria · seletor mês/ano · Ocorrências -->
     <div class="barra">
       <select class="sel-cat" [value]="categoria()" (change)="onCategoria($event)" aria-label="Categoria">
         <option value="operadores">Operadores</option>
@@ -62,7 +62,7 @@ interface GradeData {
       <!-- [F37]: em janeiro a grade precisa alcançar dezembro (folha publicada, prazo correndo) -->
       <app-mes-ano-selector [anos]="anosSeletor" (mudou)="onMesAno($event)" />
 
-      <button type="button" class="btn-outline" (click)="abrirConfigurar()">Configurar</button>
+      <button type="button" class="btn-outline" (click)="abrirConfigurar()">Ocorrências</button>
       <button type="button" class="btn-outline" (click)="baixarTabela()" [disabled]="funcionarios().length === 0">Baixar tabela</button>
     </div>
 
@@ -126,20 +126,19 @@ interface GradeData {
       </div>
     }
 
-    <!-- B-4: modal "Configurar" (Alternativa 1 da análise) — marcações globais/pessoa-dia (Q36) -->
+    <!-- Modal "Ocorrências" — marcações globais/pessoa-dia -->
     @if (configurarAberto()) {
       <div class="modal-overlay" (click)="fecharConfigurar()">
         <div class="modal-card card-custom" (click)="$event.stopPropagation()">
-          <h2 class="modal-title">Configurar dias — {{ tituloMesAno() }}</h2>
+          <h2 class="modal-title">Ocorrências — {{ tituloMesAno() }}</h2>
 
           @if (carregandoConfig()) {
             <p class="text-muted-sm">Carregando marcações...</p>
           } @else {
-            <!-- F#4: escopo "Todos" (globais) | um funcionário (pessoa-dia) -->
+            <!-- Escopo: "Todos os Funcionários" (marcações globais) | um funcionário (pessoa-dia) -->
             <div class="form-row">
-              <label>Funcionário</label>
-              <select [value]="escopo()" (change)="onEscopo($event)">
-                <option value="todos">Todos (Feriado / P. Facultativo)</option>
+              <select [value]="escopo()" (change)="onEscopo($event)" aria-label="Funcionário">
+                <option value="todos">Todos os Funcionários</option>
                 @for (f of funcionarios(); track f.id) {
                   <option [value]="f.id">{{ f.nome }}</option>
                 }
@@ -163,10 +162,6 @@ interface GradeData {
                 [max]="ultimoDiaMes()"
                 (dataSelecionada)="onDiaConfig($event)" />
             </div>
-
-            <p class="legenda text-muted-sm">
-              Selecione um modo e clique nos dias para aplicar/remover (clicar de novo no mesmo tipo remove). Fins de semana ficam desabilitados.
-            </p>
 
             @if (erroConfig()) {
               @if (configCarregado()) {
@@ -257,7 +252,7 @@ interface GradeData {
     .nav-btn:hover:not(:disabled) { background: var(--row-hover); }
     .nav-btn:disabled { opacity: .35; cursor: default; }
 
-    /* Configurar (B-4) */
+    /* Modal Ocorrências */
     .modos { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
     .chip {
       border: 1px solid var(--border); background: #fff; border-radius: 999px;
@@ -265,7 +260,6 @@ interface GradeData {
     }
     .chip.active { background: var(--primary); color: #fff; border-color: var(--primary); }
     .cfg-cal { display: flex; justify-content: center; margin: 6px 0; }
-    .legenda { text-align: center; margin: 8px 0 0; }
 
     @media (max-width: 640px) {
       .barra { gap: 8px; }
@@ -288,7 +282,7 @@ export class GradeRetificacoesComponent implements OnInit {
   erro = signal('');
   pagina = signal(0);
 
-  // ── Configurar (B-4): modal de marcações globais/pessoa-dia ──
+  // ── Ocorrências: modal de marcações globais/pessoa-dia ──
   configurarAberto = signal(false);
   carregandoConfig = signal(false);
   aplicandoConfig = signal(false);
@@ -308,7 +302,7 @@ export class GradeRetificacoesComponent implements OnInit {
   marcacoesEscopo = signal<Map<number, string>>(new Map());
   /**
    * Token da SESSÃO do modal (F61/idioma C8): incrementa a cada abertura e vale para as DUAS
-   * requisições do Configurar — o GET das marcações e o PUT do Aplicar. Sem ele, a resposta de uma
+   * requisições do modal de Ocorrências — o GET das marcações e o PUT do Aplicar. Sem ele, a resposta de uma
    * sessão anterior age sobre a sessão nova: a do GET repovoa o calendário com o mês abandonado; a
    * do PUT **fecha o modal que o usuário acabou de abrir** (no `next`) ou pinta um erro fantasma de
    * uma ação que ele não repetiu (no `error`).
@@ -384,10 +378,10 @@ export class GradeRetificacoesComponent implements OnInit {
     });
   }
 
-  // ── Configurar (B-4) ──────────────────────────────────────────
+  // ── Ocorrências ──────────────────────────────────────────────
 
   /**
-   * Estado por-dia do calendário do Configurar. Referência estável (arrow) que lê
+   * Estado por-dia do calendário do modal de Ocorrências. Referência estável (arrow) que lê
    * marcacoesEscopo/anoMes: esses signals são rastreados pelo computed do
    * MiniCalendario, então (des)marcar um dia re-renderiza sem trocar a função.
    */
@@ -547,7 +541,7 @@ export class GradeRetificacoesComponent implements OnInit {
 /** Colunas de funcionários por página (B-3.9/F#2: 8 exatos = 1 página). */
 const PAGE_SIZE = 8;
 
-// ── Configurar (B-4): modos por escopo, rótulos e badges das marcações ──
+// ── Ocorrências: modos por escopo, rótulos e badges das marcações ──
 const MODOS_GLOBAIS = [
   { valor: 'FERIADO', rotulo: 'Feriado' },
   { valor: 'PONTO_FACULTATIVO', rotulo: 'P. Facultativo' },

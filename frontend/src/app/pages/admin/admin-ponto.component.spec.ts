@@ -191,9 +191,10 @@ describe('AdminPontoComponent', () => {
     vi.restoreAllMocks();
   });
 
-  function criar(): AdminPontoComponent {
+  /** Relógio congelado (default 12/07/2026): a competência default do upload mensal fica junho/2026. */
+  function criar(agora = '2026-07-12T10:00:00-03:00'): AdminPontoComponent {
     vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-07-12T10:00:00-03:00'));
+    vi.setSystemTime(new Date(agora));
     return TestBed.createComponent(AdminPontoComponent).componentInstance;
   }
 
@@ -222,9 +223,15 @@ describe('AdminPontoComponent', () => {
     return { target: { files } } as unknown as Event;
   }
 
-  /** Preenche o formulário de upload com um cenário válido. */
+  /** Upload MENSAL válido: basta o arquivo — a competência default (junho/2026) já vem preenchida. */
   function preencherUpload(comp: AdminPontoComponent, arquivo: File | null = pdf()): void {
     comp.onFileSelect(fileEvent(...(arquivo ? [arquivo] : [])));
+  }
+
+  /** Upload SEMANAL válido: aqui o período é o par de datas (o mensal usa mês/ano). */
+  function preencherUploadSemanal(comp: AdminPontoComponent): void {
+    comp.onFileSelect(fileEvent(pdf()));
+    comp.tipo = 'SEMANAL';
     comp.dataInicio = '2026-06-01';
     comp.dataFim = '2026-06-30';
   }
@@ -378,18 +385,27 @@ describe('AdminPontoComponent', () => {
 
   describe('onUpload — validações client-side', () => {
     it('sem arquivo: erro e nenhum POST', () => {
-      const comp = criarCarregado();
-      comp.dataInicio = '2026-06-01';
-      comp.dataFim = '2026-06-30';
+      const comp = criarCarregado();   // a competência mensal default está válida — o que falta é o PDF
       comp.onUpload();
       expect(comp.errorMsg()).toBe('Selecione o arquivo PDF.');
       expect(apiPostForm).not.toHaveBeenCalled();
       expect(comp.uploading()).toBe(false);
     });
 
-    it('sem período: erro e nenhum POST', () => {
+    it('mensal sem mês/ano: erro e nenhum POST', () => {
       const comp = criarCarregado();
       comp.onFileSelect(fileEvent(pdf()));
+      comp.mesUpload = 0;
+      comp.anoUpload = 0;
+      comp.onUpload();
+      expect(comp.errorMsg()).toBe('Informe o mês e o ano.');
+      expect(apiPostForm).not.toHaveBeenCalled();
+    });
+
+    it('semanal sem período: erro e nenhum POST', () => {
+      const comp = criarCarregado();
+      comp.onFileSelect(fileEvent(pdf()));
+      comp.tipo = 'SEMANAL';
       comp.dataInicio = '';
       comp.dataFim = '2026-06-30';
       comp.onUpload();
@@ -397,9 +413,9 @@ describe('AdminPontoComponent', () => {
       expect(apiPostForm).not.toHaveBeenCalled();
     });
 
-    it('fim anterior ao início: erro e nenhum POST', () => {
+    it('semanal com fim anterior ao início: erro e nenhum POST', () => {
       const comp = criarCarregado();
-      preencherUpload(comp);
+      preencherUploadSemanal(comp);
       comp.dataInicio = '2026-06-30';
       comp.dataFim = '2026-06-01';
       comp.onUpload();
@@ -407,9 +423,9 @@ describe('AdminPontoComponent', () => {
       expect(apiPostForm).not.toHaveBeenCalled();
     });
 
-    it('início igual ao fim é válido (folha de um único dia)', () => {
+    it('semanal com início igual ao fim é válido (folha de um único dia)', () => {
       const comp = criarCarregado();
-      preencherUpload(comp);
+      preencherUploadSemanal(comp);
       comp.dataInicio = comp.dataFim = '2026-06-15';
       comp.onUpload();
       expect(apiPostForm).toHaveBeenCalled();
@@ -418,12 +434,11 @@ describe('AdminPontoComponent', () => {
   });
 
   describe('onUpload — envio', () => {
-    it('monta o multipart com arquivo, tipo e período; mantém "uploading" durante o voo', () => {
+    it('semanal: monta o multipart com arquivo, tipo e período; mantém "uploading" durante o voo', () => {
       const emVoo = new Subject<any>();
       apiPostForm.mockReturnValue(emVoo);
       const comp = criarCarregado();
-      preencherUpload(comp);
-      comp.tipo = 'SEMANAL';
+      preencherUploadSemanal(comp);
 
       comp.onUpload();
 
@@ -439,6 +454,33 @@ describe('AdminPontoComponent', () => {
       emVoo.next({ ok: true, data: lote() });
       emVoo.complete();
       expect(comp.uploading()).toBe(false);
+    });
+
+    it('mensal: o multipart leva o mês CHEIO da competência default (mês anterior ao relógio)', () => {
+      const comp = criarCarregado();               // relógio congelado em 12/07/2026 → junho/2026
+      preencherUpload(comp);
+
+      comp.onUpload();
+
+      const [url, fd] = apiPostForm.mock.calls[0];
+      expect(url).toBe('/api/admin/ponto/upload');
+      expect((fd as FormData).get('arquivo')).toBeInstanceOf(File);
+      expect((fd as FormData).get('tipo')).toBe('MENSAL');
+      expect((fd as FormData).get('data_inicio')).toBe('2026-06-01');
+      expect((fd as FormData).get('data_fim')).toBe('2026-06-30');
+    });
+
+    it('mensal: a competência escolhida vira o mês cheio DELA, com o último dia calculado (fevereiro → 28)', () => {
+      const comp = criarCarregado();
+      preencherUpload(comp);
+      comp.mesUpload = 2;
+      comp.anoUpload = 2026;
+
+      comp.onUpload();
+
+      const fd = apiPostForm.mock.calls[0][1] as FormData;
+      expect(fd.get('data_inicio')).toBe('2026-02-01');
+      expect(fd.get('data_fim')).toBe('2026-02-28');
     });
 
     it('sucesso: limpa o arquivo e recarrega a lista já abrindo o lote enviado', () => {
@@ -530,6 +572,69 @@ describe('AdminPontoComponent', () => {
       preencherUpload(comp);
       comp.onUpload();
       expect(comp.errorMsg()).toBe('');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Competência default do upload mensal (mês anterior ao relógio) + troca de tipo
+  // ═══════════════════════════════════════════════════════════════════
+  describe('competência default do upload mensal', () => {
+    it('nasce no mês ANTERIOR ao relógio, com os anos da implantação até o corrente', () => {
+      const comp = criar();                              // 12/07/2026
+      expect(comp.mesUpload).toBe(6);
+      expect(comp.anoUpload).toBe(2026);
+      expect((comp as any).anosUpload).toEqual([2026]);
+    });
+
+    it('no último dia do mês o default não escorrega (31/07 → junho, não julho)', () => {
+      // Sem ancorar no dia 1 antes de recuar o mês, 31/07 − 1 mês estouraria para 01/07 (junho não
+      // tem dia 31) e o default cairia no PRÓPRIO mês.
+      const comp = criar('2026-07-31T10:00:00-03:00');
+      expect(comp.mesUpload).toBe(6);
+      expect(comp.anoUpload).toBe(2026);
+    });
+
+    it('em janeiro o default desce para dezembro do ano anterior', () => {
+      const comp = criar('2027-01-15T10:00:00-03:00');
+      expect(comp.mesUpload).toBe(12);
+      expect(comp.anoUpload).toBe(2026);
+      expect((comp as any).anosUpload).toEqual([2026, 2027]);
+    });
+
+    it('em janeiro do PRIMEIRO ano do ponto, o piso segura em janeiro/2026 (dezembro/2025 não existe)', () => {
+      const comp = criar('2026-01-15T10:00:00-03:00');
+      expect(comp.mesUpload).toBe(1);
+      expect(comp.anoUpload).toBe(2026);
+      expect((comp as any).anosUpload).toEqual([2026]);
+    });
+  });
+
+  describe('onTipoChange', () => {
+    it('trocar o tipo descarta o período semanal preenchido e limpa o erro', () => {
+      const comp = criarCarregado();
+      comp.tipo = 'SEMANAL';
+      comp.dataInicio = '2026-06-30';
+      comp.dataFim = '2026-06-01';
+      comp.errorMsg.set('A data final não pode ser anterior à inicial.');
+
+      comp.tipo = 'MENSAL';
+      comp.onTipoChange();
+
+      expect(comp.dataInicio).toBe('');
+      expect(comp.dataFim).toBe('');
+      expect(comp.errorMsg()).toBe('');
+    });
+
+    it('a competência mexida volta ao DEFAULT quando o tipo muda (os campos não são equivalentes)', () => {
+      const comp = criarCarregado();
+      comp.mesUpload = 2;
+      comp.anoUpload = 2026;
+
+      comp.tipo = 'SEMANAL';
+      comp.onTipoChange();
+
+      expect(comp.mesUpload).toBe(6);                    // de volta ao mês anterior ao relógio
+      expect(comp.anoUpload).toBe(2026);
     });
   });
 
@@ -1061,7 +1166,7 @@ describe('AdminPontoComponent', () => {
       comp.publicar(l);
 
       expect(confirmSpy).toHaveBeenCalledWith(
-        'Publicar este lote? As folhas vinculadas ficarão disponíveis para os operadores/técnicos.');
+        'Publicar lote? As folhas vinculadas ficarão disponíveis aos destinatários.');
       expect(apiPost).toHaveBeenCalledWith('/api/admin/ponto/lote/lote-1/publicar', { emitir_aviso: true });
       expect(l.status).toBe('PUBLICADO');       // o payload da resposta é mesclado no lote
       expect(comp.publicando('lote-1')).toBe(false);
@@ -1074,7 +1179,7 @@ describe('AdminPontoComponent', () => {
       comp.publicar(l);
 
       expect(confirmSpy).toHaveBeenCalledWith(
-        'Publicar este lote? As folhas vinculadas ficarão disponíveis para os operadores/técnicos.'
+        'Publicar lote? As folhas vinculadas ficarão disponíveis aos destinatários.'
         + '\n\nAtenção: 2 página(s) pendente(s) não ficarão visíveis a ninguém.');
     });
 
@@ -1467,9 +1572,9 @@ describe('AdminPontoComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Estado dos cards e rótulos (lógica, sem asserção visual — GATE)
+  // Estado dos cards, rótulos e formatadores (lógica, sem asserção visual — GATE)
   // ═══════════════════════════════════════════════════════════════════
-  describe('selectCard e tipoLabel', () => {
+  describe('selectCard, tipoLabel e periodoLote', () => {
     it('nenhum card ativo no início; selectCard troca o ativo (sem alternância — sempre set)', () => {
       const comp = criarCarregado();
       expect(comp.activeCard()).toBeNull();
@@ -1495,6 +1600,17 @@ describe('AdminPontoComponent', () => {
       expect(comp.tipoLabel('TECNICO')).toBe('Técnico');
       expect(comp.tipoLabel('ADMINISTRADOR')).toBe('Administrador');
       expect(comp.tipoLabel(undefined)).toBe('');
+    });
+
+    it('periodoLote: lote MENSAL exibe a competência, não o par de datas', () => {
+      const comp = criar();
+      expect(comp.periodoLote(lote() as any)).toBe('Junho/2026');
+    });
+
+    it('periodoLote: lote SEMANAL segue exibindo o intervalo de datas', () => {
+      const comp = criar();
+      expect(comp.periodoLote(lote({ tipo: 'SEMANAL', data_fim: '2026-06-07' }) as any))
+        .toBe('01/06/2026 — 07/06/2026');
     });
   });
 
@@ -1739,6 +1855,7 @@ describe('AdminPontoComponent', () => {
 
       const texto = modal(fixture).nativeElement.textContent as string;
       expect(texto).toContain('Excluir o lote inteiro?');
+      expect(texto).toContain('Junho/2026');                                    // o lote mensal é nomeado pela competência
       expect(texto).toContain('3 folha(s) e 4 arquivo(s) PDF');
       expect(texto).toContain('2 retificação(ões)');
       expect(texto).toContain('2 aviso(s) pessoal(is)');

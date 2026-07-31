@@ -1,4 +1,7 @@
-import { getDistinct, buildFilters, buildReportParams, MESES, mesNome } from './table.helpers';
+import {
+  getDistinct, buildFilters, buildReportParams, MESES, mesNome,
+  ANO_MINIMO_PONTO, competenciaMensal, competenciaMensalSlug, periodoFolha,
+} from './table.helpers';
 import { PaginationMeta } from '../models/user.model';
 import { ColumnFilterState } from '../../shared/components/column-filter.component';
 
@@ -98,5 +101,49 @@ describe('mesNome', () => {
   it('índice inválido cai no fallback String(m)', () => {
     expect(mesNome(13)).toBe('13');
     expect(mesNome(0)).toBe('0');
+  });
+});
+
+describe('ANO_MINIMO_PONTO', () => {
+  it('é 2026, o piso de seleção de período do módulo de ponto', () => {
+    expect(ANO_MINIMO_PONTO).toBe(2026);
+  });
+});
+
+describe('competenciaMensal', () => {
+  it('janeiro: "2026-01-01" vira "Janeiro/2026"', () => {
+    expect(competenciaMensal('2026-01-01')).toBe('Janeiro/2026');
+  });
+
+  it('dezembro: "2026-12-01" vira "Dezembro/2026"', () => {
+    expect(competenciaMensal('2026-12-01')).toBe('Dezembro/2026');
+  });
+
+  it('junho: "2026-06-01" vira "Junho/2026"', () => {
+    expect(competenciaMensal('2026-06-01')).toBe('Junho/2026');
+  });
+});
+
+describe('competenciaMensalSlug', () => {
+  it('mês com acento fica minúsculo e sem acento: março vira "marco-2026"', () => {
+    expect(competenciaMensalSlug('2026-03-01')).toBe('marco-2026');
+  });
+
+  it('mês sem acento só fica minúsculo: junho vira "junho-2026"', () => {
+    expect(competenciaMensalSlug('2026-06-01')).toBe('junho-2026');
+  });
+});
+
+describe('periodoFolha', () => {
+  it('MENSAL retorna a competência do início, ignorando fim e separador', () => {
+    expect(periodoFolha('MENSAL', '2026-06-01', '2026-07-05', ' a ')).toBe('Junho/2026');
+  });
+
+  it('SEMANAL formata o intervalo em dd/mm/aaaa com o separador default " — "', () => {
+    expect(periodoFolha('SEMANAL', '2026-06-01', '2026-06-07')).toBe('01/06/2026 — 07/06/2026');
+  });
+
+  it('SEMANAL aceita separador customizado " a "', () => {
+    expect(periodoFolha('SEMANAL', '2026-06-01', '2026-06-07', ' a ')).toBe('01/06/2026 a 07/06/2026');
   });
 });

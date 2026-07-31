@@ -5,6 +5,7 @@ import { ApiService } from '../../core/services/api.service';
 import { AuthService } from '../../core/services/auth.service';
 import { erroCargaMsg, httpErrorMsg } from '../../core/helpers/http.helpers';
 import { ClientPager } from '../../core/helpers/client-pager';
+import { ANO_MINIMO_PONTO, mesNome, periodoFolha } from '../../core/helpers/table.helpers';
 import { FmtDatePipe } from '../../shared/pipes/fmt-date.pipe';
 import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
 import { PaginationComponent } from '../../shared/components/pagination.component';
@@ -110,19 +111,35 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
       <div class="form-grid">
         <div class="form-row">
           <label>Tipo *</label>
-          <select [(ngModel)]="tipo" name="tipo">
+          <select [(ngModel)]="tipo" name="tipo" (change)="onTipoChange()">
             <option value="MENSAL">Mensal</option>
             <option value="SEMANAL">Semanal</option>
           </select>
         </div>
-        <div class="form-row">
-          <label>De *</label>
-          <input type="date" [(ngModel)]="dataInicio" name="data_inicio">
-        </div>
-        <div class="form-row">
-          <label>Até *</label>
-          <input type="date" [(ngModel)]="dataFim" name="data_fim">
-        </div>
+        @if (tipo === 'MENSAL') {
+          <!-- Mensal = competência (mês cheio): o backend continua recebendo data_inicio/data_fim -->
+          <div class="form-row">
+            <label>Mês *</label>
+            <select [(ngModel)]="mesUpload" name="mes">
+              @for (m of mesesUpload; track m) { <option [ngValue]="m">{{ mesNome(m) }}</option> }
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Ano *</label>
+            <select [(ngModel)]="anoUpload" name="ano">
+              @for (a of anosUpload; track a) { <option [ngValue]="a">{{ a }}</option> }
+            </select>
+          </div>
+        } @else {
+          <div class="form-row">
+            <label>De *</label>
+            <input type="date" [(ngModel)]="dataInicio" name="data_inicio">
+          </div>
+          <div class="form-row">
+            <label>Até *</label>
+            <input type="date" [(ngModel)]="dataFim" name="data_fim">
+          </div>
+        }
       </div>
       <div class="form-row">
         <label>Arquivo PDF *</label>
@@ -174,7 +191,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
               @for (l of lotesPager.rows(); track l.id) {
                 <tr class="row-clickable" (click)="toggleLote(l)">
                   <td><span class="btn-toggle">{{ l._exp ? '▼' : '▶' }}</span></td>
-                  <td><strong>{{ l.data_inicio | fmtDate }} — {{ l.data_fim | fmtDate }}</strong></td>
+                  <td><strong>{{ periodoLote(l) }}</strong></td>
                   <td>{{ l.tipo === 'MENSAL' ? 'Mensal' : 'Semanal' }}</td>
                   <td style="text-align:center">{{ l.total_paginas }}</td>
                   <td style="text-align:center" [style.color]="l.pendentes > 0 ? 'var(--color-red)' : 'var(--color-green)'">
@@ -338,7 +355,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
 
           <p class="alvo">
             <strong>{{ pv.lote.tipo === 'MENSAL' ? 'Mensal' : 'Semanal' }}
-              {{ pv.lote.data_inicio | fmtDate }} — {{ pv.lote.data_fim | fmtDate }}</strong>
+              {{ periodoLote(pv.lote) }}</strong>
             <span class="text-muted-sm">({{ pv.lote.publicado ? 'publicado' : 'em revisão' }})</span>
             @if (pv.pagina) {
               <br><span class="text-muted-sm">Página {{ pv.pagina.numero_pagina }} — {{ pv.pagina.pessoa_nome || 'sem vínculo' }}</span>
@@ -433,6 +450,12 @@ export class AdminPontoComponent implements OnInit {
   tipo = 'MENSAL';
   dataInicio = '';
   dataFim = '';
+  mesUpload = 0;
+  anoUpload = 0;
+  protected readonly mesesUpload = Array.from({ length: 12 }, (_, i) => i + 1);
+  protected readonly mesNome = mesNome;
+  /** Anos selecionáveis do upload mensal: da implantação do ponto até o ano corrente. */
+  protected readonly anosUpload: number[] = [];
   arquivo: File | null = null;
   uploading = signal(false);
   errorMsg = signal('');
@@ -551,9 +574,44 @@ export class AdminPontoComponent implements OnInit {
   vinculoBloqueado = computed(() =>
     this.pessoas().length === 0 && (!!this.erroPessoas() || this.loadingPessoas()));
 
+  constructor() {
+    for (let a = ANO_MINIMO_PONTO; a <= new Date().getFullYear(); a++) this.anosUpload.push(a);
+    this.resetPeriodoUpload();
+  }
+
   ngOnInit(): void {
     this.loadPessoas();
     this.loadLotes();
+  }
+
+  /**
+   * Zera o período do upload: o mensal volta ao default — o mês anterior, a competência
+   * típica de uma folha recém-recebida (piso: janeiro do primeiro ano do ponto).
+   */
+  private resetPeriodoUpload(): void {
+    this.dataInicio = '';
+    this.dataFim = '';
+    const prev = new Date();
+    prev.setDate(1);
+    prev.setMonth(prev.getMonth() - 1);
+    if (prev.getFullYear() < ANO_MINIMO_PONTO) {
+      this.mesUpload = 1;
+      this.anoUpload = ANO_MINIMO_PONTO;
+    } else {
+      this.mesUpload = prev.getMonth() + 1;
+      this.anoUpload = prev.getFullYear();
+    }
+  }
+
+  /** Alternar Mensal↔Semanal descarta o período preenchido (os campos não são equivalentes). */
+  onTipoChange(): void {
+    this.resetPeriodoUpload();
+    this.errorMsg.set('');
+  }
+
+  /** Período exibido de um lote: mensal = "Junho/2026"; semanal = intervalo de datas. */
+  periodoLote(l: { tipo: string; data_inicio: string; data_fim: string }): string {
+    return periodoFolha(l.tipo, l.data_inicio, l.data_fim);
   }
 
   /** Alterna o card ativo; troca o conteúdo exibido (Folhas de Ponto / Retificações / Banco de Horas). */
@@ -662,15 +720,27 @@ export class AdminPontoComponent implements OnInit {
   onUpload(): void {
     this.errorMsg.set('');
     if (!this.arquivo) { this.errorMsg.set('Selecione o arquivo PDF.'); return; }
-    if (!this.dataInicio || !this.dataFim) { this.errorMsg.set('Informe o início e o fim do período.'); return; }
-    if (this.dataFim < this.dataInicio) { this.errorMsg.set('A data final não pode ser anterior à inicial.'); return; }
+
+    // Mensal = competência (mês cheio); o payload segue sendo o par de datas ISO.
+    let dataInicio = this.dataInicio;
+    let dataFim = this.dataFim;
+    if (this.tipo === 'MENSAL') {
+      if (!this.mesUpload || !this.anoUpload) { this.errorMsg.set('Informe o mês e o ano.'); return; }
+      const mm = String(this.mesUpload).padStart(2, '0');
+      // Datas montadas à mão: toISOString desloca o fuso e mudaria o dia.
+      dataInicio = `${this.anoUpload}-${mm}-01`;
+      dataFim = `${this.anoUpload}-${mm}-${new Date(this.anoUpload, this.mesUpload, 0).getDate()}`;
+    } else {
+      if (!this.dataInicio || !this.dataFim) { this.errorMsg.set('Informe o início e o fim do período.'); return; }
+      if (this.dataFim < this.dataInicio) { this.errorMsg.set('A data final não pode ser anterior à inicial.'); return; }
+    }
 
     this.uploading.set(true);
     const fd = new FormData();
     fd.append('arquivo', this.arquivo);
     fd.append('tipo', this.tipo);
-    fd.append('data_inicio', this.dataInicio);
-    fd.append('data_fim', this.dataFim);
+    fd.append('data_inicio', dataInicio);
+    fd.append('data_fim', dataFim);
 
     this.api.postForm<any>('/api/admin/ponto/upload', fd).subscribe({
       next: res => {
@@ -811,7 +881,7 @@ export class AdminPontoComponent implements OnInit {
     const aviso = l.pendentes > 0
       ? `\n\nAtenção: ${l.pendentes} página(s) pendente(s) não ficarão visíveis a ninguém.`
       : '';
-    if (!confirm(`Publicar este lote? As folhas vinculadas ficarão disponíveis para os operadores/técnicos.${aviso}`)) return;
+    if (!confirm(`Publicar lote? As folhas vinculadas ficarão disponíveis aos destinatários.${aviso}`)) return;
 
     this.marcarPublicando(l.id, true);
     this.definirErroPublicacao(l.id, '');   // nova tentativa: a recusa anterior sai da tela

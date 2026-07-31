@@ -2,9 +2,9 @@ import { Component, computed, inject, OnDestroy, OnInit, signal } from '@angular
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { ApiService } from '../../core/services/api.service';
-import { FmtDatePipe } from '../pipes/fmt-date.pipe';
 import { HORA_RE, HoraMaskDirective } from '../directives/hora-mask.directive';
 import { erroCargaMsg, httpErrorMsg } from '../../core/helpers/http.helpers';
+import { periodoFolha } from '../../core/helpers/table.helpers';
 import { ErroCargaComponent } from './erro-carga.component';
 import { AjudaChatComponent } from './ajuda-chat.component';
 
@@ -49,7 +49,7 @@ interface DadosFolha {
 @Component({
   selector: 'app-ponto-retificar',
   standalone: true,
-  imports: [FormsModule, RouterLink, FmtDatePipe, HoraMaskDirective, ErroCargaComponent, AjudaChatComponent],
+  imports: [FormsModule, RouterLink, HoraMaskDirective, ErroCargaComponent, AjudaChatComponent],
   template: `
     <h1>Retificação de Ponto</h1>
     <div class="topo-bar">
@@ -74,7 +74,7 @@ interface DadosFolha {
       <div class="error-box">{{ erro() }}</div>
     } @else {
       <p class="text-muted-sm periodo">
-        Folha {{ tipoLabel() }} — {{ dados()!.data_inicio | fmtDate }} a {{ dados()!.data_fim | fmtDate }}
+        Folha {{ tipoLabel() }} — {{ periodoFolhaLabel() }}
       </p>
       @if (limiteFmt()) {
         @if (prazoExpirado()) {
@@ -379,6 +379,12 @@ export class PontoRetificarComponent implements OnInit, OnDestroy {
   }
 
   tipoLabel(): string { return this.dados()?.tipo === 'MENSAL' ? 'mensal' : 'semanal'; }
+
+  /** Período do cabeçalho: mensal = "Junho/2026"; semanal = "dd/mm/aaaa a dd/mm/aaaa". */
+  periodoFolhaLabel(): string {
+    const d = this.dados();
+    return d ? periodoFolha(d.tipo, d.data_inicio, d.data_fim, ' a ') : '';
+  }
 
   /** Dia de status (Feriado/Falta/DISPOSI/…) — tem letras nas células, não horas. */
   isStatus(l: LinhaPonto): boolean {

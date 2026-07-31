@@ -1,5 +1,6 @@
 import { PaginationMeta } from '../models/user.model';
 import { ColumnFilterState } from '../../shared/components/column-filter.component';
+import { formatarDataBr } from './date.helpers';
 
 /**
  * Extrai valores distintos do meta de paginação para um dado campo.
@@ -44,6 +45,9 @@ export function buildReportParams(
   return params;
 }
 
+/** Ano de implantação do módulo de ponto — piso de qualquer seleção de período da feature. */
+export const ANO_MINIMO_PONTO = 2026;
+
 /** Nomes dos meses em pt-BR (índice 1-12; o índice 0 é vazio). */
 export const MESES = ['', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
   'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
@@ -51,4 +55,26 @@ export const MESES = ['', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Ju
 /** Retorna o nome do mês dado o número (1-12). */
 export function mesNome(m: number): string {
   return MESES[m] || String(m);
+}
+
+/** Competência de uma folha mensal ("Junho/2026") a partir da data ISO 'YYYY-MM-DD'. */
+export function competenciaMensal(dataIso: string): string {
+  return `${mesNome(parseInt(dataIso.slice(5, 7), 10))}/${dataIso.slice(0, 4)}`;
+}
+
+/** Competência em forma de slug para nome de arquivo ("junho-2026" — minúsculo, sem acento). */
+export function competenciaMensalSlug(dataIso: string): string {
+  return competenciaMensal(dataIso)
+    .toLowerCase()
+    .normalize('NFD').replace(/\p{M}/gu, '')
+    .replace('/', '-');
+}
+
+/**
+ * Período de exibição de uma folha/lote de ponto: mensal = competência ("Junho/2026");
+ * semanal = intervalo de datas ("dd/mm/aaaa — dd/mm/aaaa", separador configurável).
+ */
+export function periodoFolha(tipo: string, dataInicio: string, dataFim: string, sep = ' — '): string {
+  if (tipo === 'MENSAL') return competenciaMensal(dataInicio);
+  return `${formatarDataBr(dataInicio)}${sep}${formatarDataBr(dataFim)}`;
 }
