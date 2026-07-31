@@ -53,15 +53,13 @@ import { RegistroManualPontoComponent } from './registro-manual-ponto.component'
         <app-banco-horas-pessoal />
       </div>
 
-      <!-- Registro manual de ponto (oculto até a reativação — P3/T-2.1) -->
-      @if (registroManualDisponivel) {
-        <button class="card-custom card-pick" [class.active]="activeCard() === 'manual'" (click)="toggleCard('manual')">
-          <strong>Registro manual de ponto</strong>
-        </button>
-        <div class="painel" [hidden]="activeCard() !== 'manual'">
-          <app-registro-manual-ponto />
-        </div>
-      }
+      <!-- Registro manual de ponto -->
+      <button class="card-custom card-pick" [class.active]="activeCard() === 'manual'" (click)="toggleCard('manual')">
+        <strong>Registro manual de ponto</strong>
+      </button>
+      <div class="painel" [hidden]="activeCard() !== 'manual'">
+        <app-registro-manual-ponto />
+      </div>
     </div>
 
     <!-- Chat de ajuda com IA (teste piloto: só esta página) — se auto-esconde sem a flag 'ajudaIa' -->
@@ -81,9 +79,6 @@ export class PontoBancoComponent implements OnInit {
 
   // Navegação por cards (mesmo padrão de /admin/ponto)
   activeCard = signal<'folhas' | 'manual' | 'banco' | null>(null);
-
-  /** Card "Registro manual" oculto até a reativação (P3/T-2.1); import preservado. */
-  protected readonly registroManualDisponivel = false;
 
   folhas = signal<MinhaFolha[]>([]);
   loading = signal(true);

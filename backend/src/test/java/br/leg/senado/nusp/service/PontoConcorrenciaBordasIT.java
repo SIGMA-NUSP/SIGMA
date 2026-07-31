@@ -53,7 +53,8 @@ import jakarta.persistence.PersistenceContext;
  *
  * <p>{@code @SpringBootTest} porque {@code @DataJpaTest} não instancia services e as threads não
  * enxergariam o seed; sem rollback automático, a limpeza é manual. O {@link Clock} é FIXO porque
- * {@code solicitar} só aceita dia útil FUTURO do mês corrente. Toda pessoa dos cenários já tem
+ * {@code solicitar} aceita apenas dias úteis futuros do mês corrente e dos dois seguintes. Toda
+ * pessoa dos cenários já tem
  * linha em PNT_BANCO_SALDO: pessoa sem linha não bloqueia ninguém, e duas publicações simultâneas
  * da PRIMEIRA folha dela colidem na UK UQ_PNT_SALDO_PESSOA em vez de esperar.
  */

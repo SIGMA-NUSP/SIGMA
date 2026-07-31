@@ -1353,13 +1353,7 @@ describe('GradeRetificacoesComponent', () => {
     });
   });
 
-  // ═══════════════════════════════════════════════════════════════════
-  // RENDER — a grade alcança o mês vivo na virada do ano
-  //
-  // A correção está no TEMPLATE (`[anos]="anosSeletor"`): sem render, apagar esse binding deixaria
-  // a suíte verde com o admin de novo sem acesso a dezembro em janeiro — bem no prazo de retificação.
-  // ═══════════════════════════════════════════════════════════════════
-  describe('render — o seletor da barra cruza a virada do ano', () => {
+  describe('render — o seletor da barra propaga o período mensal', () => {
     function renderizar(hoje: string): ComponentFixture<GradeRetificacoesComponent> {
       vi.useFakeTimers({ toFake: ['Date'] });
       vi.setSystemTime(new Date(hoje));
@@ -1370,32 +1364,47 @@ describe('GradeRetificacoesComponent', () => {
 
     const seletor = (f: ComponentFixture<GradeRetificacoesComponent>) =>
       f.debugElement.query(By.directive(MesAnoSelectorComponent)).componentInstance as MesAnoSelectorComponent;
-    const setaVoltar = (f: ComponentFixture<GradeRetificacoesComponent>) =>
-      f.debugElement.query(By.css('app-mes-ano-selector button[aria-label="Mês anterior"]'))
+    const selectMes = (f: ComponentFixture<GradeRetificacoesComponent>) =>
+      f.debugElement.query(By.css('app-mes-ano-selector select.sel-mes'))
+        .nativeElement as HTMLSelectElement;
+    const setaAvancar = (f: ComponentFixture<GradeRetificacoesComponent>) =>
+      f.debugElement.query(By.css('app-mes-ano-selector button[aria-label="Próximo mês"]'))
         .nativeElement as HTMLButtonElement;
 
-    it('em 05/01/2027 o ‹ está habilitado e o clique pede a grade de DEZEMBRO/2026', () => {
-      const fixture = renderizar('2027-01-05T09:00:00-03:00');
+    it('selecionar um mês passado pede a grade correspondente', () => {
+      const fixture = renderizar('2026-07-12T10:00:00-03:00');
       const comp = fixture.componentInstance;
 
-      expect(seletor(fixture).anos()).toEqual([2026, 2027]);   // o range chega ao filho pelo [anos]
-      expect(setaVoltar(fixture).disabled).toBe(false);
-
       apiGet.mockClear();
-      setaVoltar(fixture).click();                             // clique real na seta ‹
+      selectMes(fixture).value = '1';
+      selectMes(fixture).dispatchEvent(new Event('change'));
       fixture.detectChanges();
 
-      expect(comp.anoMes()).toEqual({ ano: 2026, mes: 12 });
+      expect(comp.anoMes()).toEqual({ ano: 2026, mes: 1 });
       expect(apiGet).toHaveBeenCalledWith('/api/admin/ponto/retificacoes/grade', {
-        categoria: 'operadores', ano: 2026, mes: 12,
+        categoria: 'operadores', ano: 2026, mes: 1,
       });
-      expect(comp.tituloMesAno()).toBe('Dezembro de 2026');    // o modal Ocorrências segue o mês exibido
+      expect(comp.tituloMesAno()).toBe('Janeiro de 2026');
     });
 
-    it('regressão: em julho o seletor da barra segue preso ao ano corrente (uma <option>, ‹ dentro do ano)', () => {
+    it('navegar até o teto futuro pede a grade e desabilita a seta seguinte', () => {
       const fixture = renderizar('2026-07-12T10:00:00-03:00');
+      const comp = fixture.componentInstance;
+
       expect(seletor(fixture).anos()).toEqual([2026]);
-      expect(fixture.debugElement.queryAll(By.css('app-mes-ano-selector select.sel-ano option'))).toHaveLength(1);
+      apiGet.mockClear();
+
+      setaAvancar(fixture).click();
+      fixture.detectChanges();
+      setaAvancar(fixture).click();
+      fixture.detectChanges();
+
+      expect(comp.anoMes()).toEqual({ ano: 2026, mes: 9 });
+      expect(apiGet).toHaveBeenLastCalledWith('/api/admin/ponto/retificacoes/grade', {
+        categoria: 'operadores', ano: 2026, mes: 9,
+      });
+      expect(comp.tituloMesAno()).toBe('Setembro de 2026');
+      expect(setaAvancar(fixture).disabled).toBe(true);
     });
   });
 });

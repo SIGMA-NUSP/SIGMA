@@ -5,11 +5,9 @@ import { RegistroManualPontoComponent } from './registro-manual-ponto.component'
 
 /**
  * RegistroManualPontoComponent: esqueleto da página "Registro manual de ponto" (card de
- * /ponto, oculto por flag). Sem backend: os campos de hora e as câmeras são placeholders e
- * `dias()` é um computed local do relógio — não há HTTP para mockar. Trava-se que o range de
- * anos chega ao `app-mes-ano-selector` pelo `[anos]` e que a navegação real (clique na seta ‹)
- * reconstrói a lista de dias do mês vizinho. Relógio congelado (`{toFake:['Date']}`) ANTES de
- * `createComponent`: `hoje`/`ano`/`mes` e o `anosSeletor` são lidos no field initializer.
+ * /ponto). Sem backend: os campos de hora e as câmeras são placeholders e `dias()` é um
+ * computed local do relógio — não há HTTP para mockar. Os testes exercitam o seletor filho
+ * renderizado e confirmam que sua emissão reconstrói a lista de dias do período escolhido.
  */
 describe('RegistroManualPontoComponent', () => {
   beforeEach(async () => {
@@ -34,6 +32,12 @@ describe('RegistroManualPontoComponent', () => {
   const setaVoltar = (f: ComponentFixture<RegistroManualPontoComponent>) =>
     f.debugElement.query(By.css('app-mes-ano-selector button[aria-label="Mês anterior"]'))
       .nativeElement as HTMLButtonElement;
+  const setaAvancar = (f: ComponentFixture<RegistroManualPontoComponent>) =>
+    f.debugElement.query(By.css('app-mes-ano-selector button[aria-label="Próximo mês"]'))
+      .nativeElement as HTMLButtonElement;
+  const selectMes = (f: ComponentFixture<RegistroManualPontoComponent>) =>
+    f.debugElement.query(By.css('app-mes-ano-selector select.sel-mes'))
+      .nativeElement as HTMLSelectElement;
   /** Rótulos "dd/mm - xxx" renderizados (um por dia do mês exibido). */
   const rotulosNoDom = (f: ComponentFixture<RegistroManualPontoComponent>) =>
     f.debugElement.queryAll(By.css('.dia-card .col-dia'))
@@ -53,28 +57,41 @@ describe('RegistroManualPontoComponent', () => {
     expect(rotulosNoDom(fixture)[0]).toMatch(/^01\/07 - /);
   });
 
-  it('em 05/01/2027 o seletor recebe [2026, 2027] e o ‹ leva a lista para DEZEMBRO/2026', () => {
-    const fixture = renderizar('2027-01-05T09:00:00-03:00');
+  it('navega até o teto futuro e regenera os 30 dias de setembro', () => {
+    const fixture = renderizar('2026-07-12T10:00:00-03:00');
     const comp = fixture.componentInstance;
 
-    expect(seletor(fixture).anos()).toEqual([2026, 2027]);   // o range chega ao filho pelo [anos]
-    expect(setaVoltar(fixture).disabled).toBe(false);
-
-    setaVoltar(fixture).click();                             // clique real na seta ‹
+    setaAvancar(fixture).click();
+    fixture.detectChanges();
+    setaAvancar(fixture).click();
     fixture.detectChanges();
 
     expect(comp.ano()).toBe(2026);
-    expect(comp.mes()).toBe(12);
+    expect(comp.mes()).toBe(9);
+    expect(setaAvancar(fixture).disabled).toBe(true);
     const rotulos = rotulosNoDom(fixture);
-    expect(rotulos).toHaveLength(31);                        // dezembro tem 31 dias
-    expect(rotulos.every(r => rotuloDoMes('12').test(r))).toBe(true);
-    expect(rotulos[0]).toMatch(/^01\/12 - /);
-    expect(rotulos[30]).toMatch(/^31\/12 - /);
+    expect(rotulos).toHaveLength(30);
+    expect(rotulos.every(r => rotuloDoMes('09').test(r))).toBe(true);
+    expect(rotulos[0]).toMatch(/^01\/09 - /);
+    expect(rotulos[29]).toMatch(/^30\/09 - /);
   });
 
-  it('regressão: em julho o seletor segue preso ao ano corrente (uma <option> de ano)', () => {
+  it('navega para janeiro de 2026 e regenera os dias no piso do range', () => {
     const fixture = renderizar('2026-07-12T10:00:00-03:00');
+    const comp = fixture.componentInstance;
+
     expect(seletor(fixture).anos()).toEqual([2026]);
-    expect(fixture.debugElement.queryAll(By.css('app-mes-ano-selector select.sel-ano option'))).toHaveLength(1);
+    selectMes(fixture).value = '1';
+    selectMes(fixture).dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+
+    expect(comp.ano()).toBe(2026);
+    expect(comp.mes()).toBe(1);
+    expect(setaVoltar(fixture).disabled).toBe(true);
+    const rotulos = rotulosNoDom(fixture);
+    expect(rotulos).toHaveLength(31);
+    expect(rotulos.every(r => rotuloDoMes('01').test(r))).toBe(true);
+    expect(rotulos[0]).toMatch(/^01\/01 - /);
+    expect(rotulos[30]).toMatch(/^31\/01 - /);
   });
 });

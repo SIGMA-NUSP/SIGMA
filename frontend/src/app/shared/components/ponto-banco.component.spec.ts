@@ -12,10 +12,10 @@ import { RegistroManualPontoComponent } from './registro-manual-ponto.component'
 
 /**
  * PontoBancoComponent (página `/ponto`, compartilhada por operador, técnico e admin com
- * folha): busca de "minhas folhas" com canal de erro + retry, acordeão de cards, Voltar
- * roteado por papel e a flag `registroManualDisponivel` — a ocultação vive num `@if` do
- * template, então os testes de flag e de erro RENDERIZAM, assertando presença/ausência de
- * componente, nunca layout/CSS. TestBed sem `detectChanges()` por padrão — `ngOnInit` à mão;
+ * folha): busca de "minhas folhas" com canal de erro + retry, acordeão com registro manual
+ * e Voltar roteado por papel. Os testes do acordeão e de erro renderizam para verificar o
+ * contrato visível da página, nunca layout/CSS. TestBed sem `detectChanges()` por padrão —
+ * `ngOnInit` à mão;
  * `ApiService`/`AuthService` mockados via `useValue` (o `role` é um signal writable). O `get`
  * mockado despacha por URL: o `BancoHorasPessoalComponent`, instanciado sempre (fica em
  * `[hidden]`, não em `@if`), dispara os seus próprios GETs. Relógio congelado antes de
@@ -229,37 +229,61 @@ describe('PontoBancoComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Flag registroManualDisponivel = false (P3/T-2.1 — feature fora da v1)
+  // Registro manual no acordeão
   // ═══════════════════════════════════════════════════════════════════
-  describe('flag registroManualDisponivel', () => {
-    it('a flag está desligada', () => {
-      const { comp } = criar();
-      expect((comp as any).registroManualDisponivel).toBe(false);
-    });
+  describe('registro manual', () => {
+    function botaoCard(fixture: any, texto: string): HTMLButtonElement {
+      const botao = fixture.debugElement.queryAll(By.css('button.card-pick'))
+        .map((d: any) => d.nativeElement as HTMLButtonElement)
+        .find((b: HTMLButtonElement) => b.textContent?.trim() === texto);
+      if (!botao) throw new Error(`card "${texto}" não encontrado`);
+      return botao;
+    }
 
-    it('a LÓGICA não barra o card oculto: toggleCard("manual") ainda muda o estado (o guard é do template)', () => {
-      const comp = criarCarregado();
-      comp.toggleCard('manual');
-      expect(comp.activeCard()).toBe('manual');   // caracterização: nada além do @if impede
-    });
-
-    it('renderizado: com a flag desligada, o RegistroManualPonto não é instanciado', () => {
-      // Único par de testes que renderiza: a ocultação vive no `@if (registroManualDisponivel)`.
-      // A asserção é sobre a PRESENÇA do filho (feature ligada/desligada), não sobre layout/CSS —
-      // sobrevive a qualquer reforma do acordeão (ressalva do GATE).
+    it('instancia o componente e exibe o botão normalmente', () => {
       const { fixture } = criar();
       fixture.detectChanges();
-      expect(fixture.debugElement.query(By.directive(RegistroManualPontoComponent))).toBeNull();
+
+      expect(fixture.debugElement.query(By.directive(RegistroManualPontoComponent))).not.toBeNull();
+      expect(botaoCard(fixture, 'Registro manual de ponto')).toBeTruthy();
     });
 
-    it('renderizado: ligando a flag, ele aparece — o `@if` é o ÚNICO guard da feature', () => {
-      // Controle de sensibilidade do teste acima: prova que a query ENCONTRA o componente quando a
-      // feature está ligada (senão o `toBeNull()` acima passaria por qualquer motivo — seletor
-      // errado, componente renomeado). `protected readonly` é só TS: em runtime o campo é gravável.
+    it('o botão abre e fecha o painel manual atualizando activeCard', () => {
       const { fixture, comp } = criar();
-      (comp as any).registroManualDisponivel = true;
       fixture.detectChanges();
-      expect(fixture.debugElement.query(By.directive(RegistroManualPontoComponent))).not.toBeNull();
+      const botaoManual = botaoCard(fixture, 'Registro manual de ponto');
+      const painelManual = botaoManual.nextElementSibling as HTMLDivElement;
+
+      expect(comp.activeCard()).toBeNull();
+      expect(painelManual.hidden).toBe(true);
+
+      botaoManual.click();
+      fixture.detectChanges();
+      expect(comp.activeCard()).toBe('manual');
+      expect(painelManual.hidden).toBe(false);
+
+      botaoManual.click();
+      fixture.detectChanges();
+      expect(comp.activeCard()).toBeNull();
+      expect(painelManual.hidden).toBe(true);
+    });
+
+    it('ao abrir outro card mantém somente um painel aberto e preserva a instância manual', () => {
+      const { fixture, comp } = criar();
+      fixture.detectChanges();
+      const manualAntes = fixture.debugElement.query(By.directive(RegistroManualPontoComponent)).componentInstance;
+
+      botaoCard(fixture, 'Registro manual de ponto').click();
+      fixture.detectChanges();
+      botaoCard(fixture, 'Banco de horas').click();
+      fixture.detectChanges();
+
+      const paineis = fixture.debugElement.queryAll(By.css('.painel'))
+        .map(d => d.nativeElement as HTMLDivElement);
+      expect(comp.activeCard()).toBe('banco');
+      expect(paineis.filter(p => !p.hidden)).toHaveLength(1);
+      expect(fixture.debugElement.query(By.directive(RegistroManualPontoComponent)).componentInstance)
+        .toBe(manualAntes);
     });
   });
 

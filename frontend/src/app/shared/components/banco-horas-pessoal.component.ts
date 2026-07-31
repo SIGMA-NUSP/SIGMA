@@ -34,14 +34,14 @@ const GUIA_SOLICITACOES =
   'Não foi possível carregar as suas solicitações de folga. Pode haver pedidos pendentes ou já ' +
   'aprovados que não aparecem aqui.';
 
-/** GET /api/ponto/banco — saldo + situação do mês pedido (E7). */
+/** GET /api/ponto/banco — saldo + situação do mês pedido. */
 interface BancoInfo {
   saldo_min: number;
   saldo_fmt: string;
   sem_folha_oficial?: boolean;
   carga_horaria: number;
   folgas_mes: number;
-  dias_bloqueados: { data: string; motivo: string }[];
+  dias_bloqueados: { data: string; motivo?: string | null }[];
 }
 
 interface SolicitacaoRow {
@@ -95,10 +95,9 @@ interface SolicitacaoRow {
         </div>
       }
 
-      <!-- C-2.2: seletor mês/ano (relógio local — T-3.1; [F37]: em janeiro alcança dezembro, o
-           mês da folha recém-publicada). NUNCA sai do DOM: junto com o retry da caixa de erro, é
-           um dos dois gatilhos de nova carga — e o pai mantém este componente montado em
-           [hidden], então fechar/reabrir o card não o remontaria (F44). -->
+      <!-- O seletor mantém a navegação entre janeiro de 2026 e o segundo mês futuro.
+           Ele nunca sai do DOM: junto com o retry da caixa de erro, é um dos dois gatilhos de
+           nova carga, e o pai mantém este componente montado em [hidden]. -->
       <app-mes-ano-selector [anos]="anosSeletor" (mudou)="onMesAno($event)" />
 
       @if (erroCarga()) {
@@ -247,7 +246,7 @@ export class BancoHorasPessoalComponent implements OnInit {
   private hoje = new Date();
   /** Mês/ano exibidos ({ano, mes} do seletor — inicia no mês corrente, como o seletor). */
   anoMes = signal<MesAno>({ ano: this.hoje.getFullYear(), mes: this.hoje.getMonth() + 1 });
-  /** Anos ofertados no seletor (F37/C14): a virada do ano só se abre em dezembro e janeiro. */
+  /** Anos necessários para cobrir de janeiro de 2026 até o segundo mês futuro. */
   readonly anosSeletor = anosNavegaveis(this.hoje);
 
   /** Mês/ano cuja resposta do GET está aplicada em `dados`. Zerado no disparo de TODA recarga
@@ -266,24 +265,24 @@ export class BancoHorasPessoalComponent implements OnInit {
   /** Saldo exibido = saldo do backend − dias marcados × débito (decremento visual — C-3.2). */
   saldoVisualMin = computed(() => (this.dados()?.saldo_min ?? 0) - this.selecionados().size * this.debitoPorDia());
   saldoVisualFmt = computed(() => formatarSaldoMin(this.saldoVisualMin()));
-  /** C-3.3: sem saldo para mais um dia → retângulos ainda não marcados desabilitam. */
+  /** Sem saldo para mais um dia, os dias ainda não marcados ficam desabilitados. */
   private podeMarcarMais = computed(() => this.saldoVisualMin() >= this.debitoPorDia());
 
   private bloqueadosPorDia = computed(() => {
-    const m = new Map<string, string>();
-    for (const b of this.dados()?.dias_bloqueados ?? []) m.set(b.data, b.motivo);
+    const m = new Map<string, string | null>();
+    for (const b of this.dados()?.dias_bloqueados ?? []) m.set(b.data, b.motivo ?? null);
     return m;
   });
 
   /**
-   * Estado por-dia do MiniCalendario (Q24): referência estável — os signals
+   * Estado por dia do MiniCalendario: referência estável — os signals
    * lidos aqui dentro são rastreados pelo computed do calendário.
    */
   protected readonly estadoDia = (d: Date): DiaEstado | null => {
     const mc = this.mesCarregado();
     const ma = this.anoMes();
     if (!mc || mc.ano !== ma.ano || mc.mes !== ma.mes) {
-      // Sem payload do mês exibido, nenhum dia é clicável — vale para TODA recarga (F45),
+      // Sem payload do mês exibido, nenhum dia é clicável — vale para toda recarga,
       // inclusive a pós-mutação, e não só para a troca de mês.
       return this.erroCarga()
         ? { desabilitado: true, rotulo: 'Não foi possível carregar este mês' }
@@ -293,8 +292,11 @@ export class BancoHorasPessoalComponent implements OnInit {
     if (this.selecionados().has(iso)) {
       return { selecionado: true, marcado: true, rotulo: 'Selecionado — clique para desmarcar' };
     }
-    const motivo = this.bloqueadosPorDia().get(iso);
-    if (motivo) return { desabilitado: true, rotulo: motivo };
+    const bloqueios = this.bloqueadosPorDia();
+    if (bloqueios.has(iso)) {
+      const motivo = bloqueios.get(iso);
+      return motivo ? { desabilitado: true, rotulo: motivo } : { desabilitado: true };
+    }
     if (!this.podeMarcarMais()) return { desabilitado: true, rotulo: 'Saldo insuficiente para mais um dia' };
     return null;
   };
