@@ -2,20 +2,21 @@ package br.leg.senado.nusp.service;
 
 import br.leg.senado.nusp.entity.PontoDiaMarcacao;
 import br.leg.senado.nusp.entity.PontoPessoaMarcacao;
-import br.leg.senado.nusp.enums.TipoDiaMarcacao;
-import br.leg.senado.nusp.enums.TipoPessoaMarcacao;
+import br.leg.senado.nusp.entity.PontoTipoMarcacao;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
+import br.leg.senado.nusp.repository.PontoTipoMarcacaoRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -24,10 +25,13 @@ import static br.leg.senado.nusp.service.NativeQueryUtils.asList;
 import static br.leg.senado.nusp.service.NativeQueryUtils.asMap;
 
 /**
- * Configuração de marcações do ponto (E6, backend do "Configurar"): dias globais
- * (FERIADO/PONTO_FACULTATIVO — Q6) e marcações por pessoa-dia (à disposição/
- * atestado/férias/recesso/lic. médica — Q7/F#4). Qualquer admin configura (Q36).
- * Trocar tipo = update; remover = delete físico (é configuração, não fato
+ * Marcações de ocorrência do ponto (backend do modal "Ocorrências"): dias
+ * globais, que valem para todos, e marcações por pessoa-dia. O tipo de cada
+ * marcação vem do catálogo ({@link TipoMarcacaoService}) e precisa ser do escopo
+ * certo — um tipo GLOBAL não marca um funcionário, um INDIVIDUAL não marca o dia
+ * de todos. Qualquer admin marca; cadastrar tipos é só do master.
+ *
+ * <p>Trocar tipo = update; remover = delete físico (é configuração, não fato
  * auditável além do CRIADO_POR_ID). Fim de semana é aceito para qualquer tipo —
  * o cinza de fds na grade é apenas visual.
  */
@@ -39,19 +43,25 @@ public class MarcacaoService {
 
     private final PontoDiaMarcacaoRepository diaRepo;
     private final PontoPessoaMarcacaoRepository pessoaRepo;
+    private final PontoTipoMarcacaoRepository tipoRepo;
     private final PessoaCadastroLookup pessoaCadastro;
 
-    /** Marcações globais + pessoais do mês. Range sargável: DATA >= 1º dia AND < 1º do mês seguinte (gotcha 4). */
+    /**
+     * Marcações globais + pessoais do mês, cada uma já com o nome e a badge do
+     * tipo — a tela não guarda mapa de rótulo nenhum. Range sargável:
+     * DATA >= 1º dia AND < 1º do mês seguinte.
+     */
     @Transactional(readOnly = true)
     public Map<String, Object> listar(int ano, int mes) {
         LocalDate ini = inicioMes(ano, mes);
         LocalDate fim = ini.plusMonths(1);
+        Map<String, PontoTipoMarcacao> catalogo = catalogoPorId();
 
         List<Map<String, Object>> globais = new ArrayList<>();
         for (PontoDiaMarcacao m : diaRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(ini, fim)) {
             Map<String, Object> g = new LinkedHashMap<>();
             g.put("data", m.getData().toString());          // YYYY-MM-DD
-            g.put("tipo", m.getTipo().getValor());
+            descreverTipo(g, catalogo.get(m.getTipoId()), m.getTipoId());
             globais.add(g);
         }
 
@@ -61,7 +71,7 @@ public class MarcacaoService {
             p.put("pessoa_id", m.getPessoaId());
             p.put("pessoa_tipo", m.getPessoaTipo());
             p.put("data", m.getData().toString());
-            p.put("tipo", m.getTipo().getValor());
+            descreverTipo(p, catalogo.get(m.getTipoId()), m.getTipoId());
             pessoais.add(p);
         }
 
@@ -72,9 +82,9 @@ public class MarcacaoService {
     }
 
     /**
-     * Aplica o lote do modal Configurar: upsert/remoção de marcações globais e/ou
-     * de UMA pessoa (o modal envia globais quando "Todos", pessoais quando um
-     * funcionário). Transacional (tudo ou nada).
+     * Aplica o lote do modal de ocorrências: upsert/remoção de marcações globais
+     * e/ou de UMA pessoa (o modal envia globais quando "Todos os Funcionários",
+     * pessoais quando um funcionário). Transacional (tudo ou nada).
      */
     @Transactional
     public void aplicarLote(Map<String, Object> body, String adminId) {
@@ -85,12 +95,13 @@ public class MarcacaoService {
             for (Object it : asList(globais.get("aplicar"), "globais.aplicar")) {
                 Map<String, Object> item = asItem(it, "globais.aplicar");
                 LocalDate data = parseData(item.get("data"));
-                TipoDiaMarcacao tipo = tipoGlobal(item.get("tipo"));
+                PontoTipoMarcacao tipo = tipoDoEscopo(item.get("tipo_id"),
+                        PontoTipoMarcacao.ESCOPO_GLOBAL, "global");
                 PontoDiaMarcacao m = diaRepo.findByData(data).orElseGet(PontoDiaMarcacao::new);
                 m.setData(data);
-                m.setTipo(tipo);
+                m.setTipoId(tipo.getId());
                 m.setCriadoPorId(adminId);
-                diaRepo.save(m);
+                gravar(() -> diaRepo.saveAndFlush(m), tipo);
             }
             for (Object d : asList(globais.get("remover"), "globais.remover")) {
                 diaRepo.deleteByData(parseData(d));
@@ -115,16 +126,17 @@ public class MarcacaoService {
             for (Object it : asList(pessoais.get("aplicar"), "pessoais.aplicar")) {
                 Map<String, Object> item = asItem(it, "pessoais.aplicar");
                 LocalDate data = parseData(item.get("data"));
-                TipoPessoaMarcacao tipo = tipoPessoa(item.get("tipo"));
+                PontoTipoMarcacao tipo = tipoDoEscopo(item.get("tipo_id"),
+                        PontoTipoMarcacao.ESCOPO_INDIVIDUAL, "pessoal");
                 PontoPessoaMarcacao m = pessoaRepo
                         .findByPessoaIdAndPessoaTipoAndData(pessoaId, pessoaTipo, data)
                         .orElseGet(PontoPessoaMarcacao::new);
                 m.setPessoaId(pessoaId);
                 m.setPessoaTipo(pessoaTipo);
                 m.setData(data);
-                m.setTipo(tipo);
+                m.setTipoId(tipo.getId());
                 m.setCriadoPorId(adminId);
-                pessoaRepo.save(m);
+                gravar(() -> pessoaRepo.saveAndFlush(m), tipo);
             }
             for (Object d : asList(pessoais.get("remover"), "pessoais.remover")) {
                 pessoaRepo.deleteByPessoaIdAndPessoaTipoAndData(pessoaId, pessoaTipo, parseData(d));
@@ -151,24 +163,51 @@ public class MarcacaoService {
         }
     }
 
-    private TipoDiaMarcacao tipoGlobal(Object v) {
+    /**
+     * Grava a marcação traduzindo a corrida com a exclusão do tipo: entre a leitura do catálogo e o
+     * INSERT, o master pode ter excluído aquele tipo — a FK recusa, e o admin que só queria marcar um
+     * dia merece saber o que houve, não um erro interno.
+     */
+    private void gravar(Runnable escrita, PontoTipoMarcacao tipo) {
         try {
-            TipoDiaMarcacao t = TipoDiaMarcacao.fromValor(str(v));
-            if (t == null) throw new ServiceValidationException("Tipo de marcação global obrigatório.");
-            return t;
-        } catch (IllegalArgumentException e) {
-            throw new ServiceValidationException(e.getMessage());
+            escrita.run();
+        } catch (DataIntegrityViolationException e) {
+            throw new ServiceValidationException("O tipo \"" + tipo.getNome()
+                    + "\" não está mais disponível. Recarregue as ocorrências e tente novamente.");
         }
     }
 
-    private TipoPessoaMarcacao tipoPessoa(Object v) {
-        try {
-            TipoPessoaMarcacao t = TipoPessoaMarcacao.fromValor(str(v));
-            if (t == null) throw new ServiceValidationException("Tipo de marcação pessoal obrigatório.");
-            return t;
-        } catch (IllegalArgumentException e) {
-            throw new ServiceValidationException(e.getMessage());
+    /** O catálogo inteiro indexado por id — são poucas linhas, e a listagem do mês precisa de todas. */
+    private Map<String, PontoTipoMarcacao> catalogoPorId() {
+        Map<String, PontoTipoMarcacao> porId = new HashMap<>();
+        for (PontoTipoMarcacao t : tipoRepo.findAll()) porId.put(t.getId(), t);
+        return porId;
+    }
+
+    /** Nome e badge da marcação; sem o tipo no catálogo, o id cru — a tela nunca fica muda. */
+    private static void descreverTipo(Map<String, Object> destino, PontoTipoMarcacao tipo, String tipoId) {
+        destino.put("tipo_id", tipoId);
+        destino.put("nome", tipo != null ? tipo.getNome() : tipoId);
+        destino.put("badge", tipo != null ? tipo.getBadge() : "");
+    }
+
+    /**
+     * O tipo pedido, exigindo o escopo do lado que está sendo marcado: marcar um
+     * funcionário com um tipo de todos (ou o contrário) grava uma marcação que a
+     * tela nunca mostraria de volta.
+     */
+    private PontoTipoMarcacao tipoDoEscopo(Object v, String escopo, String rotuloDoLado) {
+        String id = str(v);
+        if (id.isBlank()) {
+            throw new ServiceValidationException("Tipo de marcação " + rotuloDoLado + " obrigatório.");
         }
+        PontoTipoMarcacao tipo = tipoRepo.findById(id).orElseThrow(
+                () -> new ServiceValidationException("Tipo de ocorrência não encontrado: " + id));
+        if (!escopo.equals(tipo.getEscopo())) {
+            throw new ServiceValidationException("O tipo \"" + tipo.getNome()
+                    + "\" não pode ser usado como marcação " + rotuloDoLado + ".");
+        }
+        return tipo;
     }
 
     private static String str(Object v) { return v == null ? "" : v.toString().strip(); }

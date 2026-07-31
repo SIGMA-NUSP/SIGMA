@@ -13,6 +13,7 @@ import br.leg.senado.nusp.service.ReportDocxService;
 import br.leg.senado.nusp.service.ReportPdfService;
 import br.leg.senado.nusp.service.ReportService;
 import br.leg.senado.nusp.service.RetificacaoService;
+import br.leg.senado.nusp.service.TipoMarcacaoService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -51,6 +52,7 @@ public class PontoController {
     private final PontoExclusaoService pontoExclusaoService;
     private final RetificacaoService retificacaoService;
     private final MarcacaoService marcacaoService;
+    private final TipoMarcacaoService tipoMarcacaoService;
     private final GradeRetificacaoService gradeRetificacaoService;
     private final PontoXlsxService pontoXlsxService;
     private final BancoHorasService bancoHorasService;
@@ -191,14 +193,57 @@ public class PontoController {
         return ResponseEntity.ok(Map.of("ok", true, "data", pontoService.reprocessarBanco()));
     }
 
-    /** Marcações do mês (globais + pessoa-dia) para o modal Configurar (qualquer admin — Q36). */
+    // ══ Catálogo de tipos de ocorrência ═════════════════════════
+    //
+    // Ler é de qualquer admin (alimenta os chips do modal de ocorrências); cadastrar e excluir é
+    // do admin master, conferido no service (403 "forbidden"), que é onde a permissão pode ser
+    // provada — o @AdminOnly aqui só barra quem não é admin.
+
+    /** Tipos do catálogo, opcionalmente de um escopo (GLOBAL | INDIVIDUAL). */
+    @AdminOnly
+    @GetMapping("/api/admin/ponto/tipos-marcacao")
+    public ResponseEntity<?> listarTiposMarcacao(@RequestParam(required = false) String escopo) {
+        return ResponseEntity.ok(Map.of("ok", true, "data", tipoMarcacaoService.listar(escopo)));
+    }
+
+    /** Cadastra os tipos de {@code {"tipos":[{nome, badge, escopo}, …]}} — tudo ou nada. */
+    @AdminOnly
+    @PostMapping("/api/admin/ponto/tipos-marcacao")
+    public ResponseEntity<?> criarTiposMarcacao(@RequestBody(required = false) Map<String, Object> body,
+                                                @AuthenticationPrincipal UserPrincipal principal) {
+        Map<String, Object> data = tipoMarcacaoService.criar(body, principal.getUsername(), principal.getId());
+        return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("ok", true, "data", data));
+    }
+
+    /** O que a exclusão do tipo vai apagar (consultivo — a verdade é a da transação de exclusão). */
+    @AdminOnly
+    @GetMapping("/api/admin/ponto/tipos-marcacao/{id}/exclusao/preview")
+    public ResponseEntity<?> previewExclusaoTipoMarcacao(@PathVariable String id,
+                                                         @AuthenticationPrincipal UserPrincipal principal) {
+        Map<String, Object> data = tipoMarcacaoService.previewExclusao(id, principal.getUsername());
+        return ResponseEntity.ok(Map.of("ok", true, "data", data));
+    }
+
+    /**
+     * Exclui o tipo e as marcações feitas com ele. Irreversível — a trilha fica em
+     * PNT_TIPO_MARC_EXCLUSAO_LOG.
+     */
+    @AdminOnly
+    @DeleteMapping("/api/admin/ponto/tipos-marcacao/{id}")
+    public ResponseEntity<?> excluirTipoMarcacao(@PathVariable String id,
+                                                 @AuthenticationPrincipal UserPrincipal principal) {
+        Map<String, Object> data = tipoMarcacaoService.excluir(id, principal.getUsername(), principal.getId());
+        return ResponseEntity.ok(Map.of("ok", true, "data", data));
+    }
+
+    /** Marcações do mês (globais + pessoa-dia) para o modal de ocorrências (qualquer admin). */
     @AdminOnly
     @GetMapping("/api/admin/ponto/marcacoes")
     public ResponseEntity<?> listarMarcacoes(@RequestParam int ano, @RequestParam int mes) {
         return ResponseEntity.ok(Map.of("ok", true, "data", marcacaoService.listar(ano, mes)));
     }
 
-    /** Aplica em lote o modal Configurar: upsert/remoção de marcações globais e/ou de uma pessoa. */
+    /** Aplica em lote o modal de ocorrências: upsert/remoção de marcações globais e/ou de uma pessoa. */
     @AdminOnly
     @PutMapping("/api/admin/ponto/marcacoes")
     public ResponseEntity<?> aplicarMarcacoes(@RequestBody Map<String, Object> body,

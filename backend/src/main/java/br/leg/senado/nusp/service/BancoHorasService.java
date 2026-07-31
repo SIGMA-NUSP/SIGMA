@@ -6,12 +6,11 @@ import br.leg.senado.nusp.entity.PontoBancoSaldo;
 import br.leg.senado.nusp.entity.PontoDiaMarcacao;
 import br.leg.senado.nusp.entity.PontoPessoaMarcacao;
 import br.leg.senado.nusp.entity.PontoSolicitacaoFolga;
+import br.leg.senado.nusp.entity.PontoTipoMarcacao;
 import br.leg.senado.nusp.entity.Tecnico;
 import br.leg.senado.nusp.enums.PapelPessoa;
 import br.leg.senado.nusp.enums.StatusSolicitacaoFolga;
 import br.leg.senado.nusp.enums.SubtipoAviso;
-import br.leg.senado.nusp.enums.TipoDiaMarcacao;
-import br.leg.senado.nusp.enums.TipoPessoaMarcacao;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.repository.AdministradorRepository;
 import br.leg.senado.nusp.repository.OperadorRepository;
@@ -19,6 +18,7 @@ import br.leg.senado.nusp.repository.PontoBancoSaldoRepository;
 import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoSolicitacaoFolgaRepository;
+import br.leg.senado.nusp.repository.PontoTipoMarcacaoRepository;
 import br.leg.senado.nusp.repository.TecnicoRepository;
 import br.leg.senado.nusp.service.DashboardQueryHelper.PagedResult;
 import jakarta.persistence.EntityManager;
@@ -108,6 +108,7 @@ public class BancoHorasService {
     private final PontoSolicitacaoFolgaRepository solicitacaoRepo;
     private final PontoDiaMarcacaoRepository diaMarcacaoRepo;
     private final PontoPessoaMarcacaoRepository pessoaMarcacaoRepo;
+    private final PontoTipoMarcacaoRepository tipoMarcacaoRepo;
     private final SaldoAberturaService saldoAberturaService;
     private final AvisoService avisoService;
     private final OperadorRepository operadorRepo;
@@ -538,21 +539,28 @@ public class BancoHorasService {
         return dias;
     }
 
-    /** Marcações (globais + da pessoa) e pedidos vivos do range, indexados por dia. */
-    private record Bloqueios(Map<LocalDate, TipoDiaMarcacao> globais,
-                             Map<LocalDate, TipoPessoaMarcacao> pessoais,
+    /**
+     * Marcações (globais + da pessoa) e pedidos vivos do range, indexados por
+     * dia. As marcações entram já como o NOME do tipo: é ele que o calendário
+     * exibe como motivo do bloqueio.
+     */
+    private record Bloqueios(Map<LocalDate, String> globais,
+                             Map<LocalDate, String> pessoais,
                              Map<LocalDate, StatusSolicitacaoFolga> vivas) {}
 
     private Bloqueios carregarBloqueios(String pessoaId, String pessoaTipo, LocalDate ini, LocalDate fim,
                                         Map<LocalDate, StatusSolicitacaoFolga> vivas) {
-        Map<LocalDate, TipoDiaMarcacao> globais = new HashMap<>();
+        Map<String, String> nomeDoTipo = new HashMap<>();
+        for (PontoTipoMarcacao t : tipoMarcacaoRepo.findAll()) nomeDoTipo.put(t.getId(), t.getNome());
+
+        Map<LocalDate, String> globais = new HashMap<>();
         for (PontoDiaMarcacao m : diaMarcacaoRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(ini, fim)) {
-            globais.put(m.getData(), m.getTipo());
+            globais.put(m.getData(), nomeDoTipo.get(m.getTipoId()));
         }
-        Map<LocalDate, TipoPessoaMarcacao> pessoais = new HashMap<>();
+        Map<LocalDate, String> pessoais = new HashMap<>();
         for (PontoPessoaMarcacao m : pessoaMarcacaoRepo
                 .findByPessoaIdAndPessoaTipoAndDataGreaterThanEqualAndDataLessThan(pessoaId, pessoaTipo, ini, fim)) {
-            pessoais.put(m.getData(), m.getTipo());
+            pessoais.put(m.getData(), nomeDoTipo.get(m.getTipoId()));
         }
         return new Bloqueios(globais, pessoais, vivas);
     }
@@ -572,10 +580,10 @@ public class BancoHorasService {
         if (!d.isAfter(hoje)) return MOTIVO_PASSADO;
         DayOfWeek dw = d.getDayOfWeek();
         if (dw == DayOfWeek.SATURDAY || dw == DayOfWeek.SUNDAY) return MOTIVO_FDS;
-        TipoDiaMarcacao global = b.globais().get(d);
-        if (global != null) return global.getRotulo();
-        TipoPessoaMarcacao pessoal = b.pessoais().get(d);
-        if (pessoal != null) return pessoal.getRotulo();
+        String global = b.globais().get(d);
+        if (global != null) return global;
+        String pessoal = b.pessoais().get(d);
+        if (pessoal != null) return pessoal;
         StatusSolicitacaoFolga viva = b.vivas().get(d);
         if (viva == StatusSolicitacaoFolga.PENDENTE) return MOTIVO_PENDENTE;
         if (viva == StatusSolicitacaoFolga.APROVADO) return MOTIVO_APROVADO;

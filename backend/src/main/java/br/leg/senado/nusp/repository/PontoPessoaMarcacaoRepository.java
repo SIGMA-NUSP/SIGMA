@@ -25,4 +25,7 @@ public interface PontoPessoaMarcacaoRepository extends JpaRepository<PontoPessoa
 
     /** Remove a marcação da pessoa no dia (desmarcar = delete físico). */
     void deleteByPessoaIdAndPessoaTipoAndData(String pessoaId, String pessoaTipo, LocalDate data);
+
+    /** Marcações feitas com um tipo do catálogo — o que morre quando o tipo é excluído. */
+    List<PontoPessoaMarcacao> findByTipoIdOrderByData(String tipoId);
 }

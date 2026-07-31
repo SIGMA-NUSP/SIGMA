@@ -4,9 +4,8 @@ import br.leg.senado.nusp.entity.PontoDiaMarcacao;
 import br.leg.senado.nusp.entity.PontoPessoaMarcacao;
 import br.leg.senado.nusp.entity.PontoRetificacao;
 import br.leg.senado.nusp.entity.PontoSolicitacaoFolga;
+import br.leg.senado.nusp.entity.PontoTipoMarcacao;
 import br.leg.senado.nusp.enums.StatusSolicitacaoFolga;
-import br.leg.senado.nusp.enums.TipoDiaMarcacao;
-import br.leg.senado.nusp.enums.TipoPessoaMarcacao;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.repository.AdministradorRepository;
 import br.leg.senado.nusp.repository.OperadorRepository;
@@ -14,6 +13,7 @@ import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoRetificacaoRepository;
 import br.leg.senado.nusp.repository.PontoSolicitacaoFolgaRepository;
+import br.leg.senado.nusp.repository.PontoTipoMarcacaoRepository;
 import br.leg.senado.nusp.repository.TecnicoRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -51,6 +51,9 @@ import java.util.stream.Stream;
 @RequiredArgsConstructor
 public class GradeRetificacaoService {
 
+    /** Texto da célula de folga aprovada — o XLSX conta as folgas do mês por ele. */
+    public static final String TEXTO_BANCO_DE_HORAS = "Banco de horas";
+
     /** Combobox da barra (B-3.1) → PESSOA_TIPO polimórfico das tabelas PNT_*. */
     private static final Map<String, String> CATEGORIAS = Map.of(
             "operadores", "OPERADOR",
@@ -61,6 +64,7 @@ public class GradeRetificacaoService {
     private final PontoSolicitacaoFolgaRepository folgaRepo;
     private final PontoDiaMarcacaoRepository diaRepo;
     private final PontoPessoaMarcacaoRepository pessoaRepo;
+    private final PontoTipoMarcacaoRepository tipoRepo;
     private final OperadorRepository operadorRepo;
     private final TecnicoRepository tecnicoRepo;
     private final AdministradorRepository administradorRepo;
@@ -121,19 +125,24 @@ public class GradeRetificacaoService {
             folgasPorPessoa.merge(s.getPessoaId(), 1, Integer::sum);
         }
 
-        Map<String, TipoPessoaMarcacao> pessoaIdx = new HashMap<>();
-        for (PontoPessoaMarcacao m : pessoais) pessoaIdx.put(chave(m.getPessoaId(), m.getData().getDayOfMonth()), m.getTipo());
+        // Nome exibido de cada tipo do catálogo — a célula e o rótulo do dia saem daqui.
+        Map<String, String> nomeDoTipo = new HashMap<>();
+        for (PontoTipoMarcacao t : tipoRepo.findAll()) nomeDoTipo.put(t.getId(), t.getNome());
 
-        Map<Integer, TipoDiaMarcacao> globalIdx = new HashMap<>();
-        for (PontoDiaMarcacao g : globais) globalIdx.put(g.getData().getDayOfMonth(), g.getTipo());
+        Map<String, String> pessoaIdx = new HashMap<>();
+        for (PontoPessoaMarcacao m : pessoais) {
+            pessoaIdx.put(chave(m.getPessoaId(), m.getData().getDayOfMonth()), nomeDoTipo.get(m.getTipoId()));
+        }
+
+        Map<Integer, String> globalIdx = new HashMap<>();
+        for (PontoDiaMarcacao g : globais) globalIdx.put(g.getData().getDayOfMonth(), nomeDoTipo.get(g.getTipoId()));
 
         // ── dias do mês (rótulo/fim de semana + marcação global do dia) ──
         List<Dia> dias = new ArrayList<>();
         for (int d = 1; d <= diasNoMes; d++) {
             LocalDate data = ini.withDayOfMonth(d);
             int dow = data.getDayOfWeek().getValue();   // 1=segunda … 7=domingo (ISO)
-            TipoDiaMarcacao g = globalIdx.get(d);
-            dias.add(new Dia(d, data, dow, dow >= 6, g == null ? null : g.getRotulo()));
+            dias.add(new Dia(d, data, dow, dow >= 6, globalIdx.get(d)));
         }
 
         // ── funcionários (com contagem de folgas) + células resolvidas por precedência ──
@@ -157,8 +166,8 @@ public class GradeRetificacaoService {
     private Celula resolverCelula(String pessoaId, int dia,
                                   Map<String, PontoRetificacao> retifIdx,
                                   Set<String> folgaIdx,
-                                  Map<String, TipoPessoaMarcacao> pessoaIdx,
-                                  Map<Integer, TipoDiaMarcacao> globalIdx) {
+                                  Map<String, String> pessoaIdx,
+                                  Map<Integer, String> globalIdx) {
         String k = chave(pessoaId, dia);
 
         PontoRetificacao r = retifIdx.get(k);
@@ -170,11 +179,11 @@ public class GradeRetificacaoService {
             boolean temObs = r.getObservacoes() != null && !r.getObservacoes().isBlank();
             return new Celula("horarios", texto, temObs, temObs ? r.getObservacoes().strip() : null);
         }
-        if (folgaIdx.contains(k)) return new Celula("banco", "Banco de horas", false, null);
-        TipoPessoaMarcacao mp = pessoaIdx.get(k);
-        if (mp != null) return new Celula("marcacao_pessoa", mp.getRotulo(), false, null);
-        TipoDiaMarcacao mg = globalIdx.get(dia);
-        if (mg != null) return new Celula("marcacao_global", mg.getRotulo(), false, null);
+        if (folgaIdx.contains(k)) return new Celula("banco", TEXTO_BANCO_DE_HORAS, false, null);
+        String mp = pessoaIdx.get(k);
+        if (mp != null) return new Celula("marcacao_pessoa", mp, false, null);
+        String mg = globalIdx.get(dia);
+        if (mg != null) return new Celula("marcacao_global", mg, false, null);
         return null;
     }
 

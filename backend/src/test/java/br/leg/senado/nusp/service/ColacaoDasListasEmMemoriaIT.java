@@ -22,6 +22,7 @@ import br.leg.senado.nusp.repository.PontoLoteRepository;
 import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoRetificacaoRepository;
 import br.leg.senado.nusp.repository.PontoSolicitacaoFolgaRepository;
+import br.leg.senado.nusp.repository.PontoTipoMarcacaoRepository;
 import br.leg.senado.nusp.repository.TecnicoRepository;
 import jakarta.persistence.EntityManager;
 
@@ -55,6 +56,8 @@ class ColacaoDasListasEmMemoriaIT {
     @Autowired
     private PontoPessoaMarcacaoRepository pessoaRepo;
     @Autowired
+    private PontoTipoMarcacaoRepository tipoRepo;
+    @Autowired
     private PontoLoteRepository loteRepo;
     @Autowired
     private PontoLotePaginaRepository paginaRepo;
@@ -87,7 +90,7 @@ class ColacaoDasListasEmMemoriaIT {
     void gradeDeRetificacoes_ordenaEmPtBr() {
         semearNomesDoEspelhoDeProducao();
         GradeRetificacaoService grade = new GradeRetificacaoService(retificacaoRepo, folgaRepo,
-                diaRepo, pessoaRepo, operadorRepo, tecnicoRepo, administradorRepo);
+                diaRepo, pessoaRepo, tipoRepo, operadorRepo, tecnicoRepo, administradorRepo);
 
         List<String> nomes = grade.montarGrade("operadores", 2026, 7).funcionarios().stream()
                 .map(GradeRetificacaoService.Funcionario::nome).toList();

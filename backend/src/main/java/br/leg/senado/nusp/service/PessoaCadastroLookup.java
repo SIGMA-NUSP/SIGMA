@@ -48,6 +48,20 @@ public class PessoaCadastroLookup {
         };
     }
 
+    /**
+     * Nome de exibição da pessoa polimórfica. O id cru é o último recurso — nunca deixa a tela
+     * muda quando o par (id, tipo) não bate com cadastro nenhum.
+     */
+    public String nome(String pessoaId, String pessoaTipo) {
+        if (pessoaId == null || pessoaId.isBlank()) return "";
+        return switch (normalizarTipo(pessoaTipo)) {
+            case "OPERADOR"      -> operadorRepo.findById(pessoaId).map(o -> o.getNomeCompleto()).orElse(pessoaId);
+            case "TECNICO"       -> tecnicoRepo.findById(pessoaId).map(t -> t.getNomeCompleto()).orElse(pessoaId);
+            case "ADMINISTRADOR" -> administradorRepo.findById(pessoaId).map(a -> a.getNomeCompleto()).orElse(pessoaId);
+            default -> pessoaId;
+        };
+    }
+
     /** O PESSOA_TIPO como as tabelas do Ponto o gravam: sem espaços e em maiúsculas ({@code ""} se nulo). */
     public static String normalizarTipo(String pessoaTipo) {
         return pessoaTipo == null ? "" : pessoaTipo.trim().toUpperCase(Locale.ROOT);

@@ -17,4 +17,7 @@ public interface PontoDiaMarcacaoRepository extends JpaRepository<PontoDiaMarcac
 
     /** Remove a marcação global do dia (desmarcar = delete físico). */
     void deleteByData(LocalDate data);
+
+    /** Marcações feitas com um tipo do catálogo — o que morre quando o tipo é excluído. */
+    List<PontoDiaMarcacao> findByTipoIdOrderByData(String tipoId);
 }

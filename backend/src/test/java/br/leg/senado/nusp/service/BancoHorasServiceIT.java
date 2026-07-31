@@ -37,6 +37,7 @@ import br.leg.senado.nusp.repository.PontoBancoSaldoRepository;
 import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoSolicitacaoFolgaRepository;
+import br.leg.senado.nusp.repository.PontoTipoMarcacaoRepository;
 import br.leg.senado.nusp.repository.TecnicoRepository;
 import br.leg.senado.nusp.service.DashboardQueryHelper.PagedResult;
 import jakarta.persistence.EntityManager;
@@ -100,6 +101,7 @@ class BancoHorasServiceIT {
                 mock(PontoSolicitacaoFolgaRepository.class),
                 mock(PontoDiaMarcacaoRepository.class),
                 mock(PontoPessoaMarcacaoRepository.class),
+                mock(PontoTipoMarcacaoRepository.class),
                 mock(SaldoAberturaService.class),
                 mock(AvisoService.class),
                 mock(OperadorRepository.class),

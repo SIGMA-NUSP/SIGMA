@@ -20,6 +20,7 @@ import br.leg.senado.nusp.entity.PontoBancoSaldo;
 import br.leg.senado.nusp.entity.PontoLote;
 import br.leg.senado.nusp.entity.PontoLotePagina;
 import br.leg.senado.nusp.entity.PontoSolicitacaoFolga;
+import br.leg.senado.nusp.entity.PontoTipoMarcacao;
 import br.leg.senado.nusp.entity.RegistroAnormalidade;
 import br.leg.senado.nusp.entity.RegistroOperacaoAudio;
 import br.leg.senado.nusp.entity.RegistroOperacaoOperador;
@@ -30,6 +31,7 @@ import br.leg.senado.nusp.enums.StatusSolicitacaoFolga;
 import br.leg.senado.nusp.enums.TipoEvento;
 import br.leg.senado.nusp.enums.Turno;
 import br.leg.senado.nusp.service.NativeQueryUtils;
+import br.leg.senado.nusp.service.TipoMarcacaoService;
 import jakarta.persistence.EntityManager;
 
 /**
@@ -55,11 +57,20 @@ public final class CenarioFactory {
     /** PASSWORD_HASH é NOT NULL nas 3 tabelas de pessoa; nenhum teste faz login de verdade. */
     private static final String HASH_SINTETICO = "$2b$12$hash.sintetico.nunca.usado.em.login.0123456789012345678";
 
+    /** Tetos de PNT_TIPO_MARCACAO.NOME e .BADGE — o sufixo de unicidade tem de caber neles. */
+    private static final int TETO_NOME_TIPO = 20;
+    private static final int TETO_BADGE_TIPO = 3;
+
     private CenarioFactory() {
     }
 
     private static String next() {
-        return RUN_ID + "_" + SEQ.incrementAndGet();
+        return RUN_ID + "_" + proximoNumero();
+    }
+
+    /** O contador cru — para as colunas curtas demais para o sufixo inteiro do {@link #next()}. */
+    private static int proximoNumero() {
+        return SEQ.incrementAndGet();
     }
 
     public static Sala novaSala(EntityManager em) {
@@ -370,6 +381,43 @@ public final class CenarioFactory {
         em.persist(anormalidade);
         em.flush();
         return anormalidade;
+    }
+
+    /**
+     * Tipo de ocorrência do ponto (Feriado, Férias, Atestado…). As marcações têm FK para esta
+     * tabela e o clone NUSP_TEST copia só a ESTRUTURA — nenhum tipo nasce nele: quem for marcar
+     * um dia cria antes o tipo que vai usar.
+     *
+     * <p>NOME_NORM e BADGE_NORM são UNIQUE em todo o catálogo (mesmo entre escopos), então nome e
+     * badge recebem o sufixo único da instância. Como a badge só tem 3 caracteres, é a BASE que
+     * encolhe para o sufixo caber — o teste não deve depender do texto exato que sai daqui.
+     *
+     * @param escopo {@link PontoTipoMarcacao#ESCOPO_GLOBAL} (vale para todos, PNT_DIA_MARCACAO) ou
+     *               {@link PontoTipoMarcacao#ESCOPO_INDIVIDUAL} (pessoa-dia, PNT_PESSOA_MARCACAO)
+     */
+    public static PontoTipoMarcacao novoTipoMarcacao(EntityManager em, String nome, String badge, String escopo) {
+        int n = proximoNumero();
+        String nomeUnico = comSufixo(nome, " " + RUN_ID + "_" + n, TETO_NOME_TIPO);
+        String badgeUnica = comSufixo(badge, Integer.toString(n, 36), TETO_BADGE_TIPO);
+
+        PontoTipoMarcacao tipo = new PontoTipoMarcacao();
+        tipo.setNome(nomeUnico);
+        // A forma normalizada é a que o banco compara: gerá-la aqui com a MESMA regra do cadastro
+        // impede que a fixture aceite um par que o serviço recusaria como duplicado.
+        tipo.setNomeNorm(TipoMarcacaoService.normalizar(nomeUnico));
+        tipo.setBadge(badgeUnica);
+        tipo.setBadgeNorm(TipoMarcacaoService.normalizar(badgeUnica));
+        tipo.setEscopo(escopo);
+        em.persist(tipo);
+        em.flush();
+        return tipo;
+    }
+
+    /** Base + sufixo dentro do teto da coluna: quem é truncado é a BASE — o sufixo é o que garante a unicidade. */
+    private static String comSufixo(String base, String sufixo, int teto) {
+        String texto = base == null ? "" : base.strip();
+        int espaco = Math.max(0, teto - sufixo.length());
+        return (texto.length() > espaco ? texto.substring(0, espaco) : texto) + sufixo;
     }
 
     /**

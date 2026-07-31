@@ -6,12 +6,11 @@ import br.leg.senado.nusp.entity.PontoBancoSaldo;
 import br.leg.senado.nusp.entity.PontoDiaMarcacao;
 import br.leg.senado.nusp.entity.PontoPessoaMarcacao;
 import br.leg.senado.nusp.entity.PontoSolicitacaoFolga;
+import br.leg.senado.nusp.entity.PontoTipoMarcacao;
 import br.leg.senado.nusp.entity.Tecnico;
 import br.leg.senado.nusp.enums.PapelPessoa;
 import br.leg.senado.nusp.enums.StatusSolicitacaoFolga;
 import br.leg.senado.nusp.enums.SubtipoAviso;
-import br.leg.senado.nusp.enums.TipoDiaMarcacao;
-import br.leg.senado.nusp.enums.TipoPessoaMarcacao;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.repository.AdministradorRepository;
 import br.leg.senado.nusp.repository.OperadorRepository;
@@ -19,6 +18,7 @@ import br.leg.senado.nusp.repository.PontoBancoSaldoRepository;
 import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoSolicitacaoFolgaRepository;
+import br.leg.senado.nusp.repository.PontoTipoMarcacaoRepository;
 import br.leg.senado.nusp.repository.TecnicoRepository;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -76,6 +76,7 @@ class BancoHorasServiceTest {
     @Mock private PontoSolicitacaoFolgaRepository solicitacaoRepo;
     @Mock private PontoDiaMarcacaoRepository diaMarcacaoRepo;
     @Mock private PontoPessoaMarcacaoRepository pessoaMarcacaoRepo;
+    @Mock private PontoTipoMarcacaoRepository tipoMarcacaoRepo;
     @Mock private SaldoAberturaService saldoAberturaService;
     @Mock private AvisoService avisoService;
     @Mock private OperadorRepository operadorRepo;
@@ -107,7 +108,8 @@ class BancoHorasServiceTest {
     /** Construção manual (sem {@code @InjectMocks}): é ela que permite variar o Clock por teste. */
     private BancoHorasService criarService(Clock clock) {
         return new BancoHorasService(em, saldoRepo, solicitacaoRepo, diaMarcacaoRepo, pessoaMarcacaoRepo,
-                saldoAberturaService, avisoService, operadorRepo, tecnicoRepo, administradorRepo, clock);
+                tipoMarcacaoRepo, saldoAberturaService, avisoService, operadorRepo, tecnicoRepo,
+                administradorRepo, clock);
     }
 
     /** Clock parado ao meio-dia do {@code dia}, na zona de Brasília. */
@@ -158,6 +160,35 @@ class BancoHorasServiceTest {
         a.setServidorPublico(false);
         a.setCargaHoraria(carga);
         return a;
+    }
+
+    /**
+     * Tipo do catálogo de ocorrências. A marcação guarda só o id do tipo — é o NOME cadastrado
+     * aqui que o calendário exibe como motivo do bloqueio.
+     */
+    private static PontoTipoMarcacao tipoMarcacao(String id, String nome, String escopo) {
+        PontoTipoMarcacao tipo = new PontoTipoMarcacao();
+        tipo.setId(id);
+        tipo.setNome(nome);
+        tipo.setEscopo(escopo);
+        return tipo;
+    }
+
+    private static PontoDiaMarcacao marcacaoGlobal(LocalDate data, PontoTipoMarcacao tipo) {
+        PontoDiaMarcacao m = new PontoDiaMarcacao();
+        m.setData(data);
+        m.setTipoId(tipo.getId());
+        return m;
+    }
+
+    private static PontoPessoaMarcacao marcacaoPessoal(String pessoaId, String pessoaTipo,
+                                                       LocalDate data, PontoTipoMarcacao tipo) {
+        PontoPessoaMarcacao m = new PontoPessoaMarcacao();
+        m.setPessoaId(pessoaId);
+        m.setPessoaTipo(pessoaTipo);
+        m.setData(data);
+        m.setTipoId(tipo.getId());
+        return m;
     }
 
     private Map<String, Object> bodyDias(String... dias) {
@@ -289,19 +320,16 @@ class BancoHorasServiceTest {
         mockCarga(40);
         when(saldoRepo.findByPessoaIdAndPessoaTipo(OP, "OPERADOR")).thenReturn(Optional.empty());
 
-        PontoDiaMarcacao feriado = new PontoDiaMarcacao();
-        feriado.setData(dias.get(0));
-        feriado.setTipo(TipoDiaMarcacao.FERIADO);
-        when(diaMarcacaoRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(any(), any()))
-                .thenReturn(List.of(feriado));
+        PontoTipoMarcacao feriadoTipo = tipoMarcacao("t-feriado", "Feriado", PontoTipoMarcacao.ESCOPO_GLOBAL);
+        PontoTipoMarcacao feriasTipo = tipoMarcacao("t-ferias", "Férias", PontoTipoMarcacao.ESCOPO_INDIVIDUAL);
+        when(tipoMarcacaoRepo.findAll()).thenReturn(List.of(feriadoTipo, feriasTipo));
 
-        PontoPessoaMarcacao ferias = new PontoPessoaMarcacao();
-        ferias.setPessoaId(OP);
-        ferias.setPessoaTipo("OPERADOR");
-        ferias.setData(dias.get(1));
-        ferias.setTipo(TipoPessoaMarcacao.FERIAS);
+        when(diaMarcacaoRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(any(), any()))
+                .thenReturn(List.of(marcacaoGlobal(dias.get(0), feriadoTipo)));
+
         when(pessoaMarcacaoRepo.findByPessoaIdAndPessoaTipoAndDataGreaterThanEqualAndDataLessThan(
-                eq(OP), eq("OPERADOR"), any(), any())).thenReturn(List.of(ferias));
+                eq(OP), eq("OPERADOR"), any(), any()))
+                .thenReturn(List.of(marcacaoPessoal(OP, "OPERADOR", dias.get(1), feriasTipo)));
 
         when(solicitacaoRepo.findPorStatusNoRange(eq(OP), eq("OPERADOR"), anyCollection(), any(), any()))
                 .thenReturn(List.of(
@@ -317,6 +345,24 @@ class BancoHorasServiceTest {
         // O sábado e o domingo entre os dias úteis acima: única asserção do ramo FDS no calendário.
         assertEquals("Fim de semana", motivoDe(out, LocalDate.of(2026, 7, 18)));
         assertEquals("Fim de semana", motivoDe(out, LocalDate.of(2026, 7, 19)));
+    }
+
+    @Test
+    @DisplayName("consultar: o motivo do dia marcado é o NOME do tipo do catálogo, inclusive um cadastrado pelo admin")
+    void consultarBloqueioComTipoCadastradoPeloAdmin() {
+        List<LocalDate> dias = uteis(1);
+        mockCarga(40);
+        when(saldoRepo.findByPessoaIdAndPessoaTipo(OP, "OPERADOR")).thenReturn(Optional.empty());
+
+        PontoTipoMarcacao mutirao = tipoMarcacao("t-mutirao", "Mutirão", PontoTipoMarcacao.ESCOPO_GLOBAL);
+        when(tipoMarcacaoRepo.findAll()).thenReturn(List.of(mutirao));
+        when(diaMarcacaoRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(any(), any()))
+                .thenReturn(List.of(marcacaoGlobal(dias.get(0), mutirao)));
+
+        Map<String, Object> out = service.consultar(OP, ROLE, HOJE.getYear(), HOJE.getMonthValue());
+
+        assertEquals("Mutirão", motivoDe(out, dias.get(0)),
+                "o rótulo do bloqueio é o nome que está no catálogo — não há lista fechada de tipos");
     }
 
     @Test

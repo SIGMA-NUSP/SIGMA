@@ -39,6 +39,7 @@ import br.leg.senado.nusp.service.ReportDocxService;
 import br.leg.senado.nusp.service.ReportPdfService;
 import br.leg.senado.nusp.service.ReportService;
 import br.leg.senado.nusp.service.RetificacaoService;
+import br.leg.senado.nusp.service.TipoMarcacaoService;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -74,6 +75,7 @@ class AdminOnlyMethodSecurityTest {
     @MockitoBean private PontoExclusaoService pontoExclusaoService;
     @MockitoBean private RetificacaoService retificacaoService;
     @MockitoBean private MarcacaoService marcacaoService;
+    @MockitoBean private TipoMarcacaoService tipoMarcacaoService;
     @MockitoBean private GradeRetificacaoService gradeRetificacaoService;
     @MockitoBean private PontoXlsxService pontoXlsxService;
     @MockitoBean private BancoHorasService bancoHorasService;

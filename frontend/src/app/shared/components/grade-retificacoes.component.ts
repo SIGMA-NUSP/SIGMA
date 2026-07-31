@@ -1,7 +1,9 @@
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { ApiService } from '../../core/services/api.service';
-import { httpErrorMsg } from '../../core/helpers/http.helpers';
+import { AuthService } from '../../core/services/auth.service';
+import { erroCargaMsg, httpErrorMsg } from '../../core/helpers/http.helpers';
 import { MESES } from '../../core/helpers/table.helpers';
+import { ConfigurarTiposMarcacaoComponent, TipoMarcacao } from './configurar-tipos-marcacao.component';
 import { MesAno, MesAnoSelectorComponent, anosNavegaveis } from './mes-ano-selector.component';
 import { DiaEstado, MiniCalendarioComponent } from './mini-calendario.component';
 import { ErroCargaComponent } from './erro-carga.component';
@@ -25,6 +27,8 @@ interface DiaInfo {
   marcacao_global: string | null;
 }
 interface Funcionario { id: string; nome: string; folgas: number; }
+/** Marcação de um dia como o backend a devolve: o tipo já vem descrito. */
+interface MarcacaoRaw { data: string; tipo_id: string; nome: string; badge: string; }
 interface GradeData {
   categoria: string;
   ano: number;
@@ -49,7 +53,8 @@ interface GradeData {
 @Component({
   selector: 'app-grade-retificacoes',
   standalone: true,
-  imports: [MesAnoSelectorComponent, MiniCalendarioComponent, ErroCargaComponent],
+  imports: [MesAnoSelectorComponent, MiniCalendarioComponent, ErroCargaComponent,
+            ConfigurarTiposMarcacaoComponent],
   template: `
     <!-- B-3.1: combobox categoria · seletor mês/ano · Ocorrências -->
     <div class="barra">
@@ -63,6 +68,10 @@ interface GradeData {
       <app-mes-ano-selector [anos]="anosSeletor" (mudou)="onMesAno($event)" />
 
       <button type="button" class="btn-outline" (click)="abrirConfigurar()">Ocorrências</button>
+      <!-- Cadastrar e excluir tipos é do admin master; esconder o botão não é a segurança (o backend recusa). -->
+      @if (isMaster()) {
+        <button type="button" class="btn-outline" (click)="abrirConfigurarTipos()">Configurar</button>
+      }
       <button type="button" class="btn-outline" (click)="baixarTabela()" [disabled]="funcionarios().length === 0">Baixar tabela</button>
     </div>
 
@@ -145,23 +154,27 @@ interface GradeData {
               </select>
             </div>
 
-            <!-- Modos: dependem do escopo -->
-            <div class="modos">
-              @for (m of modosDisponiveis(); track m.valor) {
-                <button type="button" class="chip" [class.active]="modo() === m.valor" (click)="modo.set(m.valor)">{{ m.rotulo }}</button>
-              }
-            </div>
+            <!-- Modos: os tipos do catálogo no escopo escolhido, mais o "Limpar" -->
+            @if (modosDisponiveis().length === 0) {
+              <p class="empty-state">Nenhum tipo cadastrado</p>
+            } @else {
+              <div class="modos">
+                @for (m of modosDisponiveis(); track m.valor) {
+                  <button type="button" class="chip" [class.active]="modo() === m.valor" (click)="modo.set(m.valor)">{{ m.rotulo }}</button>
+                }
+              </div>
 
-            <!-- Calendário estendido do E4 (multi-seleção + badges por dia) -->
-            <div class="cfg-cal">
-              <app-mini-calendario
-                [multiSelecao]="true"
-                [estadoDia]="estadoDiaConfig"
-                [valorSelecionado]="primeiroDiaMes()"
-                [min]="primeiroDiaMes()"
-                [max]="ultimoDiaMes()"
-                (dataSelecionada)="onDiaConfig($event)" />
-            </div>
+              <!-- Calendário estendido do E4 (multi-seleção + badges por dia) -->
+              <div class="cfg-cal">
+                <app-mini-calendario
+                  [multiSelecao]="true"
+                  [estadoDia]="estadoDiaConfig"
+                  [valorSelecionado]="primeiroDiaMes()"
+                  [min]="primeiroDiaMes()"
+                  [max]="ultimoDiaMes()"
+                  (dataSelecionada)="onDiaConfig($event)" />
+              </div>
+            }
 
             @if (erroConfig()) {
               @if (configCarregado()) {
@@ -187,6 +200,13 @@ interface GradeData {
           }
         </div>
       </div>
+    }
+
+    <!-- Modal "Configurar" — catálogo de tipos de ocorrência (admin master) -->
+    @if (configurarTiposAberto()) {
+      <app-configurar-tipos-marcacao
+        (alterado)="onTiposAlterados()"
+        (fechar)="configurarTiposAberto.set(false)" />
     }
   `,
   styles: [`
@@ -270,6 +290,10 @@ interface GradeData {
 export class GradeRetificacoesComponent implements OnInit {
   private api = inject(ApiService);
   private toast = inject(ToastService);
+  private auth = inject(AuthService);
+
+  /** Só o master vê o botão "Configurar" — a permissão de verdade é a do backend. */
+  isMaster = this.auth.isMaster;
 
   private hoje = new Date();
   categoria = signal<Categoria>('operadores');
@@ -295,9 +319,12 @@ export class GradeRetificacoesComponent implements OnInit {
    */
   configCarregado = signal(false);
   escopo = signal<string>('todos');                 // 'todos' (globais) | pessoaId (pessoa-dia)
-  modo = signal<string>('FERIADO');                 // tipo ativo | '__limpar'
-  private globaisRaw = signal<{ data: string; tipo: string }[]>([]);
-  private pessoaisRaw = signal<{ pessoa_id: string; data: string; tipo: string }[]>([]);
+  modo = signal<string>('');                        // id do tipo ativo | '__limpar' | '' (sem tipo)
+  /** Catálogo de tipos: a fonte dos chips e dos rótulos do calendário. */
+  tipos = signal<TipoMarcacao[]>([]);
+  configurarTiposAberto = signal(false);
+  private globaisRaw = signal<MarcacaoRaw[]>([]);
+  private pessoaisRaw = signal<(MarcacaoRaw & { pessoa_id: string })[]>([]);
   private marcacoesOriginal = signal<Map<number, string>>(new Map());
   marcacoesEscopo = signal<Map<number, string>>(new Map());
   /**
@@ -312,7 +339,37 @@ export class GradeRetificacoesComponent implements OnInit {
   primeiroDiaMes = computed(() => new Date(this.anoMes().ano, this.anoMes().mes - 1, 1));
   ultimoDiaMes = computed(() => new Date(this.anoMes().ano, this.anoMes().mes, 0));
   tituloMesAno = computed(() => `${MESES[this.anoMes().mes]} de ${this.anoMes().ano}`);
-  modosDisponiveis = computed(() => this.escopo() === 'todos' ? MODOS_GLOBAIS : MODOS_PESSOAIS);
+
+  /** Escopo do catálogo correspondente ao seletor de funcionário do modal. */
+  private escopoDoCatalogo = computed(() => this.escopo() === 'todos' ? 'GLOBAL' : 'INDIVIDUAL');
+  private tiposDoEscopo = computed(() => this.tipos().filter(t => t.escopo === this.escopoDoCatalogo()));
+
+  /**
+   * Chips do modal: um por tipo do escopo, mais o "Limpar". Catálogo vazio para
+   * aquele escopo = nenhum chip (e nada aplicável).
+   */
+  modosDisponiveis = computed(() => {
+    const doEscopo = this.tiposDoEscopo();
+    if (doEscopo.length === 0) return [];
+    return [
+      ...doEscopo.map(t => ({ valor: t.id, rotulo: t.nome })),
+      { valor: MODO_LIMPAR, rotulo: 'Limpar' },
+    ];
+  });
+
+  /**
+   * Nome e badge por tipo. Vem do catálogo e, como reforço, das próprias
+   * marcações do mês — que já chegam descritas: um dia marcado nunca aparece sem
+   * rótulo, mesmo que o catálogo não tenha sido carregado.
+   */
+  private descricaoTipo = computed(() => {
+    const desc = new Map<string, { nome: string; badge: string }>();
+    for (const t of this.tipos()) desc.set(t.id, { nome: t.nome, badge: t.badge });
+    for (const m of [...this.globaisRaw(), ...this.pessoaisRaw()]) {
+      if (!desc.has(m.tipo_id)) desc.set(m.tipo_id, { nome: m.nome, badge: m.badge });
+    }
+    return desc;
+  });
 
   funcionarios = computed(() => this.grade()?.funcionarios ?? []);
   dias = computed(() => this.grade()?.dias ?? []);
@@ -390,8 +447,11 @@ export class GradeRetificacoesComponent implements OnInit {
     if (d.getFullYear() !== am.ano || d.getMonth() !== am.mes - 1) return { desabilitado: true };
     const dow = d.getDay();
     if (dow === 0 || dow === 6) return { desabilitado: true };   // fim de semana desabilitado (Alternativa 1)
-    const tipo = this.marcacoesEscopo().get(d.getDate());
-    if (tipo) return { selecionado: true, badge: BADGE[tipo], rotulo: ROTULO[tipo] };
+    const tipoId = this.marcacoesEscopo().get(d.getDate());
+    if (tipoId) {
+      const desc = this.descricaoTipo().get(tipoId);
+      return { selecionado: true, badge: desc?.badge ?? '', rotulo: desc?.nome ?? '' };
+    }
     return null;
   };
 
@@ -408,7 +468,7 @@ export class GradeRetificacoesComponent implements OnInit {
     this.marcacoesOriginal.set(new Map());
     this.marcacoesEscopo.set(new Map());
     this.escopo.set('todos');
-    this.modo.set('FERIADO');
+    this.modo.set('');
     this.configCarregado.set(false);
     this.aplicandoConfig.set(false);    // senão o modal reabre com o Aplicar preso em "Aplicando..."
     this.erroConfig.set('');
@@ -418,6 +478,18 @@ export class GradeRetificacoesComponent implements OnInit {
 
   fecharConfigurar(): void {
     this.configurarAberto.set(false);
+  }
+
+  abrirConfigurarTipos(): void {
+    this.configurarTiposAberto.set(true);
+  }
+
+  /**
+   * O catálogo mudou: excluir um tipo levou as marcações dele junto, então a
+   * grade exibida precisa ser relida do servidor.
+   */
+  onTiposAlterados(): void {
+    this.carregar();
   }
 
   onEscopo(ev: Event): void {
@@ -434,10 +506,11 @@ export class GradeRetificacoesComponent implements OnInit {
 
   /** Aplica/remove o modo ativo no dia clicado (toggle: mesmo tipo → remove). */
   onDiaConfig(d: Date): void {
+    const modo = this.modo();
+    if (!modo) return;                  // sem tipo no escopo, o clique no dia não tem o que aplicar
     const dia = d.getDate();
     const mapa = new Map(this.marcacoesEscopo());
-    const modo = this.modo();
-    if (modo === '__limpar') mapa.delete(dia);
+    if (modo === MODO_LIMPAR) mapa.delete(dia);
     else if (mapa.get(dia) === modo) mapa.delete(dia);
     else mapa.set(dia, modo);
     this.marcacoesEscopo.set(mapa);
@@ -452,9 +525,9 @@ export class GradeRetificacoesComponent implements OnInit {
     const edit = this.marcacoesEscopo();
     const { ano, mes } = this.anoMes();
     const iso = (dia: number) => `${ano}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
-    const aplicar: { data: string; tipo: string }[] = [];
+    const aplicar: { data: string; tipo_id: string }[] = [];
     const remover: string[] = [];
-    for (const [dia, tipo] of edit) if (orig.get(dia) !== tipo) aplicar.push({ data: iso(dia), tipo });
+    for (const [dia, tipo] of edit) if (orig.get(dia) !== tipo) aplicar.push({ data: iso(dia), tipo_id: tipo });
     for (const [dia] of orig) if (!edit.has(dia)) remover.push(iso(dia));
     if (aplicar.length === 0 && remover.length === 0) { this.fecharConfigurar(); return; }
 
@@ -480,12 +553,32 @@ export class GradeRetificacoesComponent implements OnInit {
     });
   }
 
-  /** Recarrega as marcações do modal — usada na abertura e no retry da caixa de erro. */
+  /**
+   * Recarrega o catálogo e as marcações do modal — usada na abertura e no retry
+   * da caixa de erro. O catálogo vem primeiro: são os chips dele que dizem o que
+   * cada dia marcado significa.
+   */
   carregarMarcacoes(): void {
-    const { ano, mes } = this.anoMes();
     const seq = this.seqModal;
     this.carregandoConfig.set(true);
     this.erroConfig.set('');
+    this.api.get<any>('/api/admin/ponto/tipos-marcacao').subscribe({
+      next: res => {
+        if (seq !== this.seqModal) return;   // obsoleta: uma reabertura mais nova está em voo
+        this.tipos.set(res.data?.tipos ?? []);
+        this.carregarMarcacoesDoMes(seq);
+      },
+      error: err => {
+        if (seq !== this.seqModal) return;
+        this.carregandoConfig.set(false);
+        // Canal de CARGA: a caixa de erro traz o retry, e o guia da tela vem antes do detalhe do 500.
+        this.erroConfig.set(erroCargaMsg(err, 'Erro ao carregar os tipos de ocorrência.'));
+      },
+    });
+  }
+
+  private carregarMarcacoesDoMes(seq: number): void {
+    const { ano, mes } = this.anoMes();
     this.api.get<any>('/api/admin/ponto/marcacoes', { ano, mes }).subscribe({
       next: res => {
         if (seq !== this.seqModal) return;    // obsoleta: uma reabertura mais nova está em voo
@@ -504,17 +597,20 @@ export class GradeRetificacoesComponent implements OnInit {
     });
   }
 
-  /** Popula o mapa dia→tipo do escopo (globais ou pessoa) a partir do que veio do E6. */
+  /**
+   * Popula o mapa dia→tipo do escopo (globais ou de uma pessoa) e ativa o
+   * primeiro tipo daquele escopo — sem nenhum cadastrado, o modal fica sem modo
+   * e sem calendário.
+   */
   private aplicarEscopo(novo: string): void {
     this.escopo.set(novo);
     const mapa = new Map<number, string>();
     if (novo === 'todos') {
-      for (const g of this.globaisRaw()) mapa.set(diaDeIso(g.data), g.tipo);
-      this.modo.set('FERIADO');
+      for (const g of this.globaisRaw()) mapa.set(diaDeIso(g.data), g.tipo_id);
     } else {
-      for (const p of this.pessoaisRaw()) if (p.pessoa_id === novo) mapa.set(diaDeIso(p.data), p.tipo);
-      this.modo.set('A_DISPOSICAO');
+      for (const p of this.pessoaisRaw()) if (p.pessoa_id === novo) mapa.set(diaDeIso(p.data), p.tipo_id);
     }
+    this.modo.set(this.tiposDoEscopo()[0]?.id ?? '');
     this.marcacoesOriginal.set(new Map(mapa));
     this.marcacoesEscopo.set(new Map(mapa));
   }
@@ -541,32 +637,8 @@ export class GradeRetificacoesComponent implements OnInit {
 /** Colunas de funcionários por página (B-3.9/F#2: 8 exatos = 1 página). */
 const PAGE_SIZE = 8;
 
-// ── Ocorrências: modos por escopo, rótulos e badges das marcações ──
-const MODOS_GLOBAIS = [
-  { valor: 'FERIADO', rotulo: 'Feriado' },
-  { valor: 'PONTO_FACULTATIVO', rotulo: 'P. Facultativo' },
-  { valor: '__limpar', rotulo: 'Limpar' },
-];
-const MODOS_PESSOAIS = [
-  { valor: 'A_DISPOSICAO', rotulo: 'À disposição' },
-  { valor: 'ATESTADO', rotulo: 'Atestado' },
-  { valor: 'FERIAS', rotulo: 'Férias' },
-  { valor: 'RECESSO', rotulo: 'Recesso' },
-  { valor: 'LICENCA_MEDICA', rotulo: 'Lic. médica' },
-  { valor: '__limpar', rotulo: 'Limpar' },
-];
-/** Texto completo (title do dia) por tipo de marcação. */
-const ROTULO: Record<string, string> = {
-  FERIADO: 'Feriado', PONTO_FACULTATIVO: 'P. Facultativo',
-  A_DISPOSICAO: 'À disposição', ATESTADO: 'Atestado', FERIAS: 'Férias',
-  RECESSO: 'Recesso', LICENCA_MEDICA: 'Lic. médica',
-};
-/** Rótulo curto exibido sob o número no calendário. */
-const BADGE: Record<string, string> = {
-  FERIADO: 'Fer', PONTO_FACULTATIVO: 'P.Fac',
-  A_DISPOSICAO: 'À disp', ATESTADO: 'Atest', FERIAS: 'Fér',
-  RECESSO: 'Rec', LICENCA_MEDICA: 'Lic',
-};
+/** Chip que desmarca o dia, em vez de aplicar um tipo. */
+const MODO_LIMPAR = '__limpar';
 const CATEGORIA_TIPO: Record<Categoria, string> = {
   operadores: 'OPERADOR', tecnicos: 'TECNICO', administradores: 'ADMINISTRADOR',
 };

@@ -1,0 +1,96 @@
+databaseChangeLog:
+  # ============================================================
+  # 046 — Ponto: catálogo de tipos de ocorrência
+  #
+  # Três changesets, um por objeto:
+  #
+  #   1. PNT_TIPO_MARCACAO — os tipos de marcação viram linhas, cadastradas e
+  #      removidas pelo admin master. Já nasce com os sete tipos que o sistema
+  #      usava fixos no código, agora registros comuns (removíveis).
+  #
+  #   2. PNT_DIA_MARCACAO / PNT_PESSOA_MARCACAO — a coluna TIPO (literal preso a
+  #      um CHECK) dá lugar a TIPO_ID, chave do catálogo. As marcações existentes
+  #      são convertidas; o NOT NULL entra depois do preenchimento.
+  #
+  #   3. PNT_TIPO_MARC_EXCLUSAO_LOG — trilha da exclusão de um tipo, que leva em
+  #      cascata todas as marcações feitas com ele.
+  #
+  # A ordem importa: as FKs do changeset 2 exigem a tabela e o seed do 1.
+  # ============================================================
+  - changeSet:
+      id: 046-ponto-tipo-marcacao
+      author: douglas.antunes
+      comment: "Cria PNT_TIPO_MARCACAO (catálogo de tipos de ocorrência do ponto) com os tipos iniciais"
+      changes:
+        - sqlFile:
+            path: db/changelog/046-ponto-tipo-marcacao.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "DROP INDEX IDX_PNT_TIPOMARC_ESCOPO"
+        - sql:
+            sql: "DROP TABLE PNT_TIPO_MARCACAO"
+
+  - changeSet:
+      id: 046-ponto-marcacao-tipo-id
+      author: douglas.antunes
+      comment: "Troca PNT_DIA_MARCACAO.TIPO e PNT_PESSOA_MARCACAO.TIPO pela FK TIPO_ID do catálogo"
+      changes:
+        - sqlFile:
+            path: db/changelog/046-ponto-marcacao-tipo-id.sql
+            splitStatements: true
+            stripComments: true
+      # O rollback devolve a coluna de literais e o CHECK do domínio fechado,
+      # reconvertendo as marcações dos tipos iniciais. Marcações feitas com tipos
+      # cadastrados depois não têm literal correspondente e ficam com TIPO nulo —
+      # por isso a coluna volta sem NOT NULL.
+      rollback:
+        - sql:
+            sql: "DROP INDEX IDX_PNT_PESMARC_TIPO"
+        - sql:
+            sql: "DROP INDEX IDX_PNT_DIAMARC_TIPO"
+        - sql:
+            sql: "ALTER TABLE PNT_DIA_MARCACAO ADD (TIPO VARCHAR2(20))"
+        - sql:
+            sql: >-
+              UPDATE PNT_DIA_MARCACAO SET TIPO = CASE TIPO_ID
+              WHEN '8c92e456-1e96-4d7a-a297-6c1eb48b87cb' THEN 'FERIADO'
+              WHEN 'cf0eee15-1315-4890-a152-30c7d72b62c5' THEN 'PONTO_FACULTATIVO' END
+        - sql:
+            sql: "ALTER TABLE PNT_DIA_MARCACAO ADD CONSTRAINT CK_PNT_DIAMARC_TIPO CHECK (TIPO IN ('FERIADO','PONTO_FACULTATIVO'))"
+        - sql:
+            sql: "ALTER TABLE PNT_DIA_MARCACAO DROP CONSTRAINT FK_PNT_DIAMARC_TIPO"
+        - sql:
+            sql: "ALTER TABLE PNT_DIA_MARCACAO DROP COLUMN TIPO_ID"
+        - sql:
+            sql: "ALTER TABLE PNT_PESSOA_MARCACAO ADD (TIPO VARCHAR2(20))"
+        - sql:
+            sql: >-
+              UPDATE PNT_PESSOA_MARCACAO SET TIPO = CASE TIPO_ID
+              WHEN 'ee6c8e18-b069-4f9a-93c7-bf87b6042a5b' THEN 'A_DISPOSICAO'
+              WHEN '6fde6137-b3a2-4f14-9274-997d1998568e' THEN 'ATESTADO'
+              WHEN 'fed26b8b-35ae-4401-83f1-799767f10edd' THEN 'FERIAS'
+              WHEN '14cbee66-6695-40dd-bfd7-4c5d026d6d9c' THEN 'RECESSO'
+              WHEN '74456f05-cb5a-474a-b49f-1a938bdafed7' THEN 'LICENCA_MEDICA' END
+        - sql:
+            sql: "ALTER TABLE PNT_PESSOA_MARCACAO ADD CONSTRAINT CK_PNT_PESMARC_TIPO CHECK (TIPO IN ('A_DISPOSICAO','ATESTADO','FERIAS','RECESSO','LICENCA_MEDICA'))"
+        - sql:
+            sql: "ALTER TABLE PNT_PESSOA_MARCACAO DROP CONSTRAINT FK_PNT_PESMARC_TIPO"
+        - sql:
+            sql: "ALTER TABLE PNT_PESSOA_MARCACAO DROP COLUMN TIPO_ID"
+
+  - changeSet:
+      id: 046-ponto-tipo-marc-exclusao-log
+      author: douglas.antunes
+      comment: "Cria PNT_TIPO_MARC_EXCLUSAO_LOG (trilha da exclusão de tipo de ocorrência e das marcações dele)"
+      changes:
+        - sqlFile:
+            path: db/changelog/046-ponto-tipo-marc-exclusao-log.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "DROP INDEX IDX_PNT_TIPOMARC_EXC_EM"
+        - sql:
+            sql: "DROP TABLE PNT_TIPO_MARC_EXCLUSAO_LOG"

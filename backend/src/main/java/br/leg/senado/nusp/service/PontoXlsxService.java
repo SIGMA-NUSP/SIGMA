@@ -86,6 +86,10 @@ public class PontoXlsxService {
             }
 
             // ── Linha 2: "Folgas" + fórmula COUNTIF do mês real (Q28) ──
+            //
+            // O critério é o texto EXATO da célula de folga. Um curinga por inicial contaria junto
+            // qualquer tipo de ocorrência cujo nome começasse com a mesma letra — e os tipos são
+            // cadastrados pelo admin, sem como impedir a coincidência.
             XSSFRow r1 = sheet.createRow(1);
             XSSFCell a2 = r1.createCell(0);
             a2.setCellValue("Folgas");
@@ -94,7 +98,8 @@ public class PontoXlsxService {
             for (int c = 0; c < nFunc; c++) {
                 XSSFCell cell = r1.createCell(c + 1);
                 String col = CellReference.convertNumToColString(c + 1);   // B, C, …
-                cell.setCellFormula("COUNTIF(" + col + "3:" + col + ultimaLinhaDados + ",\"b*\")");
+                cell.setCellFormula("COUNTIF(" + col + "3:" + col + ultimaLinhaDados
+                        + ",\"" + GradeRetificacaoService.TEXTO_BANCO_DE_HORAS + "\")");
                 cell.setCellStyle(folgasCel);
             }
 

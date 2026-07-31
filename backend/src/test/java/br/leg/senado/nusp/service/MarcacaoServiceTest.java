@@ -2,11 +2,11 @@ package br.leg.senado.nusp.service;
 
 import br.leg.senado.nusp.entity.PontoDiaMarcacao;
 import br.leg.senado.nusp.entity.PontoPessoaMarcacao;
-import br.leg.senado.nusp.enums.TipoDiaMarcacao;
-import br.leg.senado.nusp.enums.TipoPessoaMarcacao;
+import br.leg.senado.nusp.entity.PontoTipoMarcacao;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
+import br.leg.senado.nusp.repository.PontoTipoMarcacaoRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -14,6 +14,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 
 import java.time.LocalDate;
@@ -30,6 +31,7 @@ class MarcacaoServiceTest {
 
     @Mock private PontoDiaMarcacaoRepository diaRepo;
     @Mock private PontoPessoaMarcacaoRepository pessoaRepo;
+    @Mock private PontoTipoMarcacaoRepository tipoRepo;
     @Mock private PessoaCadastroLookup pessoaCadastro;
 
     @InjectMocks
@@ -39,33 +41,61 @@ class MarcacaoServiceTest {
     private static final LocalDate INI_JUL = LocalDate.of(2026, 7, 1);
     private static final LocalDate INI_AGO = LocalDate.of(2026, 8, 1);
 
+    // Catálogo de tipos usado pelas fixtures: o tipo da marcação é uma LINHA, e o
+    // escopo dela decide se marca o dia de todos (GLOBAL) ou um funcionário (INDIVIDUAL).
+    private static final PontoTipoMarcacao FERIADO = tipoGlobal("tipo-feriado", "Feriado", "FER");
+    private static final PontoTipoMarcacao FACULTATIVO = tipoGlobal("tipo-facultativo", "Ponto facultativo", "PF");
+    private static final PontoTipoMarcacao FERIAS = tipoIndividual("tipo-ferias", "Férias", "FRS");
+    private static final PontoTipoMarcacao A_DISPOSICAO = tipoIndividual("tipo-disposicao", "À disposição", "ADP");
+    private static final PontoTipoMarcacao ATESTADO = tipoIndividual("tipo-atestado", "Atestado", "ATE");
+    private static final PontoTipoMarcacao LICENCA = tipoIndividual("tipo-licenca", "Licença médica", "LM");
+    private static final PontoTipoMarcacao RECESSO = tipoIndividual("tipo-recesso", "Recesso", "REC");
+
     /** A pessoa do par existe no cadastro DAQUELE tipo — pré-condição dos ramos pessoais que gravam/removem. */
     private void pessoaExiste(String pessoaId, String pessoaTipo) {
         when(pessoaCadastro.existe(pessoaId, pessoaTipo)).thenReturn(true);
     }
 
-    private static PontoDiaMarcacao global(LocalDate data, TipoDiaMarcacao tipo) {
+    private static PontoTipoMarcacao tipo(String id, String nome, String badge, String escopo) {
+        PontoTipoMarcacao t = new PontoTipoMarcacao();
+        t.setId(id);
+        t.setNome(nome);
+        t.setBadge(badge);
+        t.setEscopo(escopo);
+        return t;
+    }
+
+    private static PontoTipoMarcacao tipoGlobal(String id, String nome, String badge) {
+        return tipo(id, nome, badge, PontoTipoMarcacao.ESCOPO_GLOBAL);
+    }
+
+    private static PontoTipoMarcacao tipoIndividual(String id, String nome, String badge) {
+        return tipo(id, nome, badge, PontoTipoMarcacao.ESCOPO_INDIVIDUAL);
+    }
+
+    private static PontoDiaMarcacao global(LocalDate data, String tipoId) {
         PontoDiaMarcacao m = new PontoDiaMarcacao();
         m.setData(data);
-        m.setTipo(tipo);
+        m.setTipoId(tipoId);
         return m;
     }
 
     private static PontoPessoaMarcacao pessoal(String pessoaId, String pessoaTipo,
-                                               LocalDate data, TipoPessoaMarcacao tipo) {
+                                               LocalDate data, String tipoId) {
         PontoPessoaMarcacao m = new PontoPessoaMarcacao();
         m.setPessoaId(pessoaId);
         m.setPessoaTipo(pessoaTipo);
         m.setData(data);
-        m.setTipo(tipo);
+        m.setTipoId(tipoId);
         return m;
     }
 
     @Test
-    @DisplayName("listar usa range sargável [1º dia, 1º do mês seguinte) e devolve data ISO + tipo")
+    @DisplayName("listar usa range sargável [1º dia, 1º do mês seguinte) e devolve data ISO + tipo do catálogo")
     void listarRange() {
+        when(tipoRepo.findAll()).thenReturn(List.of(FERIADO));
         when(diaRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(INI_JUL, INI_AGO))
-                .thenReturn(List.of(global(LocalDate.of(2026, 7, 9), TipoDiaMarcacao.FERIADO)));
+                .thenReturn(List.of(global(LocalDate.of(2026, 7, 9), FERIADO.getId())));
         when(pessoaRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(any(), any())).thenReturn(List.of());
 
         Map<String, Object> out = service.listar(2026, 7);
@@ -74,19 +104,23 @@ class MarcacaoServiceTest {
         List<Map<String, Object>> globais = (List<Map<String, Object>>) out.get("globais");
         assertEquals(1, globais.size());
         assertEquals("2026-07-09", globais.get(0).get("data"));
-        assertEquals("FERIADO", globais.get(0).get("tipo"));
+        // a tela recebe o id (para reenviar no lote) e o texto pronto (nome + badge), sem mapa de rótulos
+        assertEquals("tipo-feriado", globais.get(0).get("tipo_id"));
+        assertEquals("Feriado", globais.get(0).get("nome"));
+        assertEquals("FER", globais.get(0).get("badge"));
         assertTrue(((List<?>) out.get("pessoais")).isEmpty());
     }
 
     @Test
     @DisplayName("listar devolve as marcações pessoais do mês (pessoa, tipo, data ISO), no mesmo range das globais")
     void listarPessoais() {
+        when(tipoRepo.findAll()).thenReturn(List.of(FACULTATIVO, FERIAS, A_DISPOSICAO));
         when(diaRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(INI_JUL, INI_AGO))
-                .thenReturn(List.of(global(LocalDate.of(2026, 7, 24), TipoDiaMarcacao.PONTO_FACULTATIVO)));
+                .thenReturn(List.of(global(LocalDate.of(2026, 7, 24), FACULTATIVO.getId())));
         when(pessoaRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(INI_JUL, INI_AGO))
                 .thenReturn(List.of(
-                        pessoal("op-1", "OPERADOR", LocalDate.of(2026, 7, 10), TipoPessoaMarcacao.FERIAS),
-                        pessoal("tec-7", "TECNICO", LocalDate.of(2026, 7, 20), TipoPessoaMarcacao.A_DISPOSICAO)));
+                        pessoal("op-1", "OPERADOR", LocalDate.of(2026, 7, 10), FERIAS.getId()),
+                        pessoal("tec-7", "TECNICO", LocalDate.of(2026, 7, 20), A_DISPOSICAO.getId())));
 
         Map<String, Object> out = service.listar(2026, 7);
 
@@ -96,12 +130,39 @@ class MarcacaoServiceTest {
         assertEquals("op-1", pessoais.get(0).get("pessoa_id"));
         assertEquals("OPERADOR", pessoais.get(0).get("pessoa_tipo"));
         assertEquals("2026-07-10", pessoais.get(0).get("data"));
-        assertEquals("FERIAS", pessoais.get(0).get("tipo"));
+        assertEquals("tipo-ferias", pessoais.get(0).get("tipo_id"));
+        assertEquals("Férias", pessoais.get(0).get("nome"));
+        assertEquals("FRS", pessoais.get(0).get("badge"));
         assertEquals("tec-7", pessoais.get(1).get("pessoa_id"));
         assertEquals("TECNICO", pessoais.get(1).get("pessoa_tipo"));
-        assertEquals("A_DISPOSICAO", pessoais.get(1).get("tipo"));
+        assertEquals("tipo-disposicao", pessoais.get(1).get("tipo_id"));
+        assertEquals("À disposição", pessoais.get(1).get("nome"));
         // as duas listas convivem no mesmo payload
         assertEquals(1, ((List<?>) out.get("globais")).size());
+    }
+
+    @Test
+    @DisplayName("listar com tipo fora do catálogo: nome cai no próprio id e badge vem vazia (a tela nunca fica muda)")
+    void listarTipoForaDoCatalogo() {
+        when(tipoRepo.findAll()).thenReturn(List.of(FERIADO));   // catálogo sem os tipos referenciados abaixo
+        when(diaRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(INI_JUL, INI_AGO))
+                .thenReturn(List.of(global(LocalDate.of(2026, 7, 9), "tipo-sumiu")));
+        when(pessoaRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(INI_JUL, INI_AGO))
+                .thenReturn(List.of(pessoal("op-1", "OPERADOR", LocalDate.of(2026, 7, 10), "tipo-sumiu-tambem")));
+
+        Map<String, Object> out = service.listar(2026, 7);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> globais = (List<Map<String, Object>>) out.get("globais");
+        assertEquals("tipo-sumiu", globais.get(0).get("tipo_id"));
+        assertEquals("tipo-sumiu", globais.get(0).get("nome"));
+        assertEquals("", globais.get(0).get("badge"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> pessoais = (List<Map<String, Object>>) out.get("pessoais");
+        assertEquals("tipo-sumiu-tambem", pessoais.get(0).get("tipo_id"));
+        assertEquals("tipo-sumiu-tambem", pessoais.get(0).get("nome"));
+        assertEquals("", pessoais.get(0).get("badge"));
     }
 
     @Test
@@ -119,7 +180,7 @@ class MarcacaoServiceTest {
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             assertTrue(ex.getMessage().startsWith("Mês inválido"), ex.getMessage());
         }
-        verifyNoInteractions(diaRepo, pessoaRepo);
+        verifyNoInteractions(diaRepo, pessoaRepo, tipoRepo);
     }
 
     @Test
@@ -131,29 +192,31 @@ class MarcacaoServiceTest {
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             assertTrue(ex.getMessage().startsWith("Ano inválido"), ex.getMessage());
         }
-        verifyNoInteractions(diaRepo, pessoaRepo);
+        verifyNoInteractions(diaRepo, pessoaRepo, tipoRepo);
     }
 
     @Test
     @DisplayName("aplicarLote global: upsert (insert + update) e remoção por DATA")
     void globalUpsertERemove() {
-        // 09/07 não existe → insert; 10/07 existe (FERIADO) → update p/ PONTO_FACULTATIVO
+        // 09/07 não existe → insert; 10/07 existe (Feriado) → update p/ Ponto facultativo
         when(diaRepo.findByData(LocalDate.of(2026, 7, 9))).thenReturn(Optional.empty());
-        PontoDiaMarcacao existente = global(LocalDate.of(2026, 7, 10), TipoDiaMarcacao.FERIADO);
+        PontoDiaMarcacao existente = global(LocalDate.of(2026, 7, 10), FERIADO.getId());
         when(diaRepo.findByData(LocalDate.of(2026, 7, 10))).thenReturn(Optional.of(existente));
+        when(tipoRepo.findById(FERIADO.getId())).thenReturn(Optional.of(FERIADO));
+        when(tipoRepo.findById(FACULTATIVO.getId())).thenReturn(Optional.of(FACULTATIVO));
 
         Map<String, Object> body = Map.of("globais", Map.of(
                 "aplicar", List.of(
-                        Map.of("data", "2026-07-09", "tipo", "FERIADO"),
-                        Map.of("data", "2026-07-10", "tipo", "PONTO_FACULTATIVO")),
+                        Map.of("data", "2026-07-09", "tipo_id", "tipo-feriado"),
+                        Map.of("data", "2026-07-10", "tipo_id", "tipo-facultativo")),
                 "remover", List.of("2026-07-11")));
 
         service.aplicarLote(body, ADMIN);
 
-        verify(diaRepo).save(argThat(m -> LocalDate.of(2026, 7, 9).equals(m.getData())
-                && m.getTipo() == TipoDiaMarcacao.FERIADO && ADMIN.equals(m.getCriadoPorId())));
-        verify(diaRepo).save(argThat(m -> m == existente
-                && m.getTipo() == TipoDiaMarcacao.PONTO_FACULTATIVO));   // update in-place
+        verify(diaRepo).saveAndFlush(argThat(m -> LocalDate.of(2026, 7, 9).equals(m.getData())
+                && "tipo-feriado".equals(m.getTipoId()) && ADMIN.equals(m.getCriadoPorId())));
+        verify(diaRepo).saveAndFlush(argThat(m -> m == existente
+                && "tipo-facultativo".equals(m.getTipoId())));   // update in-place
         verify(diaRepo).deleteByData(LocalDate.of(2026, 7, 11));
     }
 
@@ -163,34 +226,26 @@ class MarcacaoServiceTest {
         Map<String, Object> body = Map.of("pessoais", Map.of(
                 "pessoa_id", "op-1", "pessoa_tipo", "XPTO", "aplicar", List.of()));
         assertThrows(ServiceValidationException.class, () -> service.aplicarLote(body, ADMIN));
-        verify(pessoaRepo, never()).save(any());
-    }
-
-    @Test
-    @DisplayName("aplicarLote: tipo de marcação inválido → 400 (não 500)")
-    void tipoInvalido() {
-        Map<String, Object> body = Map.of("globais", Map.of(
-                "aplicar", List.of(Map.of("data", "2026-07-09", "tipo", "XPTO"))));
-        assertThrows(ServiceValidationException.class, () -> service.aplicarLote(body, ADMIN));
-        verify(diaRepo, never()).save(any());
+        verify(pessoaRepo, never()).saveAndFlush(any());
     }
 
     @Test
     @DisplayName("aplicarLote pessoal válido: upsert por (pessoa, tipo, dia), com caixa e espaços normalizados")
     void pessoalUpsert() {
         pessoaExiste("op-1", "OPERADOR");
+        when(tipoRepo.findById(ATESTADO.getId())).thenReturn(Optional.of(ATESTADO));
         when(pessoaRepo.findByPessoaIdAndPessoaTipoAndData("op-1", "OPERADOR", LocalDate.of(2026, 7, 9)))
                 .thenReturn(Optional.empty());
         Map<String, Object> body = Map.of("pessoais", Map.of(
                 "pessoa_id", "op-1", "pessoa_tipo", "  operador  ",   // minúsculo e com espaços (normaliza)
-                "aplicar", List.of(Map.of("data", " 2026-07-09 ", "tipo", " ATESTADO "))));
+                "aplicar", List.of(Map.of("data", " 2026-07-09 ", "tipo_id", " tipo-atestado "))));
 
         service.aplicarLote(body, ADMIN);
 
-        verify(pessoaRepo).save(argThat(m -> "op-1".equals(m.getPessoaId())
+        verify(pessoaRepo).saveAndFlush(argThat(m -> "op-1".equals(m.getPessoaId())
                 && "OPERADOR".equals(m.getPessoaTipo())
                 && LocalDate.of(2026, 7, 9).equals(m.getData())
-                && m.getTipo() == TipoPessoaMarcacao.ATESTADO
+                && "tipo-atestado".equals(m.getTipoId())
                 && ADMIN.equals(m.getCriadoPorId())));
     }
 
@@ -206,37 +261,40 @@ class MarcacaoServiceTest {
 
         verify(pessoaRepo).deleteByPessoaIdAndPessoaTipoAndData("tec-7", "TECNICO", LocalDate.of(2026, 7, 9));
         verify(pessoaRepo).deleteByPessoaIdAndPessoaTipoAndData("tec-7", "TECNICO", LocalDate.of(2026, 7, 10));
-        verify(pessoaRepo, never()).save(any());
-        verifyNoInteractions(diaRepo);
+        verify(pessoaRepo, never()).saveAndFlush(any());
+        // desmarcar não precisa de tipo: o catálogo nem é consultado
+        verifyNoInteractions(diaRepo, tipoRepo);
     }
 
     @Test
     @DisplayName("aplicarLote com globais E pessoais no mesmo body: os quatro ramos rodam (o 1º bloco não encerra o lote)")
     void globaisEPessoaisNoMesmoLote() {
         pessoaExiste("op-1", "OPERADOR");
-        PontoDiaMarcacao gExistente = global(LocalDate.of(2026, 7, 9), TipoDiaMarcacao.FERIADO);
+        PontoDiaMarcacao gExistente = global(LocalDate.of(2026, 7, 9), FERIADO.getId());
         when(diaRepo.findByData(LocalDate.of(2026, 7, 9))).thenReturn(Optional.of(gExistente));
         PontoPessoaMarcacao pExistente =
-                pessoal("op-1", "OPERADOR", LocalDate.of(2026, 7, 14), TipoPessoaMarcacao.FERIAS);
+                pessoal("op-1", "OPERADOR", LocalDate.of(2026, 7, 14), FERIAS.getId());
         when(pessoaRepo.findByPessoaIdAndPessoaTipoAndData("op-1", "OPERADOR", LocalDate.of(2026, 7, 14)))
                 .thenReturn(Optional.of(pExistente));
+        when(tipoRepo.findById(FACULTATIVO.getId())).thenReturn(Optional.of(FACULTATIVO));
+        when(tipoRepo.findById(LICENCA.getId())).thenReturn(Optional.of(LICENCA));
 
         Map<String, Object> body = Map.of(
                 "globais", Map.of(
-                        "aplicar", List.of(Map.of("data", "2026-07-09", "tipo", "PONTO_FACULTATIVO")),
+                        "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "tipo-facultativo")),
                         "remover", List.of("2026-07-11")),
                 "pessoais", Map.of(
                         "pessoa_id", "op-1", "pessoa_tipo", "OPERADOR",
-                        "aplicar", List.of(Map.of("data", "2026-07-14", "tipo", "LICENCA_MEDICA")),
+                        "aplicar", List.of(Map.of("data", "2026-07-14", "tipo_id", "tipo-licenca")),
                         "remover", List.of("2026-07-15")));
 
         service.aplicarLote(body, ADMIN);
 
-        verify(diaRepo).save(argThat(m -> m == gExistente
-                && m.getTipo() == TipoDiaMarcacao.PONTO_FACULTATIVO && ADMIN.equals(m.getCriadoPorId())));
+        verify(diaRepo).saveAndFlush(argThat(m -> m == gExistente
+                && "tipo-facultativo".equals(m.getTipoId()) && ADMIN.equals(m.getCriadoPorId())));
         verify(diaRepo).deleteByData(LocalDate.of(2026, 7, 11));
-        verify(pessoaRepo).save(argThat(m -> m == pExistente
-                && m.getTipo() == TipoPessoaMarcacao.LICENCA_MEDICA && ADMIN.equals(m.getCriadoPorId())));
+        verify(pessoaRepo).saveAndFlush(argThat(m -> m == pExistente
+                && "tipo-licenca".equals(m.getTipoId()) && ADMIN.equals(m.getCriadoPorId())));
         verify(pessoaRepo).deleteByPessoaIdAndPessoaTipoAndData("op-1", "OPERADOR", LocalDate.of(2026, 7, 15));
     }
 
@@ -245,7 +303,7 @@ class MarcacaoServiceTest {
     void shapeInvalido() {
         Map<String, Object> body = Map.of("globais", List.of("x"));
         assertThrows(ServiceValidationException.class, () -> service.aplicarLote(body, ADMIN));
-        verify(diaRepo, never()).save(any());
+        verify(diaRepo, never()).saveAndFlush(any());
     }
 
     @Test
@@ -253,35 +311,35 @@ class MarcacaoServiceTest {
     void itemInvalido() {
         Map<String, Object> body = Map.of("globais", Map.of("aplicar", List.of("2026-07-09")));
         assertThrows(ServiceValidationException.class, () -> service.aplicarLote(body, ADMIN));
-        verify(diaRepo, never()).save(any());
+        verify(diaRepo, never()).saveAndFlush(any());
     }
 
     @Test
     @DisplayName("aplicarLote: data mal formatada (dd-MM-aaaa) no item → 400, não 500")
     void dataMalFormatadaEmAplicar() {
         Map<String, Object> body = Map.of("globais", Map.of(
-                "aplicar", List.of(Map.of("data", "09-07-2026", "tipo", "FERIADO"))));
+                "aplicar", List.of(Map.of("data", "09-07-2026", "tipo_id", "tipo-feriado"))));
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                 () -> service.aplicarLote(body, ADMIN));
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertTrue(ex.getMessage().contains("AAAA-MM-DD"), ex.getMessage());
-        verify(diaRepo, never()).save(any());
+        verify(diaRepo, never()).saveAndFlush(any());
     }
 
     @Test
     @DisplayName("aplicarLote: item sem data → 400 ('Data obrigatória'), não 500")
     void dataAusenteEmAplicar() {
         Map<String, Object> body = Map.of("globais", Map.of(
-                "aplicar", List.of(Map.of("tipo", "FERIADO"))));   // sem a chave "data"
+                "aplicar", List.of(Map.of("tipo_id", "tipo-feriado"))));   // sem a chave "data"
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                 () -> service.aplicarLote(body, ADMIN));
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertEquals("Data obrigatória.", ex.getMessage());
-        verify(diaRepo, never()).save(any());
+        verify(diaRepo, never()).saveAndFlush(any());
     }
 
     @Test
@@ -298,7 +356,7 @@ class MarcacaoServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertTrue(ex.getMessage().contains("AAAA-MM-DD"), ex.getMessage());
         verify(pessoaRepo, never()).deleteByPessoaIdAndPessoaTipoAndData(any(), any(), any());
-        verify(pessoaRepo, never()).save(any());
+        verify(pessoaRepo, never()).saveAndFlush(any());
     }
 
     @Test
@@ -306,26 +364,26 @@ class MarcacaoServiceTest {
     void pessoaIdEmBranco() {
         Map<String, Object> semId = Map.of("pessoais", Map.of(
                 "pessoa_tipo", "OPERADOR",
-                "aplicar", List.of(Map.of("data", "2026-07-09", "tipo", "FERIAS"))));
+                "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "tipo-ferias"))));
         Map<String, Object> idEmBranco = Map.of("pessoais", Map.of(
                 "pessoa_id", "   ", "pessoa_tipo", "OPERADOR",
-                "aplicar", List.of(Map.of("data", "2026-07-09", "tipo", "FERIAS"))));
+                "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "tipo-ferias"))));
 
         for (Map<String, Object> body : List.of(semId, idEmBranco)) {
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                     () -> service.aplicarLote(body, ADMIN));
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         }
-        verify(pessoaRepo, never()).save(any());
+        verify(pessoaRepo, never()).saveAndFlush(any());
     }
 
     @Test
-    @DisplayName("aplicarLote: tipo ausente ou em branco → 400 'Tipo … obrigatório.' (ramo distinto do tipo inválido)")
+    @DisplayName("aplicarLote: tipo_id ausente ou em branco → 400 'Tipo … obrigatório.' (ramo distinto do tipo inexistente)")
     void tipoAusenteOuEmBranco() {
         Map<String, Object> globalSemTipo = Map.of("globais", Map.of(
-                "aplicar", List.of(Map.of("data", "2026-07-09"))));                       // sem "tipo"
+                "aplicar", List.of(Map.of("data", "2026-07-09"))));                          // sem "tipo_id"
         Map<String, Object> globalTipoVazio = Map.of("globais", Map.of(
-                "aplicar", List.of(Map.of("data", "2026-07-09", "tipo", "  "))));         // em branco
+                "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "  "))));         // em branco
 
         for (Map<String, Object> body : List.of(globalSemTipo, globalTipoVazio)) {
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
@@ -342,24 +400,9 @@ class MarcacaoServiceTest {
                 () -> service.aplicarLote(pessoalSemTipo, ADMIN));
         assertEquals("Tipo de marcação pessoal obrigatório.", ex.getMessage());
 
-        verify(diaRepo, never()).save(any());
-        verify(pessoaRepo, never()).save(any());
-    }
-
-    @Test
-    @DisplayName("aplicarLote pessoal: tipo de marcação inválido → 400, não 500 (o ramo pessoal também é guardado)")
-    void tipoPessoalInvalido() {
-        pessoaExiste("op-1", "OPERADOR");
-        Map<String, Object> body = Map.of("pessoais", Map.of(
-                "pessoa_id", "op-1", "pessoa_tipo", "OPERADOR",
-                "aplicar", List.of(Map.of("data", "2026-07-09", "tipo", "XPTO"))));
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.aplicarLote(body, ADMIN));
-
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertTrue(ex.getMessage().contains("XPTO"), ex.getMessage());
-        verify(pessoaRepo, never()).save(any());
+        verify(tipoRepo, never()).findById(any());   // sem id, o catálogo nem é consultado
+        verify(diaRepo, never()).saveAndFlush(any());
+        verify(pessoaRepo, never()).saveAndFlush(any());
     }
 
     @Test
@@ -372,22 +415,22 @@ class MarcacaoServiceTest {
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertTrue(ex.getMessage().contains("deve ser uma lista"), ex.getMessage());
-        verify(diaRepo, never()).save(any());
+        verify(diaRepo, never()).saveAndFlush(any());
     }
 
     @Test
     @DisplayName("listar em dezembro e em janeiro: os meses-borda são válidos e o range vira o ano corretamente")
     void listarBordasDoAno() {
+        when(tipoRepo.findAll()).thenReturn(List.of(FERIADO, RECESSO));
         when(diaRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(
                 LocalDate.of(2026, 12, 1), LocalDate.of(2027, 1, 1)))
-                .thenReturn(List.of(global(LocalDate.of(2026, 12, 25), TipoDiaMarcacao.FERIADO)));
+                .thenReturn(List.of(global(LocalDate.of(2026, 12, 25), FERIADO.getId())));
         when(pessoaRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(
                 LocalDate.of(2026, 12, 1), LocalDate.of(2027, 1, 1)))
-                .thenReturn(List.of(pessoal("op-1", "OPERADOR", LocalDate.of(2026, 12, 28),
-                        TipoPessoaMarcacao.RECESSO)));
+                .thenReturn(List.of(pessoal("op-1", "OPERADOR", LocalDate.of(2026, 12, 28), RECESSO.getId())));
         when(diaRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(
                 LocalDate.of(2026, 1, 1), LocalDate.of(2026, 2, 1)))
-                .thenReturn(List.of(global(LocalDate.of(2026, 1, 1), TipoDiaMarcacao.FERIADO)));
+                .thenReturn(List.of(global(LocalDate.of(2026, 1, 1), FERIADO.getId())));
         when(pessoaRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(
                 LocalDate.of(2026, 1, 1), LocalDate.of(2026, 2, 1)))
                 .thenReturn(List.of());
@@ -404,7 +447,107 @@ class MarcacaoServiceTest {
     @DisplayName("aplicarLote com body nulo: não faz nada e não estoura")
     void bodyNulo() {
         assertDoesNotThrow(() -> service.aplicarLote(null, ADMIN));
-        verifyNoInteractions(diaRepo, pessoaRepo);
+        verifyNoInteractions(diaRepo, pessoaRepo, tipoRepo);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // O tipo vem do catálogo, e o escopo dele delimita onde pode ser usado
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * O tipo da marcação é uma linha do catálogo, escolhida por id: o lote traz o {@code tipo_id} e o
+     * service confere a existência e o ESCOPO antes de gravar. Marcar um funcionário com um tipo de
+     * todos (ou o dia de todos com um tipo individual) gravaria uma marcação que nenhuma leitura do
+     * módulo mostraria de volta — some da grade e do modal, sem erro nenhum para o admin. Por isso a
+     * validação é 400 com mensagem específica, e nada é salvo.
+     */
+    @Nested
+    @DisplayName("tipo do catálogo: id inexistente e escopo trocado não gravam marcação")
+    class TipoDoCatalogo {
+
+        @Test
+        @DisplayName("global com tipo_id inexistente → 400 com o id na mensagem e nada gravado")
+        void tipoGlobalInexistente() {
+            when(tipoRepo.findById("xpto")).thenReturn(Optional.empty());
+            Map<String, Object> body = Map.of("globais", Map.of(
+                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "xpto"))));
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.aplicarLote(body, ADMIN));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertEquals("Tipo de ocorrência não encontrado: xpto", ex.getMessage());
+            verify(diaRepo, never()).saveAndFlush(any());
+            verify(diaRepo, never()).findByData(any());
+        }
+
+        @Test
+        @DisplayName("pessoal com tipo_id inexistente → 400 e nada gravado (o ramo pessoal também é guardado)")
+        void tipoPessoalInexistente() {
+            pessoaExiste("op-1", "OPERADOR");
+            when(tipoRepo.findById("xpto")).thenReturn(Optional.empty());
+            Map<String, Object> body = Map.of("pessoais", Map.of(
+                    "pessoa_id", "op-1", "pessoa_tipo", "OPERADOR",
+                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "xpto"))));
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.aplicarLote(body, ADMIN));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertEquals("Tipo de ocorrência não encontrado: xpto", ex.getMessage());
+            verify(pessoaRepo, never()).saveAndFlush(any());
+        }
+
+        @Test
+        @DisplayName("tipo INDIVIDUAL usado como marcação global → 400 e nada gravado")
+        void tipoIndividualNaoMarcaODiaDeTodos() {
+            when(tipoRepo.findById(FERIAS.getId())).thenReturn(Optional.of(FERIAS));
+            Map<String, Object> body = Map.of("globais", Map.of(
+                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "tipo-ferias"))));
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.aplicarLote(body, ADMIN));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertEquals("O tipo \"Férias\" não pode ser usado como marcação global.", ex.getMessage());
+            verify(diaRepo, never()).saveAndFlush(any());
+        }
+
+        @Test
+        @DisplayName("tipo GLOBAL usado como marcação pessoal → 400 e nada gravado")
+        void tipoGlobalNaoMarcaFuncionario() {
+            pessoaExiste("op-1", "OPERADOR");
+            when(tipoRepo.findById(FERIADO.getId())).thenReturn(Optional.of(FERIADO));
+            Map<String, Object> body = Map.of("pessoais", Map.of(
+                    "pessoa_id", "op-1", "pessoa_tipo", "OPERADOR",
+                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "tipo-feriado"))));
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.aplicarLote(body, ADMIN));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertEquals("O tipo \"Feriado\" não pode ser usado como marcação pessoal.", ex.getMessage());
+            verify(pessoaRepo, never()).saveAndFlush(any());
+            verify(pessoaRepo, never()).findByPessoaIdAndPessoaTipoAndData(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("tipo excluído entre a leitura e a gravação: a FK recusa e o admin lê o motivo, não um erro interno")
+        void tipoExcluidoDuranteAMarcacao() {
+            when(tipoRepo.findById(FERIADO.getId())).thenReturn(Optional.of(FERIADO));
+            when(diaRepo.findByData(LocalDate.of(2026, 7, 9))).thenReturn(Optional.empty());
+            when(diaRepo.saveAndFlush(any()))
+                    .thenThrow(new DataIntegrityViolationException("ORA-02291"));
+            Map<String, Object> body = Map.of("globais", Map.of(
+                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "tipo-feriado"))));
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.aplicarLote(body, ADMIN));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertEquals("O tipo \"Feriado\" não está mais disponível. "
+                    + "Recarregue as ocorrências e tente novamente.", ex.getMessage());
+        }
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -412,13 +555,13 @@ class MarcacaoServiceTest {
     // ══════════════════════════════════════════════════════════════
 
     /**
-     * PNT_PESSOA_MARCACAO é polimórfica e não tem FK (changelog 038): sem a guarda, o par (id, tipo)
-     * era gravado sem que ninguém conferisse o cadastro. A linha órfã resultante não aparecia na
-     * grade/XLSX nem nos dias bloqueados do banco de horas — todos cruzam pelo par REAL — e o modal
-     * não a removia: o admin marcava "Férias" e nada acontecia, sem erro nenhum.
+     * PNT_PESSOA_MARCACAO é polimórfica e não tem FK: sem a guarda, o par (id, tipo) era gravado sem
+     * que ninguém conferisse o cadastro. A linha órfã resultante não aparecia na grade/XLSX nem nos
+     * dias bloqueados do banco de horas — todos cruzam pelo par REAL — e o modal não a removia: o
+     * admin marcava "Férias" e nada acontecia, sem erro nenhum.
      *
      * <p>A guarda fica no TOPO do ramo pessoal, e por isso cobre os dois lados do lote (aplicar e
-     * remover). O par TROCADO é o caso que separa esta correção de um {@code existsById} qualquer: o
+     * remover). O par TROCADO é o caso que separa esta regra de um {@code existsById} qualquer: o
      * id existe — no cadastro do OUTRO tipo.
      */
     @Nested
@@ -431,14 +574,14 @@ class MarcacaoServiceTest {
             when(pessoaCadastro.existe("fantasma", "OPERADOR")).thenReturn(false);
             Map<String, Object> body = Map.of("pessoais", Map.of(
                     "pessoa_id", "fantasma", "pessoa_tipo", "OPERADOR",
-                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo", "FERIAS"))));
+                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "tipo-ferias"))));
 
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                     () -> service.aplicarLote(body, ADMIN));
 
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             assertEquals("Funcionário não encontrado (pessoa_id / pessoa_tipo).", ex.getMessage());
-            verify(pessoaRepo, never()).save(any());
+            verify(pessoaRepo, never()).saveAndFlush(any());
             verify(pessoaRepo, never()).findByPessoaIdAndPessoaTipoAndData(any(), any(), any());
         }
 
@@ -455,7 +598,7 @@ class MarcacaoServiceTest {
 
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             verify(pessoaRepo, never()).deleteByPessoaIdAndPessoaTipoAndData(any(), any(), any());
-            verify(pessoaRepo, never()).save(any());
+            verify(pessoaRepo, never()).saveAndFlush(any());
         }
 
         /**
@@ -469,46 +612,48 @@ class MarcacaoServiceTest {
             when(pessoaCadastro.existe("op-1", "TECNICO")).thenReturn(false);   // existe como OPERADOR, não como TECNICO
             Map<String, Object> body = Map.of("pessoais", Map.of(
                     "pessoa_id", "op-1", "pessoa_tipo", "TECNICO",
-                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo", "FERIAS"))));
+                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "tipo-ferias"))));
 
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                     () -> service.aplicarLote(body, ADMIN));
 
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             assertEquals("Funcionário não encontrado (pessoa_id / pessoa_tipo).", ex.getMessage());
-            verify(pessoaRepo, never()).save(any());
+            verify(pessoaRepo, never()).saveAndFlush(any());
         }
 
         @Test
         @DisplayName("o par é conferido no cadastro DO TIPO informado, com o tipo já normalizado")
         void consultaOCadastroDoTipoInformado() {
             pessoaExiste("adm-9", "ADMINISTRADOR");
+            when(tipoRepo.findById(RECESSO.getId())).thenReturn(Optional.of(RECESSO));
             when(pessoaRepo.findByPessoaIdAndPessoaTipoAndData("adm-9", "ADMINISTRADOR", LocalDate.of(2026, 7, 9)))
                     .thenReturn(Optional.empty());
             Map<String, Object> body = Map.of("pessoais", Map.of(
                     "pessoa_id", "adm-9", "pessoa_tipo", " administrador ",   // normalizado antes da consulta
-                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo", "RECESSO"))));
+                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "tipo-recesso"))));
 
             service.aplicarLote(body, ADMIN);
 
             verify(pessoaCadastro).existe("adm-9", "ADMINISTRADOR");
-            verify(pessoaRepo).save(argThat(m -> "adm-9".equals(m.getPessoaId())
+            verify(pessoaRepo).saveAndFlush(argThat(m -> "adm-9".equals(m.getPessoaId())
                     && "ADMINISTRADOR".equals(m.getPessoaTipo())
-                    && m.getTipo() == TipoPessoaMarcacao.RECESSO));
+                    && "tipo-recesso".equals(m.getTipoId())));
         }
 
-        /** O ramo GLOBAL não tem pessoa: a guarda nova não pode pedir cadastro nenhum para um feriado. */
+        /** O ramo GLOBAL não tem pessoa: a guarda não pode pedir cadastro nenhum para um feriado. */
         @Test
         @DisplayName("ramo global (feriado) segue sem consultar cadastro de pessoa")
         void ramoGlobalIntocado() {
             when(diaRepo.findByData(LocalDate.of(2026, 7, 9))).thenReturn(Optional.empty());
+            when(tipoRepo.findById(FERIADO.getId())).thenReturn(Optional.of(FERIADO));
             Map<String, Object> body = Map.of("globais", Map.of(
-                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo", "FERIADO")),
+                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "tipo-feriado")),
                     "remover", List.of("2026-07-11")));
 
             service.aplicarLote(body, ADMIN);
 
-            verify(diaRepo).save(any());
+            verify(diaRepo).saveAndFlush(any());
             verify(diaRepo).deleteByData(LocalDate.of(2026, 7, 11));
             verifyNoInteractions(pessoaCadastro, pessoaRepo);
         }

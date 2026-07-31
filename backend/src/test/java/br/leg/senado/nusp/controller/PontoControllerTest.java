@@ -41,6 +41,7 @@ import br.leg.senado.nusp.service.ReportDocxService;
 import br.leg.senado.nusp.service.ReportPdfService;
 import br.leg.senado.nusp.service.ReportService;
 import br.leg.senado.nusp.service.RetificacaoService;
+import br.leg.senado.nusp.service.TipoMarcacaoService;
 
 import static org.hamcrest.Matchers.containsString;
 
@@ -72,7 +73,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * homogêneo é plumbing de delegação — cobre-se cada FAMÍLIA de contrato em endpoints
  * representativos, mais os singulares (upload multipart, publicação, grade/XLSX, streaming de
  * PDF, retificação em lote, folgas, deliberação, relatório, paginação e binding), sem exaurir
- * os 26 mappings.
+ * os 35 mappings.
  *
  * <p><b>Onde a resposta é do controller e onde é do stub:</b> {@code download}/{@code preview}
  * montam os headers no próprio controller ({@code streamPdf}) — ali os headers SÃO asserção. Já o
@@ -105,13 +106,14 @@ class PontoControllerTest {
     @MockitoBean private PontoExclusaoService pontoExclusaoService;
     @MockitoBean private RetificacaoService retificacaoService;
     @MockitoBean private MarcacaoService marcacaoService;
+    @MockitoBean private TipoMarcacaoService tipoMarcacaoService;
     @MockitoBean private GradeRetificacaoService gradeRetificacaoService;
     @MockitoBean private PontoXlsxService pontoXlsxService;
     @MockitoBean private BancoHorasService bancoHorasService;
     @MockitoBean private ReportService reportService;
     @MockitoBean private ReportPdfService pdfService;
     @MockitoBean private ReportDocxService docxService;
-    // ObjectMapper (10ª dependência do construtor) vem do slice — NÃO mockar.
+    // ObjectMapper (a última dependência do construtor) vem do slice — NÃO mockar.
 
     private TokenFactory tokens;
     private String admin;
@@ -347,6 +349,138 @@ class PontoControllerTest {
         }
     }
 
+    /**
+     * Catálogo de tipos de ocorrência: ler é de qualquer admin, escrever é do master. Aqui se mede
+     * a cadeia HTTP — quem é barrado antes do dispatch, o que o controller repassa ao service
+     * (username decide a PERMISSÃO, id assina a AUTORIA da trilha) e o formato das respostas.
+     */
+    @Nested
+    @DisplayName("Catálogo de tipos de ocorrência")
+    class TiposDeMarcacao {
+
+        private static final String TIPO_ID = "b3d2e1f0-1111-4a2b-8c3d-4e5f60718293";
+        private static final String TIPOS = "/api/admin/ponto/tipos-marcacao";
+        private static final String PREVIEW_TIPO = TIPOS + "/" + TIPO_ID + "/exclusao/preview";
+        private static final String DELETE_TIPO = TIPOS + "/" + TIPO_ID;
+
+        /** O username que o token carrega ({@code teste.<perfil>}) — é ele que o controller repassa. */
+        private static final String USERNAME_DO_TOKEN = "teste." + TokenFactory.ADMIN;
+
+        @Test
+        @DisplayName("GET .../tipos-marcacao — devolve o catálogo; sem escopo na query, o service recebe null")
+        void listaOCatalogo() throws Exception {
+            when(tipoMarcacaoService.listar(null)).thenReturn(
+                    Map.of("tipos", List.of(Map.of("id", TIPO_ID, "nome", "Feriado",
+                            "badge", "Fer", "escopo", "GLOBAL"))));
+
+            mockMvc.perform(Requests.get(TIPOS).header("Authorization", admin))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.ok").value(true))
+                    .andExpect(jsonPath("$.data.tipos[0].nome").value("Feriado"))
+                    .andExpect(jsonPath("$.data.tipos[0].badge").value("Fer"));
+
+            verify(tipoMarcacaoService).listar(null);
+        }
+
+        @Test
+        @DisplayName("GET .../tipos-marcacao?escopo=INDIVIDUAL — o escopo da query chega ao service")
+        void listaPorEscopo() throws Exception {
+            when(tipoMarcacaoService.listar("INDIVIDUAL")).thenReturn(Map.of("tipos", List.of()));
+
+            mockMvc.perform(Requests.get(TIPOS).param("escopo", "INDIVIDUAL")
+                            .header("Authorization", admin))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.tipos").isEmpty());
+
+            verify(tipoMarcacaoService).listar("INDIVIDUAL");
+        }
+
+        @Test
+        @DisplayName("POST .../tipos-marcacao — 201 com o corpo do lote; username decide a permissão, id assina a autoria")
+        void cadastraLote() throws Exception {
+            when(tipoMarcacaoService.criar(any(), eq(USERNAME_DO_TOKEN), eq(TokenFactory.USER_ID)))
+                    .thenReturn(Map.of("criados", List.of(Map.of("nome", "Luto"))));
+
+            mockMvc.perform(Requests.post(TIPOS)
+                            .header("Authorization", admin)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"tipos\":[{\"nome\":\"Luto\",\"badge\":\"Lut\",\"escopo\":\"GLOBAL\"}]}"))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.ok").value(true))
+                    .andExpect(jsonPath("$.data.criados[0].nome").value("Luto"));
+
+            verify(tipoMarcacaoService).criar(any(), eq(USERNAME_DO_TOKEN), eq(TokenFactory.USER_ID));
+        }
+
+        @Test
+        @DisplayName("GET .../{id}/exclusao/preview — as contagens do que morre chegam ao modal")
+        void previewDaExclusao() throws Exception {
+            when(tipoMarcacaoService.previewExclusao(TIPO_ID, USERNAME_DO_TOKEN)).thenReturn(
+                    Map.of("marcacoes", 4, "pessoas_afetadas", 2, "pessoas", List.of("Ana", "Bruno")));
+
+            mockMvc.perform(Requests.get(PREVIEW_TIPO).header("Authorization", admin))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.marcacoes").value(4))
+                    .andExpect(jsonPath("$.data.pessoas[1]").value("Bruno"));
+        }
+
+        @Test
+        @DisplayName("DELETE .../{id} — o resumo do que foi apagado volta ao cliente")
+        void excluiTipo() throws Exception {
+            when(tipoMarcacaoService.excluir(TIPO_ID, USERNAME_DO_TOKEN, TokenFactory.USER_ID))
+                    .thenReturn(Map.of("marcacoes", 4));
+
+            mockMvc.perform(Requests.delete(DELETE_TIPO).header("Authorization", admin))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.ok").value(true))
+                    .andExpect(jsonPath("$.data.marcacoes").value(4));
+
+            verify(tipoMarcacaoService).excluir(TIPO_ID, USERNAME_DO_TOKEN, TokenFactory.USER_ID);
+        }
+
+        @Test
+        @DisplayName("admin comum: o 403 do service chega ao cliente nas três rotas de escrita")
+        void adminComumRecebe403NasEscritas() throws Exception {
+            ServiceValidationException forbidden =
+                    new ServiceValidationException("forbidden", HttpStatus.FORBIDDEN);
+            doThrow(forbidden).when(tipoMarcacaoService).criar(any(), anyString(), anyString());
+            doThrow(forbidden).when(tipoMarcacaoService).previewExclusao(anyString(), anyString());
+            doThrow(forbidden).when(tipoMarcacaoService).excluir(anyString(), anyString(), anyString());
+
+            for (MockHttpServletRequestBuilder req : List.of(
+                    Requests.post(TIPOS).contentType(MediaType.APPLICATION_JSON).content("{\"tipos\":[]}"),
+                    Requests.get(PREVIEW_TIPO),
+                    Requests.delete(DELETE_TIPO))) {
+                mockMvc.perform(req.header("Authorization", admin))
+                        .andExpect(status().isForbidden())
+                        .andExpect(jsonPath("$.ok").value(false))
+                        .andExpect(jsonPath("$.error").value("forbidden"));
+            }
+        }
+
+        @Test
+        @DisplayName("operador: barrado pelo matcher /api/admin/** antes do dispatch — o service nem é tocado")
+        void naoAdminNaoChegaAoService() throws Exception {
+            mockMvc.perform(Requests.get(TIPOS).header("Authorization", operador))
+                    .andExpect(status().isForbidden());
+            mockMvc.perform(Requests.delete(DELETE_TIPO).header("Authorization", operador))
+                    .andExpect(status().isForbidden());
+
+            verifyNoInteractions(tipoMarcacaoService);
+        }
+
+        @Test
+        @DisplayName("tipo inexistente: o 404 do service chega como 404")
+        void tipoInexistente404() throws Exception {
+            doThrow(new ServiceValidationException("Tipo de ocorrência não encontrado.", HttpStatus.NOT_FOUND))
+                    .when(tipoMarcacaoService).excluir(anyString(), anyString(), anyString());
+
+            mockMvc.perform(Requests.delete(DELETE_TIPO).header("Authorization", admin))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.error").value("Tipo de ocorrência não encontrado."));
+        }
+    }
+
     @Test
     @DisplayName("GET /api/ponto/minhas-folhas — devolve o payload do service para o dono do token")
     void minhasFolhas_payloadDoService() throws Exception {
@@ -386,7 +520,8 @@ class PontoControllerTest {
         mockMvc.perform(Requests.put("/api/admin/ponto/marcacoes")
                         .header("Authorization", admin)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"ano\":2026,\"mes\":7,\"globais\":{\"2026-07-09\":\"FERIADO\"}}"))
+                        .content("{\"ano\":2026,\"mes\":7,\"globais\":{\"aplicar\":"
+                                + "[{\"data\":\"2026-07-09\",\"tipo_id\":\"t-feriado\"}]}}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.ok").value(true))
                 .andExpect(jsonPath("$.data").doesNotExist());
@@ -394,7 +529,10 @@ class PontoControllerTest {
         verify(marcacaoService).aplicarLote(
                 argThat(body -> Integer.valueOf(2026).equals(body.get("ano"))
                         && body.get("globais") instanceof Map<?, ?> globais
-                        && "FERIADO".equals(globais.get("2026-07-09"))),
+                        && globais.get("aplicar") instanceof List<?> aplicar
+                        && aplicar.get(0) instanceof Map<?, ?> item
+                        && "2026-07-09".equals(item.get("data"))
+                        && "t-feriado".equals(item.get("tipo_id"))),
                 eq(TokenFactory.USER_ID));
     }
 
