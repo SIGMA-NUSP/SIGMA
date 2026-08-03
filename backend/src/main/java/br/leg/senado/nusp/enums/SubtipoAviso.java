@@ -4,43 +4,34 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 
 /**
  * Subtipo de um aviso — código estável gravado em {@code FRM_AVISO_CADASTRO.SUBTIPO} (valor = nome
- * do enum) do qual o backend deriva as DUAS leituras do mesmo aviso, propositalmente diferentes:
+ * do enum), do qual o backend deriva o {@link RotuloAviso} exibido: a categoria da comunicação e os
+ * contextos do popup e da tabela do admin.
  *
- * <ul>
- *   <li>{@link #getTituloPopup()} — o "Aviso - …" do popup global (aviso-popup);</li>
- *   <li>{@link #getLabelTabela()} — a coluna "Tipo de Aviso" da tabela do admin.</li>
- * </ul>
- *
- * Nulo é válido e esperado: avisos de Verificação e todo o legado PESSOAL ficam sem subtipo e
- * usam os fallbacks no label do {@link TipoAviso} (ver plano §2). Nunca derivar uma leitura de um
- * subtipo assumindo não-nulo. Este enum é a fonte única do mapa da §2 do plano.
+ * <p>Nulo é válido e esperado: avisos de Verificação e todo o legado PESSOAL ficam sem subtipo e
+ * caem no rótulo do {@link TipoAviso}. Nunca derivar uma leitura de um subtipo assumindo não-nulo.
  */
 public enum SubtipoAviso {
-    FOLHA_SEMANAL("Folha semanal disponível", "Folha Semanal"),
-    FOLHA_MENSAL("Folha mensal disponível", "Folha Mensal"),
-    SOLICITACAO_APROVADA("Solicitação aprovada", "Solicitação Banco"),
-    SOLICITACAO_REJEITADA("Solicitação rejeitada", "Solicitação Banco"),
-    ESCALA("Escala", "Escala"),
-    AGENDA("Agenda Legislativa", "Agenda"),
-    PESSOAL("Pessoal", "Pessoal"),
-    GRUPO_OPERADORES("Operadores", "Operadores"),
-    GRUPO_TECNICOS("Técnicos", "Técnicos"),
-    GRUPO_TODOS("Todos", "Operadores e Técnicos"),
-    GRUPO_ADMINISTRADORES("Administradores", "Administradores");
+    FOLHA_SEMANAL(CategoriaAviso.NOTIFICACAO, "Folha semanal disponível", "Folha Semanal"),
+    FOLHA_MENSAL(CategoriaAviso.NOTIFICACAO, "Folha mensal disponível", "Folha Mensal"),
+    SOLICITACAO_APROVADA(CategoriaAviso.NOTIFICACAO, "Solicitação aprovada", "Solicitação Banco"),
+    SOLICITACAO_REJEITADA(CategoriaAviso.NOTIFICACAO, "Solicitação rejeitada", "Solicitação Banco"),
+    ESCALA(CategoriaAviso.AVISO, "Escala", "Escala"),
+    AGENDA(CategoriaAviso.COMUNICADO, "Agenda Legislativa", "Agenda"),
+    /** Do administrador para pessoas específicas: a categoria já a identifica — sem contexto. */
+    PESSOAL(CategoriaAviso.MENSAGEM, "", ""),
+    GRUPO_OPERADORES(CategoriaAviso.COMUNICADO, "Operadores", "Operadores"),
+    GRUPO_TECNICOS(CategoriaAviso.COMUNICADO, "Técnicos", "Técnicos"),
+    GRUPO_TODOS(CategoriaAviso.COMUNICADO, "Todos", "Operadores e Técnicos"),
+    GRUPO_ADMINISTRADORES(CategoriaAviso.COMUNICADO, "Administradores", "Administradores");
 
-    private final String tituloPopup;
-    private final String labelTabela;
+    private final RotuloAviso rotulo;
 
-    SubtipoAviso(String tituloPopup, String labelTabela) {
-        this.tituloPopup = tituloPopup;
-        this.labelTabela = labelTabela;
+    SubtipoAviso(CategoriaAviso categoria, String contextoPopup, String contextoTabela) {
+        this.rotulo = new RotuloAviso(categoria, contextoPopup, contextoTabela);
     }
 
-    /** Título exibido no popup global ("Aviso - {tituloPopup}"). */
-    public String getTituloPopup() { return tituloPopup; }
-
-    /** Rótulo exibido na coluna "Tipo de Aviso" da tabela do admin. */
-    public String getLabelTabela() { return labelTabela; }
+    /** Categoria e contextos exibidos para este subtipo. */
+    public RotuloAviso getRotulo() { return rotulo; }
 
     /** Nulo/branco → null (subtipo é opcional: Verificação e legado não têm). */
     @JsonCreator

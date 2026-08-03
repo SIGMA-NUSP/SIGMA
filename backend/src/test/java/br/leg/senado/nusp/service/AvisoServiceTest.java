@@ -962,7 +962,7 @@ class AvisoServiceTest {
             when(cadastroRepo.findById(CADASTRO_ID)).thenReturn(Optional.empty());
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                     () -> service.registrarVisto(CADASTRO_ID, OPERADOR_ID, PapelPessoa.OPERADOR));
-            assertEquals("Aviso não encontrado.", ex.getMessage());
+            assertEquals("Comunicação não encontrada.", ex.getMessage());
             assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
             verifyNoInteractions(cienciaRepo, cienciaWriter);
         }
@@ -1185,7 +1185,7 @@ class AvisoServiceTest {
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                     () -> service.registrarCiencia(CADASTRO_ID, SALA_ID, OPERADOR_ID, PapelPessoa.OPERADOR));
 
-            assertEquals("Aviso não encontrado.", ex.getMessage());
+            assertEquals("Comunicação não encontrada.", ex.getMessage());
             assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
             verifyNoInteractions(cienciaRepo, cienciaWriter);
         }
@@ -1415,8 +1415,9 @@ class AvisoServiceTest {
             assertEquals(1, out.size());
             assertEquals("cad-pendente", out.get(0).get("cadastro_id"));
             assertEquals("PESSOAL", out.get(0).get("tipo"));
-            // Legado sem subtipo (row com SUBTIPO nulo): título cai no fallback do label do tipo (§2).
-            assertEquals("Pessoal", out.get(0).get("titulo"));
+            // Legado sem subtipo (row com SUBTIPO nulo): abre como Mensagem, e a categoria basta — sem contexto.
+            assertEquals("MENSAGEM", out.get(0).get("categoria"));
+            assertEquals("", out.get(0).get("titulo"));
             // exige_ciencia=true é o que faz o front renderizar o botão "Ciente" (o par false está
             // no caso GERAL abaixo — sem os dois, um hardcode do campo passaria despercebido).
             assertEquals(true, out.get(0).get("exige_ciencia"));
@@ -1450,7 +1451,8 @@ class AvisoServiceTest {
             Map<String, Object> aviso = out.get(0);
             assertEquals("cad-geral", aviso.get("cadastro_id"));
             assertEquals("GERAL", aviso.get("tipo"));
-            assertEquals("Geral", aviso.get("titulo")); // sem subtipo → fallback no label do tipo
+            assertEquals("COMUNICADO", aviso.get("categoria"));
+            assertEquals("Geral", aviso.get("titulo")); // sem subtipo → contexto do próprio tipo
             assertEquals(false, aviso.get("exige_ciencia"));
             assertEquals(false, aviso.get("manter_apos_ciencia"));
 
@@ -1465,7 +1467,7 @@ class AvisoServiceTest {
         }
 
         @Test
-        @DisplayName("buscarPendentes — quando o cadastro tem SUBTIPO, o título do popup vem do subtipo (§2), não do label do tipo")
+        @DisplayName("buscarPendentes — com SUBTIPO, categoria e contexto do popup vêm dele, não do tipo")
         void buscarPendentes_tituloVemDoSubtipo() {
             stubPendentes("al.OPERADOR_ID = ?",
                     List.<Object[]>of(row("cad-folha", 1, TipoAviso.PESSOAL, SubtipoAviso.FOLHA_SEMANAL)));
@@ -1475,8 +1477,24 @@ class AvisoServiceTest {
             List<Map<String, Object>> out = service.buscarPendentes(OPERADOR_ID, PapelPessoa.OPERADOR, List.of(TipoAviso.PESSOAL));
 
             assertEquals(1, out.size());
-            // FOLHA_SEMANAL → "Folha semanal disponível" (popup), distinto do label do tipo ("Pessoal").
+            // Um aviso PESSOAL disparado pelo sistema abre como Notificação — não como a Mensagem do tipo.
+            assertEquals("NOTIFICACAO", out.get(0).get("categoria"));
             assertEquals("Folha semanal disponível", out.get(0).get("titulo"));
+        }
+
+        @Test
+        @DisplayName("buscarPendentes — o desfecho de uma solicitação de folga também abre como Notificação")
+        void buscarPendentes_solicitacaoEhNotificacao() {
+            stubPendentes("al.OPERADOR_ID = ?",
+                    List.<Object[]>of(row("cad-folga", 0, TipoAviso.PESSOAL, SubtipoAviso.SOLICITACAO_APROVADA)));
+            when(cienciaRepo.findByCadastroIdAndOperadorId("cad-folga", OPERADOR_ID)).thenReturn(Optional.empty());
+            when(mensagemRepo.findByCadastroIdOrderByOrdem("cad-folga"))
+                    .thenReturn(List.of(mensagem(1, "Sua folga foi aprovada.")));
+
+            List<Map<String, Object>> out = service.buscarPendentes(OPERADOR_ID, PapelPessoa.OPERADOR, List.of(TipoAviso.PESSOAL));
+
+            assertEquals("NOTIFICACAO", out.get(0).get("categoria"));
+            assertEquals("Solicitação aprovada", out.get(0).get("titulo"));
         }
 
         @Test
@@ -1497,7 +1515,8 @@ class AvisoServiceTest {
             assertEquals("cad-novo", out.get(0).get("cadastro_id"));
             assertEquals("AGENDA", out.get(0).get("tipo"));
             assertEquals(false, out.get(0).get("exige_ciencia"));
-            // Subtipo AGENDA → título "Agenda Legislativa" (§2), não o label do tipo ("Agenda").
+            // Subtipo AGENDA → Comunicado com contexto "Agenda Legislativa" (o label do tipo é só "Agenda").
+            assertEquals("COMUNICADO", out.get(0).get("categoria"));
             assertEquals("Agenda Legislativa", out.get(0).get("titulo"));
             // O visto usa a chave sem sala (cadastro+pessoa), nunca a variante com sala.
             verify(cienciaRepo, never()).findByCadastroIdAndSalaIdAndOperadorId(anyString(), anyInt(), anyString());

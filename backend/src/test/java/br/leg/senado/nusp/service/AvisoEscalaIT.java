@@ -392,6 +392,14 @@ class AvisoEscalaIT {
         }
 
         @Test
+        @DisplayName("coluna 'Tipo': o aviso de escala é AVISO com contexto 'Escala'")
+        void categoriaEContexto() {
+            var linha = linhaDe(semearAviso(HOJE.minusDays(1), HOJE.plusDays(1)));
+            assertEquals("AVISO", linha.get("categoria"));
+            assertEquals("Escala", linha.get("tipo"));
+        }
+
+        @Test
         @DisplayName("escala encerrada → status Expirado")
         void expirado() {
             var linha = linhaDe(semearAviso(HOJE.minusDays(6), HOJE.minusDays(2)));

@@ -22,7 +22,7 @@ import { FeatureToggleDirective } from '../../shared/directives/feature-toggle.d
     <div class="grid-cards cols-3">
       <a routerLink="/admin/novo-operador" class="card-custom card-nav">Cadastro de Operador</a>
       <a routerLink="/admin/novo-tecnico" class="card-custom card-nav">Cadastro de Técnico</a>
-      <a [featureToggle]="'inserirAvisos'" #fAvisos="featureToggle" [routerLink]="fAvisos.enabled() ? '/admin/avisos-sala' : null" class="card-custom card-nav">Inserir Avisos</a>
+      <a [featureToggle]="'inserirAvisos'" #fAvisos="featureToggle" [routerLink]="fAvisos.enabled() ? '/admin/avisos-sala' : null" class="card-custom card-nav">Comunicações</a>
       <a routerLink="/admin/escala" class="card-custom card-nav">Escala Semanal</a>
       <a [featureToggle]="'pontoBanco'" #fPonto="featureToggle" [routerLink]="fPonto.enabled() ? '/admin/ponto' : null" class="card-custom card-nav">Ponto e Banco</a>
     </div>

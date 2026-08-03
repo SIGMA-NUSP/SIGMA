@@ -198,12 +198,36 @@ input[type="date"], input[type="time"] {
   &:hover { box-shadow: none; }
 }
 
+/* ═══ Categorias de comunicação ═══
+   Cada .cat-* só declara as três cores da sua categoria; quem pinta são .aviso-box, .cat-selo e
+   .modal-cat, que leem as variáveis. O default de cada variável é o visual do Aviso (amarelo),
+   então uma caixa SEM classe de categoria — o wizard de verificação — continua idêntica.
+   Aplicar a classe no container (o card do modal, a célula da tabela): as variáveis descem por
+   herança e vestem selo, barra e caixa de texto de uma vez. */
+.cat-aviso       { --cat-cor: #f2c94c; --cat-fundo: #fff8db; --cat-texto: #7a5d00; }
+.cat-comunicado  { --cat-cor: #003b63; --cat-fundo: #e8f0f7; --cat-texto: #003b63; }
+.cat-mensagem    { --cat-cor: #009739; --cat-fundo: #e9f7ef; --cat-texto: #00622a; }
+.cat-notificacao { --cat-cor: #8a94a6; --cat-fundo: #f3f4f6; --cat-texto: #43506b; }
+
+/* Selo: pill com ícone + nome da categoria em caixa alta. */
+.cat-selo {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--cat-fundo, #fff8db); color: var(--cat-texto, #7a5d00);
+  font-size: .72rem; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+  white-space: nowrap;
+  svg { width: 13px; height: 13px; flex-shrink: 0; }
+}
+
+/* Faixa da categoria no topo do modal (combina com .modal-card). */
+.modal-cat { border-top: 4px solid var(--cat-cor, #f2c94c); }
+
 /* ═══ Avisos (caixa de mensagem — wizard de verificação + modal pós-login) ═══ */
 .aviso-box {
-  background: #fff8db; border-left: 4px solid #f2c94c;
+  background: var(--cat-fundo, #fff8db); border-left: 4px solid var(--cat-cor, #f2c94c);
   border-radius: 6px; padding: 14px 18px; margin: 14px 0;
 }
-.aviso-header { font-weight: 700; color: #7a5d00; font-size: .85rem; letter-spacing: .5px; text-transform: uppercase; margin-bottom: 6px; }
+.aviso-header { font-weight: 700; color: var(--cat-texto, #7a5d00); font-size: .85rem; letter-spacing: .5px; text-transform: uppercase; margin-bottom: 6px; }
 .aviso-msg { margin: 0; white-space: pre-wrap; color: var(--text); font-size: 1rem; line-height: 1.4; }
 .aviso-ciente { display: flex; align-items: center; gap: 8px; font-weight: 500; cursor: pointer; margin: 8px 0; }
 .aviso-ciente input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }

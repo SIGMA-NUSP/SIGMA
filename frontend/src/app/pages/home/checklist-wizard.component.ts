@@ -212,7 +212,7 @@ interface EditItem {
             <p class="text-muted-sm">Há {{ avisoPendente()!.mensagens.length }} avisos para o {{ salaNome }}</p>
             @for (m of avisoPendente()!.mensagens; track m.ordem) {
               <div class="aviso-box">
-                <div class="aviso-header">Aviso nº {{ m.ordem }}</div>
+                <div class="aviso-header">Texto nº {{ m.ordem }}</div>
                 <p class="aviso-msg">{{ m.texto }}</p>
               </div>
             }

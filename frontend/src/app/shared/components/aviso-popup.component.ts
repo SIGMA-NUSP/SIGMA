@@ -5,11 +5,16 @@ import { Subscription, interval } from 'rxjs';
 import { filter } from 'rxjs/operators';
 import { ApiService } from '../../core/services/api.service';
 import { AuthService, AVISOS_CIENTES_SESSAO_KEY } from '../../core/services/auth.service';
+import { CategoriaAviso, categoriaAviso, tituloComunicacao } from '../../core/helpers/aviso-categoria.helpers';
+import { CategoriaSeloComponent } from './categoria-selo.component';
 import { ToastService } from './toast.component';
 
 interface AvisoPendente {
   cadastro_id: string;
   tipo: string;
+  /** Categoria da comunicação (AVISO/COMUNICADO/MENSAGEM/NOTIFICACAO) — comanda rótulo e cores. */
+  categoria: string;
+  /** Contexto que qualifica a categoria no título; vazio quando a categoria basta. */
   titulo: string;
   exige_ciencia: boolean;
   manter_apos_ciencia: boolean;
@@ -23,8 +28,9 @@ const POLL_MS = 60_000;
 /**
  * Modal global de avisos. Montado uma vez no MainLayout (como o <app-toast>),
  * aparece para qualquer papel logado em QUALQUER página. Reconsulta os pendentes
- * a cada navegação e periodicamente (mesmo parado). Título "Aviso - {titulo}"
- * (o backend deriva o título do subtipo, com fallback no label do tipo). Por aviso:
+ * a cada navegação e periodicamente (mesmo parado). A CATEGORIA que o backend envia
+ * comanda o título ("Comunicado — Agenda Legislativa"), o selo e as cores da caixa;
+ * um aviso sem contexto sai só com o nome da categoria. Por aviso:
  *  - exige_ciencia (ESCALA/PESSOAL): botão "Estou ciente" → grava no banco e some;
  *    com "manter após ciência", o servidor continua devolvendo o aviso — a exibição
  *    é segurada por sessão de LOGIN (sessionStorage, sobrevive a F5; o AuthService
@@ -38,19 +44,20 @@ const POLL_MS = 60_000;
 @Component({
   selector: 'app-aviso-popup',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, CategoriaSeloComponent],
   template: `
     @if (avisos()[0]; as a) {
       <div class="modal-overlay">
-        <div class="card-custom modal-card">
-          <h2 class="modal-title">Aviso - {{ a.titulo || 'Aviso' }}</h2>
+        <div class="card-custom modal-card modal-cat" [class]="categoria(a).classe">
+          <app-categoria-selo [categoria]="a.categoria" />
+          <h2 class="modal-title">{{ titulo(a) }}</h2>
 
           @if (a.mensagens.length === 1) {
             <div class="aviso-box"><p class="aviso-msg">{{ a.mensagens[0].texto }}</p></div>
           } @else {
             @for (m of a.mensagens; track m.ordem) {
               <div class="aviso-box">
-                <div class="aviso-header">Aviso nº {{ m.ordem }}</div>
+                <div class="aviso-header">Texto nº {{ m.ordem }}</div>
                 <p class="aviso-msg">{{ m.texto }}</p>
               </div>
             }
@@ -74,6 +81,9 @@ const POLL_MS = 60_000;
       </div>
     }
   `,
+  styles: [`
+    app-categoria-selo { margin-bottom: 8px; }
+  `],
 })
 export class AvisoPopupComponent implements OnInit, OnDestroy {
   private api = inject(ApiService);
@@ -97,6 +107,16 @@ export class AvisoPopupComponent implements OnInit, OnDestroy {
    * AuthService limpa a chave no login → volta a exibir 1× por sessão.
    */
   private cientesSessao = this.lerCientesSessao();
+
+  /** Rótulo, cores e ícone da categoria do aviso. */
+  categoria(a: AvisoPendente): CategoriaAviso {
+    return categoriaAviso(a.categoria);
+  }
+
+  /** "Aviso — Verificação"; sem contexto, só o nome da categoria. */
+  titulo(a: AvisoPendente): string {
+    return tituloComunicacao(a.categoria, a.titulo);
+  }
 
   ngOnInit(): void {
     // Reconsulta a cada mudança de página e periodicamente (vê o aviso mesmo parado).

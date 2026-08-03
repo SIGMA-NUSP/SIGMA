@@ -2,8 +2,8 @@ import { Component, model } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
 /**
- * Bloco reutilizável de mensagens de um cadastro de aviso (1 a {@link MAX_MENSAGENS}), com os botões
- * "+ Novo Aviso" e "Remover". Two-way via `[(mensagens)]`. Usado pelos painéis Escala, Agenda e
+ * Bloco reutilizável dos textos de um cadastro de comunicação (1 a {@link MAX_MENSAGENS}), com os
+ * botões "+ Novo Texto" e "Remover". Two-way via `[(mensagens)]`. Usado pelos painéis Escala, Agenda e
  * Pessoal do cadastro de avisos — o painel Verificação mantém o seu bloco inline (intocado). As
  * classes de layout (`.form-row`, `.btn-outline`) vêm do CSS global; `.req`/`.msg-actions` são locais.
  */
@@ -14,14 +14,14 @@ import { FormsModule } from '@angular/forms';
   template: `
     @for (msg of mensagens(); track $index) {
       <div class="form-row">
-        <label>{{ $index + 1 }}º Aviso <span class="req">*</span></label>
+        <label>{{ $index + 1 }}º Texto <span class="req">*</span></label>
         <textarea [ngModel]="mensagens()[$index]" (ngModelChange)="atualizar($index, $event)"
                   [name]="'msg_' + $index" rows="2"></textarea>
       </div>
     }
     <div class="msg-actions">
       @if (mensagens().length < MAX_MENSAGENS) {
-        <button type="button" class="btn-outline" (click)="add()">+ Novo Aviso</button>
+        <button type="button" class="btn-outline" (click)="add()">+ Novo Texto</button>
       }
       @if (mensagens().length > 1) {
         <button type="button" class="btn-outline" (click)="remover()">Remover</button>

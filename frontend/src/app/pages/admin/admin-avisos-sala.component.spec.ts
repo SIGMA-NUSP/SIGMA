@@ -10,7 +10,7 @@ import { ToastService } from '../../shared/components/toast.component';
 import { AdminAvisosSalaComponent } from './admin-avisos-sala.component';
 
 /**
- * Testes de RENDER da listagem "Avisos Cadastrados": caixa de erro presente com a
+ * Testes de RENDER da listagem "Comunicações Cadastradas": caixa de erro presente com a
  * mensagem certa, retry que re-pede o endpoint, estado vazio legítimo intacto, rodapé
  * coerente, e falha da LISTA não derruba o FORMULÁRIO de cadastro. Também cobre o lock
  * fail-closed de "1 aviso ativo por sala" (cadastro bloqueado enquanto a carga de salas
@@ -26,14 +26,23 @@ const EP_SALAS_OCUPADAS = '/api/admin/avisos/salas-ocupadas';
 
 const META = { page: 1, limit: 10, total: 2, pages: 1 };
 
-/** Linha de `GET /api/admin/avisos/list` (o `tipo` já vem como label do backend). */
+/** Linha de `GET /api/admin/avisos/list` (categoria + contexto já resolvidos pelo backend). */
 const AVISO_ATIVO = {
-  id: 'av-1', numero: 42, tipo: 'Verificação', criado_em: '2026-07-10',
+  id: 'av-1', numero: 42, categoria: 'AVISO', tipo: 'Verificação', criado_em: '2026-07-10',
   criado_por: 'Ana Prado', expira_em: '2026-07-20', status: 'Ativo' as const, permanente: 0,
 };
 const AVISO_DESATIVADO = {
-  id: 'av-2', numero: 41, tipo: 'Verificação', criado_em: '2026-07-01',
+  id: 'av-2', numero: 41, categoria: 'AVISO', tipo: 'Verificação', criado_em: '2026-07-01',
   criado_por: 'João Lima', expira_em: null, status: 'Desativado' as const, permanente: 1,
+};
+/** Mensagem: categoria sem contexto — a célula "Tipo" fica só com o selo. */
+const MENSAGEM_PESSOAL = {
+  id: 'av-3', numero: 40, categoria: 'MENSAGEM', tipo: null, criado_em: '2026-06-28',
+  criado_por: 'Ana Prado', expira_em: null, status: 'Ativo' as const, permanente: 1,
+};
+const NOTIFICACAO_FOLHA = {
+  id: 'av-4', numero: 39, categoria: 'NOTIFICACAO', tipo: 'Folha Semanal', criado_em: '2026-06-27',
+  criado_por: 'Ana Prado', expira_em: null, status: 'Ativo' as const, permanente: 1,
 };
 
 /** 500 REAL do backend (`GlobalExceptionHandler`): corpo genérico → a guia da tela vem na frente. */
@@ -144,6 +153,72 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
       expect(textoDaTabela(fixture)).toContain('42');
       expect(textoDaTabela(fixture)).not.toContain(VAZIO);
       expect(fixture.debugElement.queryAll(By.directive(ErroCargaComponent))).toHaveLength(0);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Rótulos e coluna "Tipo" (selo da categoria + contexto)
+  // ═══════════════════════════════════════════════════════════════════
+  describe('rótulos de comunicações', () => {
+    /** Célula "Tipo" da n-ésima linha. */
+    const celulaTipo = (f: ComponentFixture<AdminAvisosSalaComponent>, i = 0) =>
+      f.debugElement.queryAll(By.css('tbody tr .col-tipo'))[i]?.nativeElement as HTMLElement;
+
+    it('a tela se chama "Comunicações" e a listagem "Comunicações Cadastradas"', async () => {
+      const fixture = await renderizar();
+      const texto = (fixture.nativeElement as HTMLElement).textContent ?? '';
+      expect(fixture.debugElement.query(By.css('h1')).nativeElement.textContent.trim()).toBe('Comunicações');
+      expect(texto).toContain('Comunicações Cadastradas');
+      expect(texto).not.toContain('Inserir Avisos');
+      expect(texto).not.toContain('Avisos Cadastrados');
+    });
+
+    it('a coluna se chama "Tipo" e traz o selo da categoria com o contexto ao lado', async () => {
+      const fixture = await renderizar();
+      expect(fixture.componentInstance.cols[0].label).toBe('Tipo');
+
+      const celula = celulaTipo(fixture);
+      expect(celula.querySelector('.cat-selo')?.textContent?.trim()).toBe('Aviso');
+      expect(celula.textContent).toContain('Verificação');
+    });
+
+    it('Mensagem não tem contexto: a célula fica só com o selo', async () => {
+      respostas[EP_LISTA] = ok(MENSAGEM_PESSOAL);
+      const fixture = await renderizar();
+
+      const celula = celulaTipo(fixture);
+      expect(celula.querySelector('.cat-selo')?.textContent?.trim()).toBe('Mensagem');
+      expect(celula.textContent?.trim()).toBe('Mensagem');   // nada além do selo
+    });
+
+    it('toda linha reserva a área do contexto — a altura da coluna não varia de linha para linha', async () => {
+      respostas[EP_LISTA] = ok(AVISO_ATIVO, MENSAGEM_PESSOAL, NOTIFICACAO_FOLHA);
+      const fixture = await renderizar();
+
+      // Mesmo sem contexto (Mensagem), o elemento existe: é ele que segura a linha vazia.
+      const contextos = fixture.debugElement.queryAll(By.css('tbody tr .col-tipo .contexto'));
+      expect(contextos).toHaveLength(3);
+      expect(contextos.map(c => (c.nativeElement as HTMLElement).textContent?.trim()))
+        .toEqual(['Verificação', '', 'Folha Semanal']);
+    });
+
+    it('cada categoria leva a sua cor para a célula', async () => {
+      respostas[EP_LISTA] = ok(AVISO_ATIVO, MENSAGEM_PESSOAL, NOTIFICACAO_FOLHA);
+      const fixture = await renderizar();
+
+      const classes = fixture.debugElement.queryAll(By.css('tbody tr app-categoria-selo'))
+        .map(el => (el.nativeElement as HTMLElement).className);
+      expect(classes).toEqual(['cat-aviso', 'cat-mensagem', 'cat-notificacao']);
+      expect(celulaTipo(fixture, 2).textContent).toContain('Folha Semanal');
+    });
+
+    it('o bloco de textos do painel Verificação usa "Texto"', async () => {
+      const fixture = await renderizar();
+      const texto = (fixture.nativeElement as HTMLElement).textContent ?? '';
+      expect(texto).toContain('1º Texto');
+      expect(texto).toContain('+ Novo Texto');
+      expect(texto).not.toContain('1º Aviso');
+      expect(texto).not.toContain('+ Novo Aviso');
     });
   });
 
@@ -394,7 +469,7 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
       expect(fixture.debugElement.query(By.css('app-aviso-pessoal-form'))).toBeNull();
     });
 
-    it('cada card ativa o seu painel; a tabela "Avisos Cadastrados" continua na tela', async () => {
+    it('cada card ativa o seu painel; a tabela "Comunicações Cadastradas" continua na tela', async () => {
       const fixture = await renderizar();
       const casos: [number, string][] = [[1, 'app-aviso-escala-form'], [2, 'app-aviso-agenda-form'], [3, 'app-aviso-pessoal-form']];
       for (const [i, sel] of casos) {

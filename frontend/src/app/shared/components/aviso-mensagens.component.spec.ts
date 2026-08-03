@@ -41,13 +41,20 @@ describe('AvisoMensagensComponent', () => {
     expect(comp.mensagens()).toEqual(['a']);     // a última nunca some
   });
 
+  it('os campos são numerados como "Nº Texto"', async () => {
+    await montar(['a', 'b']);
+    const rotulos = Array.from<HTMLElement>(fixture.nativeElement.querySelectorAll('.form-row label'))
+      .map(el => el.textContent?.trim().replace(/\s*\*$/, ''));
+    expect(rotulos).toEqual(['1º Texto', '2º Texto']);
+  });
+
   it('renderiza um textarea por mensagem; "Remover" só aparece com 2+ mensagens', async () => {
     await montar(['a', 'b']);
     expect(fixture.nativeElement.querySelectorAll('textarea')).toHaveLength(2);
     const botoes = () => Array.from(
       fixture.nativeElement.querySelectorAll('.msg-actions button') as NodeListOf<HTMLButtonElement>)
       .map(b => b.textContent?.trim());
-    expect(botoes()).toContain('+ Novo Aviso');
+    expect(botoes()).toContain('+ Novo Texto');
     expect(botoes()).toContain('Remover');
 
     fixture.componentRef.setInput('mensagens', ['só uma']);

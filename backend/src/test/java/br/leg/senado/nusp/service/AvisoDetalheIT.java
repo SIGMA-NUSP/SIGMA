@@ -100,7 +100,7 @@ class AvisoDetalheIT {
     }
 
     @Test
-    @DisplayName("Verificação: a ciência é por sala → 'cientes' traz sala_id/sala_nome (coluna Local); sem subtipo, tipo_tabela = 'Verificação'; sem destinatários")
+    @DisplayName("Verificação: a ciência é por sala → 'cientes' traz sala_id/sala_nome (coluna Local); sem subtipo, é Aviso com contexto 'Verificação'; sem destinatários")
     void verificacaoSalaNaCiencia() {
         Sala sala = CenarioFactory.novaSala(emReal(), "Plenario02");
         Operador op = CenarioFactory.novoOperador(emReal());
@@ -109,7 +109,8 @@ class AvisoDetalheIT {
 
         Map<String, Object> det = service.obterDetalhe(id);
         assertNull(det.get("subtipo"), "Verificação não tem subtipo");
-        assertEquals("Verificação", det.get("tipo_tabela"), "fallback no label do tipo");
+        assertEquals("AVISO", det.get("categoria"));
+        assertEquals("Verificação", det.get("tipo_tabela"), "contexto do próprio tipo");
         assertNull(det.get("destinatarios"), "Verificação não tem bloco de destinatários (público aberto)");
 
         @SuppressWarnings("unchecked")
@@ -121,7 +122,7 @@ class AvisoDetalheIT {
     }
 
     @Test
-    @DisplayName("legado PESSOAL sem subtipo: subtipo nulo e tipo_tabela = 'Pessoal' (fallback no label do tipo — nunca quebra)")
+    @DisplayName("legado PESSOAL sem subtipo: subtipo nulo, categoria MENSAGEM e contexto vazio (nunca quebra)")
     void legadoPessoalSemSubtipoUsaFallback() {
         Operador op = CenarioFactory.novoOperador(emReal());
         // Espelha os avisos legados de homolog: PESSOAL gravado SEM subtipo.
@@ -134,7 +135,8 @@ class AvisoDetalheIT {
 
         Map<String, Object> det = service.obterDetalhe(cad.getId());
         assertNull(det.get("subtipo"));
-        assertEquals("Pessoal", det.get("tipo_tabela"));
+        assertEquals("MENSAGEM", det.get("categoria"));
+        assertEquals("", det.get("tipo_tabela"), "Mensagem se identifica pelo selo — sem contexto ao lado");
     }
 
     @Test
@@ -143,9 +145,9 @@ class AvisoDetalheIT {
         Sala sala = CenarioFactory.novaSala(emReal(), "Plenario02");
         String id = criarVerificacao(List.of(sala.getId()), "Confira a sala");
         Map<String, Object> det = service.obterDetalhe(id);
-        for (String chave : List.of("id", "numero", "tipo", "tipo_label", "permanente", "duracao_dias",
-                "manter_apos_ciencia", "status", "criado_em", "expira_em", "criado_por", "mensagens",
-                "alvos", "cientes")) {
+        for (String chave : List.of("id", "numero", "tipo", "tipo_label", "tipo_tabela", "subtipo",
+                "permanente", "duracao_dias", "manter_apos_ciencia", "status", "criado_em", "expira_em",
+                "criado_por", "mensagens", "alvos", "cientes")) {
             assertTrue(det.containsKey(chave), "campo preexistente ausente: " + chave);
         }
     }

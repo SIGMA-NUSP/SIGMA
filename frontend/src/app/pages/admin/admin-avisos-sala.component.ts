@@ -7,6 +7,7 @@ import { PaginationComponent } from '../../shared/components/pagination.componen
 import { ColumnFilterComponent, ColumnFilterDef } from '../../shared/components/column-filter.component';
 import { MultiSelectDropdownComponent, MultiSelectOption } from '../../shared/components/multi-select-dropdown.component';
 import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
+import { CategoriaSeloComponent } from '../../shared/components/categoria-selo.component';
 import { AvisoEscalaFormComponent } from './aviso-escala-form.component';
 import { AvisoAgendaFormComponent } from './aviso-agenda-form.component';
 import { AvisoPessoalFormComponent } from './aviso-pessoal-form.component';
@@ -19,7 +20,9 @@ import { FmtDatePipe } from '../../shared/pipes/fmt-date.pipe';
 interface AvisoRow {
   id: string;
   numero: number;
-  tipo: string;        // já vem como label ("Verificação")
+  // Categoria da comunicação (selo) + o contexto que a qualifica ("Escala"); Mensagem vem sem contexto.
+  categoria: string;
+  tipo: string | null;
   criado_em: string;
   criado_por: string;
   expira_em: string | null;
@@ -33,9 +36,10 @@ interface AvisoRow {
   selector: 'app-admin-avisos-sala',
   standalone: true,
   imports: [FormsModule, RouterLink, PaginationComponent, ColumnFilterComponent, MultiSelectDropdownComponent,
-    ErroCargaComponent, FmtDatePipe, AvisoEscalaFormComponent, AvisoAgendaFormComponent, AvisoPessoalFormComponent],
+    ErroCargaComponent, CategoriaSeloComponent, FmtDatePipe, AvisoEscalaFormComponent, AvisoAgendaFormComponent,
+    AvisoPessoalFormComponent],
   template: `
-    <h1>Inserir Avisos</h1>
+    <h1>Comunicações</h1>
     <a routerLink="/admin/gestao-pessoas" class="back-link">&larr; Voltar</a>
 
     <!-- ════════════ CARDS DE SELEÇÃO (1 ativo por vez; reclicar oculta o painel) ════════════ -->
@@ -78,14 +82,14 @@ interface AvisoRow {
 
       @for (msg of mensagens; track $index) {
         <div class="form-row">
-          <label>{{ $index + 1 }}º Aviso <span class="req">*</span></label>
+          <label>{{ $index + 1 }}º Texto <span class="req">*</span></label>
           <textarea [(ngModel)]="mensagens[$index]" [name]="'msg_' + $index" rows="2"></textarea>
         </div>
       }
 
       <div class="msg-actions">
         @if (mensagens.length < MAX_MENSAGENS) {
-          <button type="button" class="btn-outline" (click)="addMensagem()">+ Novo Aviso</button>
+          <button type="button" class="btn-outline" (click)="addMensagem()">+ Novo Texto</button>
         }
         @if (mensagens.length > 1) {
           <button type="button" class="btn-outline" (click)="removerUltimaMensagem()">Remover</button>
@@ -133,7 +137,7 @@ interface AvisoRow {
     <!-- ════════════ LISTAGEM ════════════ -->
     <section>
       <div class="section-header">
-        <h2>Avisos Cadastrados</h2>
+        <h2>Comunicações Cadastradas</h2>
         <div class="header-actions">
           <input type="text" [(ngModel)]="ctrl.searchText" (input)="ctrl.onSearch()" placeholder="Buscar por autor ou nº do cadastro..." class="search-input search-wide">
         </div>
@@ -187,7 +191,10 @@ interface AvisoRow {
               @for (a of ctrl.rows(); track a.id) {
                 <tr class="row-clickable" (dblclick)="abrirDetalhe(a)" title="Duplo-clique para ver o detalhe">
                   <td>{{ a.numero }}</td>
-                  <td>{{ a.tipo }}</td>
+                  <td class="col-tipo">
+                    <app-categoria-selo [categoria]="a.categoria" />
+                    <span class="contexto">{{ a.tipo }}</span>
+                  </td>
                   <td>{{ a.criado_em | fmtDate }}</td>
                   <td>{{ a.criado_por }}</td>
                   <!-- Escala manda DATA_FIM (permanente no banco); Agenda manda —. Exibe a data sempre que houver. -->
@@ -229,6 +236,10 @@ interface AvisoRow {
     .check-opt { display:flex; align-items:center; gap:8px; font-weight:500; cursor:pointer; }
     .check-opt input { width:auto; }
     .row-clickable { cursor: pointer; }
+    /* Selo em cima e contexto embaixo, em TODAS as linhas: a linha do contexto é reservada mesmo
+       quando ele não existe (Mensagem), para que a altura das linhas da tabela não varie. */
+    .col-tipo { display:flex; flex-direction:column; align-items:flex-start; gap:4px; }
+    .col-tipo .contexto { min-height:1.2em; line-height:1.2; }
     .status-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
     .status-dot[data-status="Ativo"]      { background: var(--color-green, #16a34a); }
     .status-dot[data-status="Pendente"]   { background: #f59e0b; }
@@ -274,7 +285,7 @@ export class AdminAvisosSalaComponent implements OnInit {
 
   // ── Listagem ──
   cols: ColumnFilterDef[] = [
-    { key: 'tipo',       label: 'Tipo de Aviso',  type: 'text' },
+    { key: 'tipo',       label: 'Tipo',           type: 'text' },
     { key: 'data',       label: 'Data',           type: 'date' },
     { key: 'criado_por', label: 'Cadastrado por', type: 'text' },
     { key: 'expira',     label: 'Expira em',      type: 'date' },

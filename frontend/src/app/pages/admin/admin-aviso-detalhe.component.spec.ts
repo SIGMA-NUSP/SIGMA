@@ -71,7 +71,7 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     };
   }
   const verificacao = () => base({
-    tipo: 'VERIFICACAO', tipo_tabela: 'Verificação', subtipo: null,
+    tipo: 'VERIFICACAO', categoria: 'AVISO', tipo_tabela: 'Verificação', subtipo: null,
     alvos: [{ alvo_tipo: 'SALA', descricao: 'Plenário 2' }, { alvo_tipo: 'SALA', descricao: 'Plenário 3' }],
     cientes: [
       { nome: 'Bruno', papel: 'Operador', sala_id: 2, sala_nome: 'Plenário 2', ciente_em: '2026-07-10T10:05:00' },
@@ -79,7 +79,7 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     ],
   });
   const escala = () => base({
-    tipo: 'ESCALA', tipo_tabela: 'Escala', subtipo: 'ESCALA', manter_apos_ciencia: true, status: 'Ativo',
+    tipo: 'ESCALA', categoria: 'AVISO', tipo_tabela: 'Escala', subtipo: 'ESCALA', manter_apos_ciencia: true, status: 'Ativo',
     escala: { id: 7, data_inicio: '2026-07-14', data_fim: '2026-07-18', plenarios: [{ sala_id: 2, sala_nome: 'Plenário 2' }] },
     alvos: [{ alvo_tipo: 'SALA', descricao: 'Plenário 2' }],
     destinatarios: [
@@ -89,7 +89,7 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     ],
   });
   const agenda = () => base({
-    tipo: 'AGENDA', tipo_tabela: 'Agenda', subtipo: 'AGENDA', status: '—',
+    tipo: 'AGENDA', categoria: 'COMUNICADO', tipo_tabela: 'Agenda', subtipo: 'AGENDA', status: '—',
     alvos: [{ alvo_tipo: 'TODOS', descricao: 'Todos' }],
     exibido_para: [
       { nome: 'Ana', papel: 'Operador', sala_id: null, sala_nome: null, ciente_em: '2026-07-10T10:00:00' },
@@ -97,7 +97,7 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     ],
   });
   const pessoal = () => base({
-    tipo: 'PESSOAL', tipo_tabela: 'Pessoal', subtipo: 'PESSOAL', manter_apos_ciencia: false,
+    tipo: 'PESSOAL', categoria: 'MENSAGEM', tipo_tabela: '', subtipo: 'PESSOAL', manter_apos_ciencia: false,
     alvos: [
       { alvo_tipo: 'OPERADOR', descricao: 'Ana' },
       { alvo_tipo: 'TECNICO', descricao: 'Beto' },
@@ -110,7 +110,7 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     ],
   });
   const grupo = () => base({
-    tipo: 'GERAL', tipo_tabela: 'Operadores', subtipo: 'GRUPO_OPERADORES',
+    tipo: 'GERAL', categoria: 'COMUNICADO', tipo_tabela: 'Operadores', subtipo: 'GRUPO_OPERADORES',
     alvos: [{ alvo_tipo: 'TODOS_OPERADORES', descricao: 'Todos os operadores' }],
   });
 
@@ -124,7 +124,8 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     expect(f.debugElement.query(By.css('.status-dot')).nativeElement.getAttribute('data-status')).toBe('Ativo');
     expect(f.debugElement.queryAll(By.css('.chip')).map(c => (c.nativeElement as HTMLElement).textContent?.trim()))
       .toEqual(['Plenário 2', 'Plenário 3']);
-    expect(texto(f)).toContain('1º Aviso');
+    expect(texto(f)).toContain('1º Texto');
+    expect(texto(f)).not.toContain('1º Aviso');
 
     expect(cabecalhos(f)).toEqual(['Destinatário', 'Local', 'Ciência (data)', 'Ciência (hora)']);
     const linhas = linhasTexto(f);
@@ -199,11 +200,40 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     expect(f.debugElement.query(By.css('.tabela-ciencia'))).toBeNull();
   });
 
-  // ═══ Fallback de subtipo nulo (legado) ═══
-  it('legado PESSOAL sem subtipo: exibe o tipo_tabela que o backend resolveu ("Pessoal")', async () => {
-    resposta = ok(base({ tipo: 'PESSOAL', tipo_tabela: 'Pessoal', subtipo: null, destinatarios: [] }));
-    const f = await render();
-    expect(texto(f)).toContain('Pessoal');
+  // ═══ Campo "Tipo": selo da categoria + contexto ═══
+  describe('campo "Tipo" e títulos da tela', () => {
+    /** Bloco do campo "Tipo" (selo + contexto). */
+    const campoTipo = (f: ComponentFixture<AdminAvisoDetalheComponent>) =>
+      f.debugElement.query(By.css('.col-tipo')).nativeElement as HTMLElement;
+
+    it('a página se chama "Detalhe da Comunicação" e o campo é "Tipo"', async () => {
+      resposta = ok(verificacao());
+      const f = await render();
+      expect(f.debugElement.query(By.css('h1')).nativeElement.textContent.trim()).toBe('Detalhe da Comunicação');
+      expect(texto(f)).not.toContain('Tipo de Aviso');
+    });
+
+    it('selo da categoria com o contexto ao lado, e a cor no elemento do selo', async () => {
+      resposta = ok(agenda());
+      const f = await render();
+      expect(campoTipo(f).querySelector('.cat-selo')?.textContent?.trim()).toBe('Comunicado');
+      expect(campoTipo(f).textContent).toContain('Agenda');
+      expect((f.debugElement.query(By.css('.col-tipo app-categoria-selo')).nativeElement as HTMLElement).className)
+        .toBe('cat-comunicado');
+    });
+
+    it('Mensagem: só o selo, sem contexto ao lado', async () => {
+      resposta = ok(pessoal());
+      const f = await render();
+      expect(campoTipo(f).textContent?.trim()).toBe('Mensagem');
+    });
+
+    // ═══ Fallback de subtipo nulo (legado) ═══
+    it('legado PESSOAL sem subtipo: o backend já resolve como Mensagem sem contexto', async () => {
+      resposta = ok(base({ tipo: 'PESSOAL', categoria: 'MENSAGEM', tipo_tabela: '', subtipo: null, destinatarios: [] }));
+      const f = await render();
+      expect(campoTipo(f).textContent?.trim()).toBe('Mensagem');
+    });
   });
 
   // ═══ Estados: erro ≠ não encontrado ═══
@@ -214,7 +244,7 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     const box = f.debugElement.query(By.directive(ErroCargaComponent));
     expect(box).not.toBeNull();
     expect(f.debugElement.query(By.css('.detalhe-card'))).toBeNull();
-    expect((box.nativeElement as HTMLElement).textContent).not.toContain('não encontrado');
+    expect((box.nativeElement as HTMLElement).textContent).not.toContain('não encontrad');
     expect(apiGet).toHaveBeenCalledTimes(1);
 
     resposta = ok(verificacao());
@@ -226,17 +256,17 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     expect(f.debugElement.query(By.css('.detalhe-card'))).not.toBeNull();
   });
 
-  it('404: "Aviso não encontrado." SEM caixa de erro (canal de erro distinto)', async () => {
+  it('404: "Comunicação não encontrada." SEM caixa de erro (canal de erro distinto)', async () => {
     resposta = falha({ status: 404 });
     const f = await render();
     expect(f.debugElement.query(By.directive(ErroCargaComponent))).toBeNull();
-    expect((f.nativeElement as HTMLElement).textContent).toContain('Aviso não encontrado.');
+    expect((f.nativeElement as HTMLElement).textContent).toContain('Comunicação não encontrada.');
   });
 
-  it('sem query param id: não chama a API e mostra "Aviso não encontrado."', async () => {
+  it('sem query param id: não chama a API e mostra "Comunicação não encontrada."', async () => {
     idParam = null;
     const f = await render();
     expect(apiGet).not.toHaveBeenCalled();
-    expect((f.nativeElement as HTMLElement).textContent).toContain('Aviso não encontrado.');
+    expect((f.nativeElement as HTMLElement).textContent).toContain('Comunicação não encontrada.');
   });
 });

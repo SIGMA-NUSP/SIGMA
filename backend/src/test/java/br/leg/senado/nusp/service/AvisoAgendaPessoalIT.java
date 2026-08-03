@@ -46,7 +46,7 @@ import jakarta.persistence.EntityManager;
 /**
  * IT do aviso de AGENDA e do card "Pessoal" (modos "Um grupo" e "Pessoas específicas") contra Oracle
  * real — o que o mock não alcança: o "visto" persistente da agenda filtrado no servidor (reusa
- * FRM_AVISO_CIENCIA), os rótulos da coluna "Tipo de Aviso" derivados do SUBTIPO via CASE, o status
+ * FRM_AVISO_CIENCIA), a categoria e o contexto da coluna "Tipo" derivados do SUBTIPO via CASE, o status
  * "—" do AGENDA na listagem (com as facetas do GROUPING SETS vigiadas) e a visibilidade dos alvos
  * coletivos/mistos. A gravação de ciência/visto é semeada direto (o REQUIRES_NEW do writer commitaria
  * e furaria o rollback do teste — mesmo idioma do AvisoEscalaIT).
@@ -201,10 +201,11 @@ class AvisoAgendaPessoalIT {
         }
 
         @Test
-        @DisplayName("listagem: tipo 'Agenda', status '—' quando ativo, 'Desativado' quando desativado")
+        @DisplayName("listagem: COMUNICADO com contexto 'Agenda', status '—' quando ativo, 'Desativado' quando desativado")
         void listagemStatus() {
             String id = criarAgenda("x");
             var linha = linhaListagem(id);
+            assertEquals("COMUNICADO", linha.get("categoria"));
             assertEquals("Agenda", linha.get("tipo"));
             assertEquals("—", linha.get("status"));
 
@@ -283,9 +284,11 @@ class AvisoAgendaPessoalIT {
         }
 
         @Test
-        @DisplayName("rótulos da coluna 'Tipo de Aviso' vêm do SUBTIPO (§2), um por coletivo")
+        @DisplayName("coluna 'Tipo': todo grupo é COMUNICADO e o contexto vem do SUBTIPO, um por coletivo")
         void rotulosPorSubtipo() {
-            assertEquals("Operadores", linhaListagem(criarGrupo("TODOS_OPERADORES", "x")).get("tipo"));
+            var operadores = linhaListagem(criarGrupo("TODOS_OPERADORES", "x"));
+            assertEquals("COMUNICADO", operadores.get("categoria"));
+            assertEquals("Operadores", operadores.get("tipo"));
             assertEquals("Técnicos", linhaListagem(criarGrupo("TODOS_TECNICOS", "x")).get("tipo"));
             assertEquals("Operadores e Técnicos", linhaListagem(criarGrupo("TODOS", "x")).get("tipo"));
             assertEquals("Administradores", linhaListagem(criarGrupo("TODOS_ADMIN", "x")).get("tipo"));
@@ -297,6 +300,7 @@ class AvisoAgendaPessoalIT {
             String id = criarGrupo("TODOS_OPERADORES", "Comunicado geral");
             Map<String, Object> det = service.obterDetalhe(id);
             assertEquals("GRUPO_OPERADORES", det.get("subtipo"));
+            assertEquals("COMUNICADO", det.get("categoria"));
             assertEquals("Operadores", det.get("tipo_tabela"));
             assertNull(det.get("destinatarios"), "GERAL não tem bloco de destinatários");
             assertTrue(((List<?>) det.get("cientes")).isEmpty(), "GERAL não exige ciência");
@@ -342,15 +346,17 @@ class AvisoAgendaPessoalIT {
         }
 
         @Test
-        @DisplayName("listagem: o cadastro do modo pessoas exibe 'Pessoal' na coluna de tipo")
+        @DisplayName("listagem: o cadastro do modo pessoas é MENSAGEM e a coluna de tipo fica sem contexto (só o selo)")
         void rotuloPessoal() {
             Operador op = CenarioFactory.novoOperador(emReal());
             String id = criarPessoas(List.of(op.getId()), List.of(), List.of(), false, "x");
-            assertEquals("Pessoal", linhaListagem(id).get("tipo"));
+            var linha = linhaListagem(id);
+            assertEquals("MENSAGEM", linha.get("categoria"));
+            assertNull(linha.get("tipo"));
         }
 
         @Test
-        @DisplayName("detalhe: destinatários mistos com pendentes (papel por pessoa), subtipo/tipo_tabela do payload; sem plenários")
+        @DisplayName("detalhe: destinatários mistos com pendentes (papel por pessoa), categoria MENSAGEM sem contexto; sem plenários")
         void detalheDestinatariosMisto() {
             Operador op = CenarioFactory.novoOperador(emReal());
             Tecnico tec = CenarioFactory.novoTecnico(emReal());
@@ -359,7 +365,8 @@ class AvisoAgendaPessoalIT {
 
             Map<String, Object> det = service.obterDetalhe(id);
             assertEquals("PESSOAL", det.get("subtipo"));
-            assertEquals("Pessoal", det.get("tipo_tabela"));
+            assertEquals("MENSAGEM", det.get("categoria"));
+            assertEquals("", det.get("tipo_tabela"));
 
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> dest = (List<Map<String, Object>>) det.get("destinatarios");
@@ -390,6 +397,26 @@ class AvisoAgendaPessoalIT {
             assertEquals(Boolean.TRUE, lEstranho.get("fora_do_publico"));
             assertNotNull(lEstranho.get("ciente_em"));
             assertTrue(dest.indexOf(lEstranho) > dest.indexOf(lAlvo), "marcado vai para o fim");
+        }
+
+        @Test
+        @DisplayName("aviso disparado pelo sistema (folha publicada): listagem e detalhe leem NOTIFICACAO com o contexto do subtipo")
+        void programaticoEhNotificacao() {
+            Operador op = CenarioFactory.novoOperador(emReal());
+            service.criarPessoalIndividual(
+                    List.of(new AvisoService.DestinatarioAviso(op.getId(), PapelPessoa.OPERADOR)),
+                    "Sua folha semanal foi publicada.", admin.getId(), SubtipoAviso.FOLHA_SEMANAL);
+            String id = cadastroRepo.findAll().stream()
+                    .filter(c -> c.getSubtipo() == SubtipoAviso.FOLHA_SEMANAL)
+                    .findFirst().orElseThrow().getId();
+
+            var linha = linhaListagem(id);
+            assertEquals("NOTIFICACAO", linha.get("categoria"));
+            assertEquals("Folha Semanal", linha.get("tipo"));
+
+            Map<String, Object> det = service.obterDetalhe(id);
+            assertEquals("NOTIFICACAO", det.get("categoria"));
+            assertEquals("Folha Semanal", det.get("tipo_tabela"));
         }
     }
 }

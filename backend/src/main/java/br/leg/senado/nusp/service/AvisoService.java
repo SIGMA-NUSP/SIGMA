@@ -9,6 +9,7 @@ import br.leg.senado.nusp.entity.EscalaSemanal;
 import br.leg.senado.nusp.entity.Sala;
 import br.leg.senado.nusp.enums.AlvoTipoAviso;
 import br.leg.senado.nusp.enums.PapelPessoa;
+import br.leg.senado.nusp.enums.RotuloAviso;
 import br.leg.senado.nusp.enums.StatusAviso;
 import br.leg.senado.nusp.enums.SubtipoAviso;
 import br.leg.senado.nusp.enums.TipoAviso;
@@ -37,6 +38,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -379,7 +381,7 @@ public class AvisoService {
     @Transactional
     public void desativar(String id) {
         AvisoCadastro cad = cadastroRepo.findById(id).orElseThrow(() ->
-                new ServiceValidationException("Aviso não encontrado.", HttpStatus.NOT_FOUND));
+                new ServiceValidationException("Comunicação não encontrada.", HttpStatus.NOT_FOUND));
         if (cad.getStatus() == StatusAviso.DESATIVADO)
             throw new ServiceValidationException("Aviso já está desativado.");
         cad.setStatus(StatusAviso.DESATIVADO);
@@ -472,28 +474,36 @@ public class AvisoService {
     // ═══ Listagem (admin) ═══════════════════════════════════════
 
     /**
-     * Rótulo da coluna "Tipo de Aviso": derivado do SUBTIPO (§2) — mais específico — com FALLBACK no
-     * TIPO para o legado e a Verificação (SUBTIPO nulo). ⚠️ Sem vírgula interna: o helper de paginação
-     * faz split do selectCols por vírgula (por isso 'Solicitação Banco' repete em dois WHEN em vez de IN(...)).
+     * Contexto exibido na coluna "Tipo" da listagem (ao lado do selo da categoria): derivado do
+     * SUBTIPO — mais específico — com FALLBACK no TIPO para o legado e a Verificação (SUBTIPO nulo).
+     * NULO para a MENSAGEM, que se identifica só pelo selo.
      */
-    private static final String TIPO_EXPR =
-            "CASE " +
-            "WHEN c.SUBTIPO = 'FOLHA_SEMANAL' THEN 'Folha Semanal' " +
-            "WHEN c.SUBTIPO = 'FOLHA_MENSAL' THEN 'Folha Mensal' " +
-            "WHEN c.SUBTIPO = 'SOLICITACAO_APROVADA' THEN 'Solicitação Banco' " +
-            "WHEN c.SUBTIPO = 'SOLICITACAO_REJEITADA' THEN 'Solicitação Banco' " +
-            "WHEN c.SUBTIPO = 'ESCALA' THEN 'Escala' " +
-            "WHEN c.SUBTIPO = 'AGENDA' THEN 'Agenda' " +
-            "WHEN c.SUBTIPO = 'PESSOAL' THEN 'Pessoal' " +
-            "WHEN c.SUBTIPO = 'GRUPO_OPERADORES' THEN 'Operadores' " +
-            "WHEN c.SUBTIPO = 'GRUPO_TECNICOS' THEN 'Técnicos' " +
-            "WHEN c.SUBTIPO = 'GRUPO_TODOS' THEN 'Operadores e Técnicos' " +
-            "WHEN c.SUBTIPO = 'GRUPO_ADMINISTRADORES' THEN 'Administradores' " +
-            "WHEN c.TIPO = 'VERIFICACAO' THEN 'Verificação' " +
-            "WHEN c.TIPO = 'ESCALA' THEN 'Escala' " +
-            "WHEN c.TIPO = 'PESSOAL' THEN 'Pessoal' " +
-            "WHEN c.TIPO = 'AGENDA' THEN 'Agenda' " +
-            "WHEN c.TIPO = 'GERAL' THEN 'Geral' END";
+    private static final String CONTEXTO_TABELA_EXPR = caseDoRotulo(RotuloAviso::contextoTabela);
+
+    /** Código da categoria da comunicação (mesma fonte do contexto) — alimenta o selo da tabela. */
+    private static final String CATEGORIA_EXPR = caseDoRotulo(r -> r.categoria().name());
+
+    /**
+     * Monta o CASE SQL que projeta um pedaço do {@link RotuloAviso} a partir das colunas SUBTIPO/TIPO,
+     * na MESMA precedência da resolução em Java (subtipo primeiro, tipo como fallback) — assim a
+     * listagem nunca diverge do popup e do detalhe. Texto vazio vira NULL (coluna em branco).
+     * ⚠️ Nenhum rótulo pode conter vírgula: o helper de paginação faz split do selectCols por vírgula.
+     */
+    private static String caseDoRotulo(Function<RotuloAviso, String> parte) {
+        StringBuilder sb = new StringBuilder("CASE ");
+        for (SubtipoAviso s : SubtipoAviso.values())
+            sb.append("WHEN c.SUBTIPO = '").append(s.name()).append("' THEN ")
+              .append(literalSql(parte.apply(s.getRotulo()))).append(' ');
+        for (TipoAviso t : TipoAviso.values())
+            sb.append("WHEN c.TIPO = '").append(t.name()).append("' THEN ")
+              .append(literalSql(parte.apply(t.getRotulo()))).append(' ');
+        return sb.append("END").toString();
+    }
+
+    /** Literal SQL do rótulo; vazio vira NULL para a coluna ficar em branco. */
+    private static String literalSql(String v) {
+        return (v == null || v.isBlank()) ? "NULL" : "'" + v + "'";
+    }
 
     /**
      * Status EXIBIDO na listagem. Para ESCALA é calculado das datas da escala (Pendente/Ativo/
@@ -520,13 +530,13 @@ public class AvisoService {
         SORT = new LinkedHashMap<>();
         SORT.put("data", "c.CRIADO_EM");
         SORT.put("numero", "c.NUMERO");
-        SORT.put("tipo", TIPO_EXPR);
+        SORT.put("tipo", CONTEXTO_TABELA_EXPR);
         SORT.put("expira", EXPIRA_EXPR);
         SORT.put("status", STATUS_EXPR);
         SORT.put("criado_por", "ad.NOME_COMPLETO");
 
         COL_MAP = new LinkedHashMap<>();
-        COL_MAP.put("tipo", TIPO_EXPR);
+        COL_MAP.put("tipo", CONTEXTO_TABELA_EXPR);
         COL_MAP.put("data", "c.CRIADO_EM");
         COL_MAP.put("expira", EXPIRA_EXPR);
         COL_MAP.put("status", STATUS_EXPR);
@@ -545,7 +555,7 @@ public class AvisoService {
         if (page < 1) page = 1;
         if (limit < 1) limit = 10;
         String selectCols =
-                "c.ID, c.NUMERO, " + TIPO_EXPR + " AS tipo, " +
+                "c.ID, c.NUMERO, " + CONTEXTO_TABELA_EXPR + " AS tipo, " + CATEGORIA_EXPR + " AS categoria, " +
                 "c.CRIADO_EM AS criado_em, ad.NOME_COMPLETO AS criado_por, " +
                 EXPIRA_EXPR + " AS expira_em, " + STATUS_EXPR + " AS status, c.PERMANENTE AS permanente";
         // LEFT JOIN da escala: alimenta o status/expira calculados do aviso de ESCALA (es.* nulo p/ os demais).
@@ -565,11 +575,13 @@ public class AvisoService {
     /** Detalhe completo de um cadastro (cabeçalho + mensagens + alvos + cientes + destinatários por tipo). */
     public Map<String, Object> obterDetalhe(String id) {
         AvisoCadastro cad = cadastroRepo.findById(id).orElseThrow(() ->
-                new ServiceValidationException("Aviso não encontrado.", HttpStatus.NOT_FOUND));
+                new ServiceValidationException("Comunicação não encontrada.", HttpStatus.NOT_FOUND));
         Map<String, Object> m = toResumo(cad);
-        // Rótulo "Tipo de Aviso" derivado do subtipo (§5.a) — mesma regra da listagem (subtipo → fallback no tipo).
+        // Campo "Tipo": selo da categoria + contexto ao lado — mesma regra da listagem (subtipo → fallback no tipo).
+        RotuloAviso rotulo = RotuloAviso.de(cad.getTipo(), cad.getSubtipo());
         m.put("subtipo", cad.getSubtipo() != null ? cad.getSubtipo().name() : null);
-        m.put("tipo_tabela", labelTabela(cad));
+        m.put("categoria", rotulo.categoria().name());
+        m.put("tipo_tabela", rotulo.contextoTabela());
         m.put("mensagens", mensagemRepo.findByCadastroIdOrderByOrdem(id).stream()
                 .map(this::mensagemToMap).toList());
         // Resolve nomes de alvos/ciências com mapas carregados no máx. 1× por tipo (lazy) — evita N+1 (Q18).
@@ -599,12 +611,6 @@ public class AvisoService {
         if (cad.getTipo() == TipoAviso.AGENDA)
             m.put("exibido_para", ciencias.stream().map(c -> cienciaToMap(c, nomes)).toList());
         return m;
-    }
-
-    /** Rótulo "Tipo de Aviso" do detalhe: subtipo ({@code getLabelTabela}) com fallback no label do tipo (§5.a). */
-    private String labelTabela(AvisoCadastro cad) {
-        if (cad.getSubtipo() != null) return cad.getSubtipo().getLabelTabela();
-        return cad.getTipo() != null ? cad.getTipo().getLabel() : null;
     }
 
     /**
@@ -865,7 +871,7 @@ public class AvisoService {
     @Transactional
     public void registrarCiencia(String cadastroId, Integer salaId, String pessoaId, PapelPessoa papel) {
         AvisoCadastro cad = cadastroRepo.findById(cadastroId).orElseThrow(() ->
-                new ServiceValidationException("Aviso não encontrado.", HttpStatus.NOT_FOUND));
+                new ServiceValidationException("Comunicação não encontrada.", HttpStatus.NOT_FOUND));
         if (cad.getTipo() == null || !cad.getTipo().exigeCiencia())
             throw new ServiceValidationException("Este tipo de aviso não registra ciência.");
         // Sala obrigatória só para tipos amarrados a sala (VERIFICACAO); PESSOAL não tem sala.
@@ -888,7 +894,7 @@ public class AvisoService {
     @Transactional
     public void registrarVisto(String cadastroId, String pessoaId, PapelPessoa papel) {
         AvisoCadastro cad = cadastroRepo.findById(cadastroId).orElseThrow(() ->
-                new ServiceValidationException("Aviso não encontrado.", HttpStatus.NOT_FOUND));
+                new ServiceValidationException("Comunicação não encontrada.", HttpStatus.NOT_FOUND));
         if (cad.getTipo() != TipoAviso.AGENDA)
             throw new ServiceValidationException("Este tipo de aviso não registra visualização.");
         if (cad.getStatus() != StatusAviso.ATIVO) return;      // desativado entre a exibição e o registro
@@ -1188,15 +1194,19 @@ public class AvisoService {
     }
 
     /**
-     * {@code titulo} = título do popup ("Aviso - {titulo}"): vem do subtipo quando houver, senão do
-     * label do tipo (§2 — fallback para Verificação e o legado PESSOAL, ambos sem subtipo).
+     * Payload do popup. {@code categoria} comanda o rótulo e o visual da caixa; {@code titulo} é o
+     * CONTEXTO que complementa o título ("Comunicado — Agenda Legislativa") e vem vazio quando a
+     * categoria basta (Mensagem). Ambos derivam do subtipo quando houver, senão do tipo — a
+     * Verificação e o legado PESSOAL não têm subtipo.
      */
     private Map<String, Object> montarPayloadPendente(String cadastroId, boolean manter, TipoAviso tipo,
                                                       SubtipoAviso subtipo) {
+        RotuloAviso rotulo = RotuloAviso.de(tipo, subtipo);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("cadastro_id", cadastroId);
         m.put("tipo", tipo.name());
-        m.put("titulo", subtipo != null ? subtipo.getTituloPopup() : tipo.getLabel());
+        m.put("categoria", rotulo.categoria().name());
+        m.put("titulo", rotulo.contextoPopup());
         m.put("exige_ciencia", tipo.exigeCiencia());
         m.put("manter_apos_ciencia", manter);
         m.put("mensagens", mensagemRepo.findByCadastroIdOrderByOrdem(cadastroId).stream()

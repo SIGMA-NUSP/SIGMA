@@ -8,11 +8,12 @@ import { AvisoPopupComponent } from './aviso-popup.component';
 
 const msg = (texto: string) => [{ ordem: 1, texto }];
 
-/** Payloads como o backend os devolve: `titulo` já derivado do subtipo (fallback = label do tipo). */
-const ESCALA = { cadastro_id: 'es1', tipo: 'ESCALA', titulo: 'Escala', exige_ciencia: true, manter_apos_ciencia: false, mensagens: msg('Atenção ao rodízio.') };
-const PESSOAL_LEGADO = { cadastro_id: 'pe1', tipo: 'PESSOAL', titulo: 'Pessoal', exige_ciencia: true, manter_apos_ciencia: false, mensagens: msg('Aviso legado sem subtipo.') };
-const AGENDA = { cadastro_id: 'ag1', tipo: 'AGENDA', titulo: 'Agenda Legislativa', exige_ciencia: false, manter_apos_ciencia: false, mensagens: msg('Planilha atualizada.') };
-const GERAL = { cadastro_id: 'ge1', tipo: 'GERAL', titulo: 'Operadores', exige_ciencia: false, manter_apos_ciencia: false, mensagens: msg('Comunicado ao grupo.') };
+/** Payloads como o backend os devolve: `categoria` + `titulo` (o contexto) já derivados do subtipo. */
+const ESCALA = { cadastro_id: 'es1', tipo: 'ESCALA', categoria: 'AVISO', titulo: 'Escala', exige_ciencia: true, manter_apos_ciencia: false, mensagens: msg('Atenção ao rodízio.') };
+const PESSOAL_LEGADO = { cadastro_id: 'pe1', tipo: 'PESSOAL', categoria: 'MENSAGEM', titulo: '', exige_ciencia: true, manter_apos_ciencia: false, mensagens: msg('Aviso legado sem subtipo.') };
+const AGENDA = { cadastro_id: 'ag1', tipo: 'AGENDA', categoria: 'COMUNICADO', titulo: 'Agenda Legislativa', exige_ciencia: false, manter_apos_ciencia: false, mensagens: msg('Planilha atualizada.') };
+const GERAL = { cadastro_id: 'ge1', tipo: 'GERAL', categoria: 'COMUNICADO', titulo: 'Operadores', exige_ciencia: false, manter_apos_ciencia: false, mensagens: msg('Comunicado ao grupo.') };
+const FOLHA = { cadastro_id: 'fo1', tipo: 'PESSOAL', categoria: 'NOTIFICACAO', titulo: 'Folha semanal disponível', exige_ciencia: true, manter_apos_ciencia: false, mensagens: msg('Sua folha foi publicada.') };
 
 describe('AvisoPopupComponent', () => {
   let fixture: ComponentFixture<AvisoPopupComponent>;
@@ -46,6 +47,8 @@ describe('AvisoPopupComponent', () => {
   }
 
   const titulo = () => fixture.nativeElement.querySelector('.modal-title')?.textContent?.trim();
+  const selo = () => fixture.nativeElement.querySelector('.cat-selo')?.textContent?.trim();
+  const classesDoCard = () => Array.from<string>(fixture.nativeElement.querySelector('.modal-card')?.classList ?? []);
   const chamadasVisto = () => apiPost.mock.calls.filter((c: any[]) => String(c[0]).endsWith('/visto'));
 
   beforeEach(() => {
@@ -59,26 +62,68 @@ describe('AvisoPopupComponent', () => {
   });
   afterEach(() => { fixture?.destroy(); vi.restoreAllMocks(); });
 
-  // ── Título "Aviso - {titulo}" (§2) ─────────────────────────────
+  // ── Título, selo e cores por categoria ─────────────────────────
 
-  it('título é "Aviso - {titulo}" do aviso do topo; o "Você tem x avisos" não existe mais', async () => {
+  it('Aviso: título "categoria — contexto" do aviso do topo, selo e classe de cor; o "Você tem x avisos" não existe mais', async () => {
     pendentes = [ESCALA, PESSOAL_LEGADO];
     await montar();
-    expect(titulo()).toBe('Aviso - Escala');
+    expect(titulo()).toBe('Aviso — Escala');
+    expect(selo()).toBe('Aviso');                      // a caixa alta é do CSS
+    expect(classesDoCard()).toContain('cat-aviso');
+    expect(classesDoCard()).toContain('modal-cat');    // faixa da categoria no topo
+    expect(classesDoCard()).toContain('card-custom');  // as classes estáticas continuam
     expect(fixture.nativeElement.textContent).not.toContain('Você tem');
   });
 
-  it('aviso legado usa o título de fallback que o backend manda (label do tipo)', async () => {
-    pendentes = [PESSOAL_LEGADO];
+  it('Comunicado de Agenda: título com o contexto e cor de comunicado', async () => {
+    pendentes = [AGENDA];
+    routerUrl = '/agenda';
     await montar();
-    expect(titulo()).toBe('Aviso - Pessoal');
+    expect(titulo()).toBe('Comunicado — Agenda Legislativa');
+    expect(selo()).toBe('Comunicado');
+    expect(classesDoCard()).toContain('cat-comunicado');
   });
 
-  it('defensivo: titulo ausente no payload não quebra o título', async () => {
-    pendentes = [{ ...GERAL, titulo: undefined }];
+  it('Mensagem (pessoal e legado): sem contexto, o título é só a categoria', async () => {
+    pendentes = [PESSOAL_LEGADO];
     await montar();
-    expect(titulo()).toBe('Aviso - Aviso');
+    expect(titulo()).toBe('Mensagem');
+    expect(titulo()).not.toContain('—');
+    expect(selo()).toBe('Mensagem');
+    expect(classesDoCard()).toContain('cat-mensagem');
+  });
+
+  it('Notificação: aviso disparado pelo sistema tem selo e cor próprios', async () => {
+    pendentes = [FOLHA];
+    await montar();
+    expect(titulo()).toBe('Notificação — Folha semanal disponível');
+    expect(selo()).toBe('Notificação');
+    expect(classesDoCard()).toContain('cat-notificacao');
+  });
+
+  it('o selo traz um ícone desenhado, um por categoria', async () => {
+    pendentes = [GERAL];
+    await montar();
+    const paths = fixture.nativeElement.querySelectorAll('.cat-selo svg path');
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths[0].getAttribute('d')).toBeTruthy();
+  });
+
+  it('defensivo: payload sem categoria nem contexto cai em Aviso — nunca some da tela', async () => {
+    pendentes = [{ ...GERAL, categoria: undefined, titulo: undefined }];
+    await montar();
+    expect(titulo()).toBe('Aviso');
     expect(titulo()).not.toContain('undefined');
+    expect(classesDoCard()).toContain('cat-aviso');
+  });
+
+  it('caixas de vários textos são numeradas como "Texto nº X"', async () => {
+    pendentes = [{ ...GERAL, mensagens: [{ ordem: 1, texto: 'Primeiro' }, { ordem: 2, texto: 'Segundo' }] }];
+    await montar();
+    const cabecalhos = Array.from<HTMLElement>(fixture.nativeElement.querySelectorAll('.aviso-header'))
+      .map(el => el.textContent?.trim());
+    expect(cabecalhos).toEqual(['Texto nº 1', 'Texto nº 2']);
+    expect(fixture.nativeElement.textContent).not.toContain('Aviso nº');
   });
 
   // ── Visto de AGENDA na exibição (§6.2) ─────────────────────────
@@ -108,7 +153,7 @@ describe('AvisoPopupComponent', () => {
 
     expect(apiPost).toHaveBeenCalledWith('/api/avisos/pe1/ciencia', {});
     expect(apiPost).toHaveBeenCalledWith('/api/avisos/ag1/visto', {});
-    expect(titulo()).toBe('Aviso - Agenda Legislativa');
+    expect(titulo()).toBe('Comunicado — Agenda Legislativa');
   });
 
   // ── GERAL: dispensa por sessão, sem visto (decisão 19) ─────────
@@ -162,7 +207,7 @@ describe('AvisoPopupComponent', () => {
     const manter = { ...PESSOAL_LEGADO, manter_apos_ciencia: true };
     pendentes = [manter];
     await montar();
-    expect(titulo()).toBe('Aviso - Pessoal');
+    expect(titulo()).toBe('Mensagem');
 
     comp.ciente = true;
     comp.confirmarCiencia(comp.avisos()[0]);

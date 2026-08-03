@@ -3,6 +3,7 @@ import { ActivatedRoute, RouterLink } from '@angular/router';
 import { ApiService } from '../../core/services/api.service';
 import { FmtDatePipe } from '../../shared/pipes/fmt-date.pipe';
 import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
+import { CategoriaSeloComponent } from '../../shared/components/categoria-selo.component';
 
 type Detalhe = Record<string, any>;
 
@@ -15,17 +16,17 @@ interface LinhaCiencia {
 }
 
 /**
- * Detalhe de um cadastro de aviso (somente leitura). Aberto por duplo-clique numa linha da tabela
- * "Avisos Cadastrados" (query param `id`), consome GET /api/admin/avisos/{id}/detalhe. O card de
- * conteúdo (Identificação / Vigência / Destino / Mensagens) e a tabela de ciência/exibição se
- * adaptam ao TIPO do aviso; o subtipo só muda rótulos. Grupo (GERAL) termina no card, sem tabela.
+ * Detalhe de um cadastro de comunicação (somente leitura). Aberto por duplo-clique numa linha da
+ * tabela "Comunicações Cadastradas" (query param `id`), consome GET /api/admin/avisos/{id}/detalhe.
+ * O card de conteúdo (Identificação / Vigência / Destino / Mensagens) e a tabela de ciência/exibição
+ * se adaptam ao TIPO; a categoria e o subtipo só mudam rótulos. Grupo (GERAL) termina no card, sem tabela.
  */
 @Component({
   selector: 'app-admin-aviso-detalhe',
   standalone: true,
-  imports: [RouterLink, FmtDatePipe, ErroCargaComponent],
+  imports: [RouterLink, FmtDatePipe, ErroCargaComponent, CategoriaSeloComponent],
   template: `
-    <h1>Detalhe do Aviso</h1>
+    <h1>Detalhe da Comunicação</h1>
     <a routerLink="/admin/avisos-sala" class="back-link">&larr; Voltar</a>
 
     @if (loading()) {
@@ -34,7 +35,7 @@ interface LinhaCiencia {
       <app-erro-carga [mensagem]="erro()!" (tentarNovamente)="carregar()" />
     } @else if (naoEncontrado()) {
       <div class="card-custom detalhe-card">
-        <p class="text-muted-sm">Aviso não encontrado.</p>
+        <p class="text-muted-sm">Comunicação não encontrada.</p>
       </div>
     } @else if (d(); as dd) {
       <div class="card-custom detalhe-card">
@@ -48,8 +49,11 @@ interface LinhaCiencia {
             <div class="field-value">{{ dd['numero'] }}</div>
           </div>
           <div class="field">
-            <label>Tipo de Aviso</label>
-            <div class="field-value">{{ dd['tipo_tabela'] }}</div>
+            <label>Tipo</label>
+            <div class="field-value col-tipo">
+              <app-categoria-selo [categoria]="dd['categoria']" />
+              @if (dd['tipo_tabela']) { <span>{{ dd['tipo_tabela'] }}</span> }
+            </div>
           </div>
         </div>
         <div class="field-row grid-2">
@@ -168,7 +172,7 @@ interface LinhaCiencia {
         <h3>4) Mensagens</h3>
         @for (msg of mensagens(); track msg['ordem']; let i = $index) {
           <div class="field">
-            <label>{{ ordinal(i + 1) }} Aviso</label>
+            <label>{{ ordinal(i + 1) }} Texto</label>
             <div class="field-value obs-value">{{ msg['texto'] }}</div>
           </div>
         }
@@ -209,6 +213,8 @@ interface LinhaCiencia {
     h3 { font-size: .95rem; margin: 24px 0 8px; color: var(--text); }
     .grid-2 { grid-template-columns: 1fr 1fr; }
     .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    /* selo + contexto lado a lado no campo "Tipo" */
+    .col-tipo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .chip { background: #eef2f7; border: 1px solid var(--border); border-radius: 14px; padding: 3px 10px; font-size: .82rem; }
     .nota { font-size: .82rem; color: var(--muted); margin: 6px 0 0; line-height: 1.4; }
     .tabela-ciencia { max-width: 700px; margin: 20px auto 0; }
