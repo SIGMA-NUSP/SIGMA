@@ -156,7 +156,7 @@ describe('AvisoPopupComponent', () => {
     expect(titulo()).toBe('Comunicado — Agenda Legislativa');
   });
 
-  // ── GERAL: dispensa por sessão, sem visto (decisão 19) ─────────
+  // ── GERAL sem ciência: dispensa por sessão, sem visto ──────────
 
   it('GERAL não dispara visto; "Fechar" dispensa só na sessão e o aviso volta num novo componente', async () => {
     pendentes = [GERAL];
@@ -181,9 +181,9 @@ describe('AvisoPopupComponent', () => {
     fixture2.destroy();
   });
 
-  // ── Ciência de ESCALA/PESSOAL inalterada ───────────────────────
+  // ── Quem manda no botão é o exige_ciencia do payload, não o tipo ──
 
-  it('tipos com ciência mantêm checkbox + Confirmar; a ciência remove o aviso e não gera visto', async () => {
+  it('cadastro com ciência: checkbox + Confirmar; a ciência remove o aviso e não gera visto', async () => {
     pendentes = [ESCALA];
     await montar();
     expect(fixture.nativeElement.querySelector('input[type="checkbox"]')).not.toBeNull();
@@ -199,6 +199,27 @@ describe('AvisoPopupComponent', () => {
     expect(chamadasVisto().length).toBe(0);    // ESCALA no topo não dispara visto
     expect(comp.avisos().length).toBe(0);
     expect(fixture.nativeElement.querySelector('.modal-overlay')).toBeNull();
+  });
+
+  it('o tipo não decide o botão: GERAL com ciência no payload pede confirmação', async () => {
+    pendentes = [{ ...GERAL, exige_ciencia: true }];
+    await montar();
+
+    expect(fixture.nativeElement.querySelector('input[type="checkbox"]')).not.toBeNull();
+    comp.ciente = true;
+    comp.confirmarCiencia(comp.avisos()[0]);
+
+    expect(apiPost).toHaveBeenCalledWith('/api/avisos/ge1/ciencia', {});
+    expect(chamadasVisto().length).toBe(0);   // só AGENDA registra visto
+  });
+
+  it('o tipo não decide o botão: PESSOAL sem ciência no payload só oferece "Fechar"', async () => {
+    pendentes = [{ ...PESSOAL_LEGADO, exige_ciencia: false }];
+    await montar();
+
+    expect(fixture.nativeElement.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.btn-primary-custom').textContent).toContain('Fechar');
+    expect(chamadasVisto().length).toBe(0);
   });
 
   // ── "Manter após ciência": 1× por sessão de login (sessionStorage) ──

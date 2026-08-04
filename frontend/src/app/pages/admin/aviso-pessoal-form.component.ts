@@ -14,10 +14,13 @@ const ORDEM_TIPO = ['OPERADOR', 'TECNICO', 'ADMINISTRADOR'];
 
 /**
  * Painel "Pessoal" do cadastro de avisos, com dois modos (radio "Enviar para"):
- * - "Pessoas específicas": tipo PESSOAL, com ciência; multi-select em seções Operadores/Técnicos/
- *   Administradores (as três listas de {@code /api/admin/avisos/pessoas}, endpoint próprio de
- *   Avisos); checkbox "Manter após ciência" só aqui; a API recebe as listas mistas (alvo "PESSOAS").
- * - "Um grupo": tipo GERAL, sem ciência; um dos coletivos (Operadores/Técnicos/ambos/Admins).
+ * - "Pessoas específicas": tipo PESSOAL; multi-select em seções Operadores/Técnicos/Administradores
+ *   (as três listas de {@code /api/admin/avisos/pessoas}, endpoint próprio de Avisos); a API recebe
+ *   as listas mistas (alvo "PESSOAS").
+ * - "Um grupo": tipo GERAL; um dos coletivos (Operadores/Técnicos/ambos/Admins).
+ *
+ * A ciência do destinatário é escolha do admin nos dois modos, com default por modo (pessoas pede,
+ * grupo não) e comanda a existência do "manter após ciência" — trocar de modo volta ao default.
  *
  * A carga das pessoas é FAIL-CLOSED no modo pessoas (envio bloqueado até a lista carregar). Emite
  * {@link cadastrado} no sucesso.
@@ -31,8 +34,10 @@ const ORDEM_TIPO = ['OPERADOR', 'TECNICO', 'ADMINISTRADOR'];
       <div class="form-row">
         <label>Enviar para <span class="req">*</span></label>
         <div class="radio-row">
-          <label class="radio-opt"><input type="radio" [(ngModel)]="modo" name="modo" value="pessoas"> Pessoas específicas</label>
-          <label class="radio-opt"><input type="radio" [(ngModel)]="modo" name="modo" value="grupo"> Um grupo</label>
+          <!-- O default de ciência muda por modo; a troca vem do evento do DOM (o ngModelChange do
+               radio dispara também na sincronização do próprio ciclo de detecção). -->
+          <label class="radio-opt"><input type="radio" [(ngModel)]="modo" name="modo" value="pessoas" (change)="onModoChange('pessoas')"> Pessoas específicas</label>
+          <label class="radio-opt"><input type="radio" [(ngModel)]="modo" name="modo" value="grupo" (change)="onModoChange('grupo')"> Um grupo</label>
         </div>
       </div>
 
@@ -78,9 +83,16 @@ const ORDEM_TIPO = ['OPERADOR', 'TECNICO', 'ADMINISTRADOR'];
         </div>
       </div>
 
-      @if (modo === 'pessoas') {
+      <div class="form-row">
+        <label class="check-opt">
+          <input type="checkbox" [(ngModel)]="exigeCiencia" name="ciencia" (change)="onCienciaChange(exigeCiencia)">
+          Exigir ciência do destinatário
+        </label>
+      </div>
+
+      @if (exigeCiencia) {
         <div class="form-row">
-          <label class="check-opt">
+          <label class="check-opt check-sub">
             <input type="checkbox" [(ngModel)]="manterAposCiencia" name="manter">
             Manter aviso após ciência
           </label>
@@ -109,6 +121,8 @@ const ORDEM_TIPO = ['OPERADOR', 'TECNICO', 'ADMINISTRADOR'];
     .duracao-inline input { width:90px; }
     .check-opt { display:flex; align-items:center; gap:8px; font-weight:500; cursor:pointer; }
     .check-opt input { width:auto; }
+    /* Subordinado à ciência: só existe quando ela está ligada. */
+    .check-sub { margin-left:26px; }
   `],
 })
 export class AvisoPessoalFormComponent implements OnInit {
@@ -127,6 +141,8 @@ export class AvisoPessoalFormComponent implements OnInit {
   mensagens: string[] = [''];
   permanente = true;
   duracaoDias: number | null = null;
+  /** Mensagem a pessoas nasce pedindo ciência; comunicado a um grupo, não (defaults por modo). */
+  exigeCiencia = true;
   manterAposCiencia = false;
   saving = signal(false);
   errorMsg = signal('');
@@ -142,6 +158,18 @@ export class AvisoPessoalFormComponent implements OnInit {
 
   ngOnInit(): void {
     this.carregarPessoas();
+  }
+
+  /** Cada modo tem seu default de ciência: mensagem a pessoas pede, comunicado a grupo não. */
+  onModoChange(modo: 'pessoas' | 'grupo'): void {
+    this.modo = modo;
+    this.onCienciaChange(modo === 'pessoas');
+  }
+
+  /** Sem ciência não há o que manter: desligar a ciência zera o "manter" junto com o campo escondido. */
+  onCienciaChange(exige: boolean): void {
+    this.exigeCiencia = exige;
+    if (!exige) this.manterAposCiencia = false;
   }
 
   carregarPessoas(): void {
@@ -181,6 +209,7 @@ export class AvisoPessoalFormComponent implements OnInit {
         admin_ids: this.selectedPessoas.filter(id => tipoDe.get(id) === 'ADMINISTRADOR'),
         permanente: this.permanente,
         duracao_dias: this.permanente ? null : this.duracaoDias,
+        exige_ciencia: this.exigeCiencia,
         manter_apos_ciencia: this.manterAposCiencia,
         mensagens: msgs,
       };
@@ -190,6 +219,8 @@ export class AvisoPessoalFormComponent implements OnInit {
         alvo_tipo: this.grupo,
         permanente: this.permanente,
         duracao_dias: this.permanente ? null : this.duracaoDias,
+        exige_ciencia: this.exigeCiencia,
+        manter_apos_ciencia: this.manterAposCiencia,
         mensagens: msgs,
       };
     }
@@ -219,6 +250,7 @@ export class AvisoPessoalFormComponent implements OnInit {
     this.permanente = true;
     this.duracaoDias = null;
     this.manterAposCiencia = false;
+    this.exigeCiencia = this.modo === 'pessoas';   // default de ciência do modo corrente
     // `modo` e `grupo` ficam como estão (o admin costuma cadastrar vários do mesmo tipo em sequência).
   }
 }

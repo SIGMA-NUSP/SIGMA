@@ -66,7 +66,8 @@ public class AvisoController {
                 strList(payload.get("operador_ids")),
                 strList(payload.get("tecnico_ids")),
                 strList(payload.get("admin_ids")),
-                asLong(payload.get("escala_id")));
+                asLong(payload.get("escala_id")),
+                asBool(payload.get("exige_ciencia")));
         var data = avisoService.criar(req, principal.getId());
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("ok", true, "data", data));
     }

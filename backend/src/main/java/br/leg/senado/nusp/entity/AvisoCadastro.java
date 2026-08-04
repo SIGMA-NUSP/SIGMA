@@ -36,6 +36,15 @@ public class AvisoCadastro extends AuditableEntity {
     @Column(name = "MANTER_APOS_CIENCIA", nullable = false)
     private Boolean manterAposCiencia = false;
 
+    /**
+     * A comunicação exige ciência do destinatário? Escolha do admin no cadastro para Escala,
+     * Pessoal e Geral; imposta em Verificação (sempre exige — a ciência é por sala, no fluxo do
+     * checklist) e em Agenda (nunca exige — o registro é o "visto" da exibição). Sem ciência,
+     * {@code manterAposCiencia} não tem o que manter e fica false.
+     */
+    @Column(name = "EXIGE_CIENCIA", nullable = false)
+    private Boolean exigeCiencia;
+
     @Column(name = "STATUS", nullable = false)
     private StatusAviso status = StatusAviso.ATIVO;
 

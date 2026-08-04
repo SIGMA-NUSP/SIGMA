@@ -64,14 +64,14 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
   function base(over: Record<string, any>): Record<string, any> {
     return {
       id: 'av-1', numero: 42, tipo_label: 'X', subtipo: null,
-      permanente: true, duracao_dias: null, manter_apos_ciencia: false, status: 'Ativo',
+      permanente: true, duracao_dias: null, exige_ciencia: false, manter_apos_ciencia: false, status: 'Ativo',
       criado_em: '2026-07-10T09:15:00', expira_em: null, criado_por: 'Ana Prado',
       mensagens: [{ ordem: 1, texto: 'Primeira mensagem' }], alvos: [], cientes: [],
       ...over,
     };
   }
   const verificacao = () => base({
-    tipo: 'VERIFICACAO', categoria: 'AVISO', tipo_tabela: 'Verificação', subtipo: null,
+    tipo: 'VERIFICACAO', categoria: 'AVISO', tipo_tabela: 'Verificação', subtipo: null, exige_ciencia: true,
     alvos: [{ alvo_tipo: 'SALA', descricao: 'Plenário 2' }, { alvo_tipo: 'SALA', descricao: 'Plenário 3' }],
     cientes: [
       { nome: 'Bruno', papel: 'Operador', sala_id: 2, sala_nome: 'Plenário 2', ciente_em: '2026-07-10T10:05:00' },
@@ -79,7 +79,8 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     ],
   });
   const escala = () => base({
-    tipo: 'ESCALA', categoria: 'AVISO', tipo_tabela: 'Escala', subtipo: 'ESCALA', manter_apos_ciencia: true, status: 'Ativo',
+    tipo: 'ESCALA', categoria: 'AVISO', tipo_tabela: 'Escala', subtipo: 'ESCALA',
+    exige_ciencia: true, manter_apos_ciencia: true, status: 'Ativo',
     escala: { id: 7, data_inicio: '2026-07-14', data_fim: '2026-07-18', plenarios: [{ sala_id: 2, sala_nome: 'Plenário 2' }] },
     alvos: [{ alvo_tipo: 'SALA', descricao: 'Plenário 2' }],
     destinatarios: [
@@ -97,7 +98,8 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     ],
   });
   const pessoal = () => base({
-    tipo: 'PESSOAL', categoria: 'MENSAGEM', tipo_tabela: '', subtipo: 'PESSOAL', manter_apos_ciencia: false,
+    tipo: 'PESSOAL', categoria: 'MENSAGEM', tipo_tabela: '', subtipo: 'PESSOAL',
+    exige_ciencia: true, manter_apos_ciencia: false,
     alvos: [
       { alvo_tipo: 'OPERADOR', descricao: 'Ana' },
       { alvo_tipo: 'TECNICO', descricao: 'Beto' },
@@ -109,9 +111,10 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
       { nome: 'Estranho', papel: 'Operador', ciente_em: '2026-07-09T10:00:00', fora_do_publico: true },
     ],
   });
-  const grupo = () => base({
+  const grupo = (over: Record<string, any> = {}) => base({
     tipo: 'GERAL', categoria: 'COMUNICADO', tipo_tabela: 'Operadores', subtipo: 'GRUPO_OPERADORES',
     alvos: [{ alvo_tipo: 'TODOS_OPERADORES', descricao: 'Todos os operadores' }],
+    ...over,
   });
 
   // ═══ 1) Verificação ═══
@@ -190,14 +193,88 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
   });
 
   // ═══ 5) Grupo (GERAL) — sem tabela ═══
-  it('Grupo (GERAL): mostra o coletivo, termina no card — sem tabela e sem "Manter após ciência"', async () => {
+  it('Grupo (GERAL) sem ciência: mostra o coletivo, termina no card — sem tabela e sem "Manter após ciência"', async () => {
     resposta = ok(grupo());
     const f = await render();
 
     expect(texto(f)).toContain('Todos os operadores');
+    expect(texto(f)).toContain('Exige ciência');
     expect(texto(f)).not.toContain('Manter após ciência');
     expect(tabela(f)).toBeNull();
     expect(f.debugElement.query(By.css('.tabela-ciencia'))).toBeNull();
+  });
+
+  // ═══ 6) Ciência escolhida no cadastro ═══
+  describe('exigência de ciência do cadastro', () => {
+
+    /** Valor do campo cujo <label> tem o texto pedido. */
+    const campo = (f: ComponentFixture<AdminAvisoDetalheComponent>, label: string) =>
+      f.debugElement.queryAll(By.css('.field'))
+        .find(el => (el.nativeElement as HTMLElement).querySelector('label')?.textContent?.trim() === label)
+        ?.query(By.css('.field-value'))?.nativeElement.textContent?.trim();
+
+    it('a linha "Exige ciência" mostra Sim/Não conforme o cadastro', async () => {
+      resposta = ok(escala());
+      expect(campo(await render(), 'Exige ciência')).toBe('Sim');
+
+      resposta = ok(grupo());
+      expect(campo(await render(), 'Exige ciência')).toBe('Não');
+    });
+
+    it('Grupo COM ciência: ganha tabela com quem deu ciência (sem denominador) e o "Manter após ciência"', async () => {
+      resposta = ok(grupo({
+        exige_ciencia: true, manter_apos_ciencia: true,
+        cientes: [
+          { nome: 'Ana', papel: 'Operador', sala_id: null, sala_nome: null, ciente_em: '2026-07-10T10:00:00' },
+          { nome: 'Beto', papel: 'Técnico', sala_id: null, sala_nome: null, ciente_em: '2026-07-10T11:00:00' },
+        ],
+      }));
+      const f = await render();
+
+      expect(texto(f)).toContain('Manter após ciência');
+      expect(cabecalhos(f)).toEqual(['Destinatário', 'Função', 'Ciência (data)', 'Ciência (hora)']);
+      expect(resumo(f).nativeElement.textContent).toContain('2 pessoas deram ciência');
+      const linhas = linhasTexto(f);
+      expect(linhas[0]).toContain('Ana');
+      expect(linhas[0]).toContain('Operador');
+      expect(linhas[0]).toContain('10:00');
+      expect(linhas[1]).toContain('Beto');
+    });
+
+    it('Grupo COM ciência e ninguém ciente: tabela vazia diz "Nenhuma ciência registrada."', async () => {
+      resposta = ok(grupo({ exige_ciencia: true, cientes: [] }));
+      const f = await render();
+      expect(linhasTexto(f)[0]).toContain('Nenhuma ciência registrada.');
+    });
+
+    it('Escala SEM ciência: destinatários continuam listados, mas sem colunas de data/hora, sem "Manter" e com resumo de público', async () => {
+      const semCiencia = escala();
+      semCiencia['exige_ciencia'] = false;
+      semCiencia['manter_apos_ciencia'] = false;
+      semCiencia['destinatarios'] = [
+        { nome: 'Ana', papel: 'Operador', plenarios: ['Plenário 2'], ciente_em: null },
+        { nome: 'Carlos', papel: 'Operador', plenarios: ['Plenário 2'], ciente_em: null },
+      ];
+      resposta = ok(semCiencia);
+      const f = await render();
+
+      expect(texto(f)).not.toContain('Manter após ciência');
+      expect(cabecalhos(f)).toEqual(['Destinatário', 'Plenário']);   // sem Ciência (data)/(hora)
+      expect(resumo(f).nativeElement.textContent).toContain('2 destinatários');
+      expect(linhasTexto(f)).toHaveLength(2);
+      expect(linhasTexto(f)[0]).toContain('Ana');
+    });
+
+    it('Pessoal SEM ciência: mesma regra — lista de destinatários sem coluna de ciência', async () => {
+      const semCiencia = pessoal();
+      semCiencia['exige_ciencia'] = false;
+      semCiencia['destinatarios'] = [{ nome: 'Ana', papel: 'Operador', ciente_em: null }];
+      resposta = ok(semCiencia);
+      const f = await render();
+
+      expect(cabecalhos(f)).toEqual(['Destinatário', 'Função']);
+      expect(resumo(f).nativeElement.textContent).toContain('1 destinatário');
+    });
   });
 
   // ═══ Campo "Tipo": selo da categoria + contexto ═══

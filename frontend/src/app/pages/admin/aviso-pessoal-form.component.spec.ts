@@ -60,10 +60,14 @@ describe('AvisoPessoalFormComponent', () => {
     expect(apiPost).toHaveBeenCalledWith('/api/admin/avisos', {
       tipo: 'PESSOAL', alvo_tipo: 'PESSOAS',
       operador_ids: ['op1'], tecnico_ids: ['tec1'], admin_ids: ['adm1'],
-      permanente: true, duracao_dias: null, manter_apos_ciencia: true, mensagens: ['Aviso pessoal'],
+      permanente: true, duracao_dias: null,
+      exige_ciencia: true, manter_apos_ciencia: true, mensagens: ['Aviso pessoal'],
     });
     expect(emitido).toBe(true);
-    expect(comp.selectedPessoas).toEqual([]);   // reset
+    // Reset: o cadastro seguinte começa limpo, com o default de ciência do modo e sem o "manter".
+    expect(comp.selectedPessoas).toEqual([]);
+    expect(comp.exigeCiencia).toBe(true);
+    expect(comp.manterAposCiencia).toBe(false);
   });
 
   it('modo pessoas sem destinatário é rejeitado', async () => {
@@ -76,19 +80,33 @@ describe('AvisoPessoalFormComponent', () => {
     expect(apiPost).not.toHaveBeenCalled();
   });
 
-  it('modo grupo: POST GERAL com o coletivo escolhido e SEM manter_apos_ciencia', async () => {
+  it('modo grupo: POST GERAL com o coletivo escolhido, sem ciência por default', async () => {
     await montar();
-    comp.modo = 'grupo';
+    comp.onModoChange('grupo');
     comp.grupo = 'TODOS_ADMIN';
     comp.mensagens = ['Comunicado'];
 
     comp.onSubmit();
 
     expect(apiPost).toHaveBeenCalledWith('/api/admin/avisos', {
-      tipo: 'GERAL', alvo_tipo: 'TODOS_ADMIN', permanente: true, duracao_dias: null, mensagens: ['Comunicado'],
+      tipo: 'GERAL', alvo_tipo: 'TODOS_ADMIN', permanente: true, duracao_dias: null,
+      exige_ciencia: false, manter_apos_ciencia: false, mensagens: ['Comunicado'],
     });
-    // o payload de grupo não carrega manter_apos_ciencia
-    expect(apiPost.mock.calls[0][1]).not.toHaveProperty('manter_apos_ciencia');
+  });
+
+  it('modo grupo COM ciência: o comunicado pode exigir ciência e ganhar o "manter"', async () => {
+    await montar();
+    comp.onModoChange('grupo');
+    comp.grupo = 'TODOS';
+    comp.mensagens = ['Leia e confirme'];
+    comp.onCienciaChange(true);
+    comp.manterAposCiencia = true;
+
+    comp.onSubmit();
+
+    expect(apiPost.mock.calls[0][1]).toMatchObject({
+      tipo: 'GERAL', exige_ciencia: true, manter_apos_ciencia: true,
+    });
   });
 
   it('não-permanente exige duração entre 1 e 30', async () => {
@@ -103,16 +121,63 @@ describe('AvisoPessoalFormComponent', () => {
     expect(apiPost).not.toHaveBeenCalled();
   });
 
-  it('checkbox "Manter" só aparece no modo pessoas; o multi-select some no modo grupo', async () => {
+  it('o multi-select some no modo grupo, dando lugar ao select do coletivo', async () => {
     await montar();
-    expect(fixture.nativeElement.querySelector('.check-opt')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('app-multi-select-dropdown')).not.toBeNull();
 
-    comp.modo = 'grupo';
+    comp.onModoChange('grupo');
     fixture.detectChanges();
-    expect(fixture.nativeElement.querySelector('.check-opt')).toBeNull();
     expect(fixture.nativeElement.querySelector('app-multi-select-dropdown')).toBeNull();
     expect(fixture.nativeElement.querySelector('select[name="grupo"]')).not.toBeNull();
+  });
+
+  it('default de ciência por modo: marcado em pessoas, desmarcado em grupo (e zera o "manter")', async () => {
+    await montar();
+    expect(comp.exigeCiencia).toBe(true);
+
+    comp.manterAposCiencia = true;
+    comp.onModoChange('grupo');
+    expect(comp.exigeCiencia).toBe(false);
+    expect(comp.manterAposCiencia).toBe(false);   // sem ciência, o manter é zerado
+
+    comp.onModoChange('pessoas');
+    expect(comp.exigeCiencia).toBe(true);
+  });
+
+  it('o "manter" só existe com a ciência ligada', async () => {
+    await montar();
+    expect(fixture.nativeElement.querySelector('input[name="manter"]')).not.toBeNull();
+
+    comp.onCienciaChange(false);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('input[name="manter"]')).toBeNull();
+  });
+
+  it('pelos cliques do admin: trocar para grupo desmarca a ciência e some o "manter"; remarcar a ciência o traz de volta', async () => {
+    await montar();
+    const radio = (v: string) => fixture.nativeElement.querySelector(`input[name="modo"][value="${v}"]`) as HTMLInputElement;
+    const check = (n: string) => fixture.nativeElement.querySelector(`input[name="${n}"]`) as HTMLInputElement;
+
+    check('ciencia').click();          // desmarca a ciência no modo pessoas
+    fixture.detectChanges();
+    expect(comp.exigeCiencia).toBe(false);
+    expect(check('manter')).toBeNull();
+
+    radio('grupo').click();            // grupo: default desmarcado, segue sem "manter"
+    fixture.detectChanges();
+    expect(comp.modo).toBe('grupo');
+    expect(comp.exigeCiencia).toBe(false);
+    expect(check('manter')).toBeNull();
+
+    check('ciencia').click();          // comunicado ao grupo passa a exigir ciência
+    fixture.detectChanges();
+    expect(comp.exigeCiencia).toBe(true);
+    expect(check('manter')).not.toBeNull();
+
+    radio('pessoas').click();          // voltar para pessoas restaura o default marcado
+    fixture.detectChanges();
+    expect(comp.exigeCiencia).toBe(true);
+    expect(check('manter')).not.toBeNull();
   });
 
   it('fail-closed no modo pessoas: erro ao carregar pessoas bloqueia o envio', async () => {

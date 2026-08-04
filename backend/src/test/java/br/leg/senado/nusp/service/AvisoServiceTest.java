@@ -205,13 +205,19 @@ class AvisoServiceTest {
         return salvos;
     }
 
+    /** Cadastro com a exigência de ciência que o tipo dá por padrão (o caso comum). */
     private AvisoCadastro cadastro(TipoAviso tipo, StatusAviso status) {
+        return cadastro(tipo, status, tipo != null && tipo.cienciaPadrao());
+    }
+
+    private AvisoCadastro cadastro(TipoAviso tipo, StatusAviso status, Boolean exigeCiencia) {
         AvisoCadastro c = new AvisoCadastro();
         c.setId(CADASTRO_ID);
         c.setNumero(NUMERO_SEQUENCE);
         c.setTipo(tipo);
         c.setStatus(status);
         c.setCriadoPorId(ADMIN_ID);
+        c.setExigeCiencia(exigeCiencia);
         return c;
     }
 
@@ -222,20 +228,36 @@ class AvisoServiceTest {
         return m;
     }
 
-    /** Payload de criação: cada teste sobrescreve só o que lhe interessa (adminIds/escalaId nulos). */
+    /**
+     * Payload de criação: cada teste sobrescreve só o que lhe interessa (adminIds/escalaId nulos).
+     * Sem escolha de ciência — é o que o form manda nos tipos sem controle, e vale o padrão do tipo.
+     */
     private static CriarAvisoRequest req(String tipo, Boolean permanente, Integer duracaoDias, Boolean manter,
                                          List<String> mensagens, String alvoTipo,
                                          List<Integer> salaIds, List<String> operadorIds, List<String> tecnicoIds) {
         return new CriarAvisoRequest(tipo, permanente, duracaoDias, manter, mensagens, alvoTipo,
-                salaIds, operadorIds, tecnicoIds, null, null);
+                salaIds, operadorIds, tecnicoIds, null, null, null);
+    }
+
+    /** Payload com a escolha de ciência do form (1 mensagem, permanente) — o resto no default. */
+    private static CriarAvisoRequest reqCiencia(String tipo, String alvoTipo, List<Integer> salaIds,
+                                                Boolean exigeCiencia, Boolean manter) {
+        return new CriarAvisoRequest(tipo, null, null, manter, List.of(MSG_CRUA), alvoTipo,
+                salaIds, null, null, null, null, exigeCiencia);
     }
 
     /** Payload com listas de pessoas (op/téc/adm) — modo PESSOAS ou público ADMIN individual (mensagem fixa). */
     private static CriarAvisoRequest reqPessoas(String tipo, Boolean permanente, Integer duracaoDias, Boolean manter,
                                                 String alvoTipo, List<String> operadorIds, List<String> tecnicoIds,
                                                 List<String> adminIds) {
+        return reqPessoas(tipo, permanente, duracaoDias, manter, alvoTipo, operadorIds, tecnicoIds, adminIds, null);
+    }
+
+    private static CriarAvisoRequest reqPessoas(String tipo, Boolean permanente, Integer duracaoDias, Boolean manter,
+                                                String alvoTipo, List<String> operadorIds, List<String> tecnicoIds,
+                                                List<String> adminIds, Boolean exigeCiencia) {
         return new CriarAvisoRequest(tipo, permanente, duracaoDias, manter, List.of(MSG_CRUA), alvoTipo,
-                null, operadorIds, tecnicoIds, adminIds, null);
+                null, operadorIds, tecnicoIds, adminIds, null, exigeCiencia);
     }
 
     /** VERIFICACAO permanente, público SALA — o caso real do frontend hoje. */
@@ -904,6 +926,109 @@ class AvisoServiceTest {
         }
     }
 
+    // ═══ criar — exigência de ciência escolhida no cadastro ═══
+
+    @Nested
+    @DisplayName("criar — exigência de ciência: escolha do form nos tipos configuráveis, valor imposto nos demais")
+    class CriarExigeCiencia {
+
+        @Test
+        @DisplayName("Verificação sempre exige ciência: exige_ciencia=false no payload é ignorado")
+        void criar_verificacaoForcaCiencia() {
+            stubSalaExistente(SALA_ID, SALA_NOME);
+            stubSalasLivres();
+            stubSequenciaNumero();
+            stubAdminExistente();
+            AtomicReference<AvisoCadastro> ref = stubSaveCadastro();
+            stubSaveMensagens();
+            stubSaveAllAlvos();
+
+            Map<String, Object> out = service.criar(
+                    reqCiencia("VERIFICACAO", "SALA", List.of(SALA_ID), false, true), ADMIN_ID);
+
+            assertTrue(ref.get().getExigeCiencia(), "a ciência da Verificação é imposta");
+            assertTrue(ref.get().getManterAposCiencia(), "com ciência, o 'manter' do payload vale");
+            assertEquals(true, out.get("exige_ciencia"));
+        }
+
+        @Test
+        @DisplayName("Agenda nunca exige ciência: exige_ciencia=true no payload é ignorado")
+        void criar_agendaForcaSemCiencia() {
+            stubSequenciaNumero();
+            stubAdminExistente();
+            AtomicReference<AvisoCadastro> ref = stubSaveCadastro();
+            stubSaveMensagens();
+            stubSaveAllAlvos();
+
+            Map<String, Object> out = service.criar(
+                    reqCiencia("AGENDA", null, null, true, true), ADMIN_ID);
+
+            assertFalse(ref.get().getExigeCiencia(), "o visto da Agenda não é ciência");
+            assertFalse(ref.get().getManterAposCiencia());
+            assertEquals(false, out.get("exige_ciencia"));
+        }
+
+        @Test
+        @DisplayName("Geral: sem escolha nasce sem ciência (default do tipo); com a escolha do form, exige")
+        void criar_geralDefaultESolicitada() {
+            stubSequenciaNumero();
+            stubAdminExistente();
+            List<AvisoCadastro> salvos = new ArrayList<>();
+            when(cadastroRepo.save(any(AvisoCadastro.class))).thenAnswer(inv -> {
+                AvisoCadastro c = inv.getArgument(0); c.setId(CADASTRO_ID); salvos.add(c); return c;
+            });
+            stubSaveMensagens();
+            stubSaveAllAlvos();
+
+            service.criar(reqCiencia("GERAL", "TODOS_OPERADORES", null, null, null), ADMIN_ID);
+            service.criar(reqCiencia("GERAL", "TODOS_OPERADORES", null, true, null), ADMIN_ID);
+
+            assertFalse(salvos.get(0).getExigeCiencia(), "sem escolha, Geral segue sem ciência");
+            assertTrue(salvos.get(1).getExigeCiencia(), "o admin pediu ciência neste comunicado");
+        }
+
+        @Test
+        @DisplayName("sem ciência, 'manter após ciência' é zerado — não há ciência que faça o aviso sobreviver")
+        void criar_semCienciaZeraManter() {
+            stubSequenciaNumero();
+            stubAdminExistente();
+            AtomicReference<AvisoCadastro> ref = stubSaveCadastro();
+            stubSaveMensagens();
+            stubSaveAllAlvos();
+
+            Map<String, Object> out = service.criar(
+                    reqCiencia("GERAL", "TODOS_OPERADORES", null, false, true), ADMIN_ID);
+
+            assertFalse(ref.get().getExigeCiencia());
+            assertFalse(ref.get().getManterAposCiencia(), "manter só existe com ciência");
+            assertEquals(false, out.get("manter_apos_ciencia"));
+        }
+
+        @Test
+        @DisplayName("modo PESSOAS: sem escolha nasce com ciência; com exige_ciencia=false, sem ciência e sem 'manter'")
+        void criar_modoPessoasEscolhaDeCiencia() {
+            stubOperadorExistente(OPERADOR_ID);
+            stubSequenciaNumero();
+            stubAdminExistente();
+            List<AvisoCadastro> salvos = new ArrayList<>();
+            when(cadastroRepo.save(any(AvisoCadastro.class))).thenAnswer(inv -> {
+                AvisoCadastro c = inv.getArgument(0); c.setId(CADASTRO_ID); salvos.add(c); return c;
+            });
+            stubSaveMensagens();
+            stubSaveAllAlvos();
+
+            service.criar(reqPessoas("PESSOAL", null, null, true, "PESSOAS",
+                    List.of(OPERADOR_ID), null, null), ADMIN_ID);
+            service.criar(reqPessoas("PESSOAL", null, null, true, "PESSOAS",
+                    List.of(OPERADOR_ID), null, null, false), ADMIN_ID);
+
+            assertTrue(salvos.get(0).getExigeCiencia(), "mensagem a pessoas nasce pedindo ciência");
+            assertTrue(salvos.get(0).getManterAposCiencia());
+            assertFalse(salvos.get(1).getExigeCiencia());
+            assertFalse(salvos.get(1).getManterAposCiencia(), "sem ciência, manter é zerado");
+        }
+    }
+
     // ═══ listarPessoas — fonte do multi-select do card Pessoal ═══
 
     @Nested
@@ -1103,7 +1228,7 @@ class AvisoServiceTest {
         }
 
         @Test
-        @DisplayName("criarPessoalIndividual — cadastro é PESSOAL, permanente, some após a ciência (manterAposCiencia=false) e a mensagem única vem trimada na ordem 1")
+        @DisplayName("criarPessoalIndividual — cadastro é PESSOAL, exige ciência, permanente, some após a ciência (manterAposCiencia=false) e a mensagem única vem trimada na ordem 1")
         void criarPessoal_shapeDoCadastro() {
             stubAdminExistente();
             stubSequenciaNumero();
@@ -1117,6 +1242,8 @@ class AvisoServiceTest {
             assertEquals(TipoAviso.PESSOAL, cad.getTipo());
             assertEquals(SubtipoAviso.FOLHA_MENSAL, cad.getSubtipo()); // §2: o subtipo passado é gravado
             assertTrue(cad.getPermanente());
+            // Aviso disparado pelo sistema sempre pede ciência: é assim que se sabe que a pessoa leu.
+            assertTrue(cad.getExigeCiencia());
             assertFalse(cad.getManterAposCiencia());
             assertEquals(StatusAviso.ATIVO, cad.getStatus());
             assertEquals(ADMIN_ID, cad.getCriadoPorId());
@@ -1191,20 +1318,36 @@ class AvisoServiceTest {
         }
 
         @Test
-        @DisplayName("registrarCiencia — desvio 1: tipo sem ciência (GERAL/AGENDA) é rejeitado com 400; tipo nulo cai na mesma guarda")
-        void registrarCiencia_tipoNaoRegistraCiencia() {
+        @DisplayName("registrarCiencia — desvio 1: cadastro sem ciência é rejeitado com 400, seja qual for o tipo (Geral, Agenda, Pessoal); valor ausente cai na mesma guarda")
+        void registrarCiencia_cadastroNaoRegistraCiencia() {
+            // Quem manda é o campo do cadastro, não o tipo: um PESSOAL cadastrado sem ciência recusa
+            // exatamente como o Geral e o Agenda recusam.
             when(cadastroRepo.findById(CADASTRO_ID))
                     .thenReturn(Optional.of(cadastro(TipoAviso.GERAL, StatusAviso.ATIVO)))
                     .thenReturn(Optional.of(cadastro(TipoAviso.AGENDA, StatusAviso.ATIVO)))
-                    .thenReturn(Optional.of(cadastro(null, StatusAviso.ATIVO)));
+                    .thenReturn(Optional.of(cadastro(TipoAviso.PESSOAL, StatusAviso.ATIVO, false)))
+                    .thenReturn(Optional.of(cadastro(null, StatusAviso.ATIVO, null)));
 
-            for (int i = 0; i < 3; i++) {
+            for (int i = 0; i < 4; i++) {
                 ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                         () -> service.registrarCiencia(CADASTRO_ID, SALA_ID, OPERADOR_ID, PapelPessoa.OPERADOR));
-                assertEquals("Este tipo de aviso não registra ciência.", ex.getMessage());
+                assertEquals("Esta comunicação não registra ciência.", ex.getMessage());
                 assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             }
             verifyNoInteractions(cienciaRepo, cienciaWriter);
+        }
+
+        @Test
+        @DisplayName("registrarCiencia — comunicado GERAL cadastrado COM ciência registra normalmente (sem sala)")
+        void registrarCiencia_geralComCiencia() {
+            when(cadastroRepo.findById(CADASTRO_ID))
+                    .thenReturn(Optional.of(cadastro(TipoAviso.GERAL, StatusAviso.ATIVO, true)));
+            when(cienciaRepo.findByCadastroIdAndOperadorId(CADASTRO_ID, OPERADOR_ID)).thenReturn(Optional.empty());
+
+            service.registrarCiencia(CADASTRO_ID, null, OPERADOR_ID, PapelPessoa.OPERADOR);
+
+            verify(cienciaWriter).inserir(argThat(c ->
+                    OPERADOR_ID.equals(c.getOperadorId()) && c.getSalaId() == null && c.getCienteEm() != null));
         }
 
         @Test
@@ -1329,13 +1472,21 @@ class AvisoServiceTest {
     @DisplayName("buscarPendentes(tipos) — contrato do SQL e filtragem por ciência")
     class BuscarPendentes {
 
-        /** Linha do SELECT: ID, MANTER_APOS_CIENCIA (NUMBER(1) → BigDecimal), TIPO, SUBTIPO. */
+        /**
+         * Linha do SELECT: ID, MANTER_APOS_CIENCIA (NUMBER(1) → BigDecimal), TIPO, SUBTIPO,
+         * EXIGE_CIENCIA. Sem a coluna explícita, o cadastro tem a ciência que o tipo dá por padrão.
+         */
         private Object[] row(String id, int manter, TipoAviso tipo) {
             return row(id, manter, tipo, null);
         }
 
         private Object[] row(String id, int manter, TipoAviso tipo, SubtipoAviso subtipo) {
-            return new Object[]{id, BigDecimal.valueOf(manter), tipo.name(), subtipo == null ? null : subtipo.name()};
+            return row(id, manter, tipo, subtipo, tipo.cienciaPadrao() ? 1 : 0);
+        }
+
+        private Object[] row(String id, int manter, TipoAviso tipo, SubtipoAviso subtipo, int exigeCiencia) {
+            return new Object[]{id, BigDecimal.valueOf(manter), tipo.name(),
+                    subtipo == null ? null : subtipo.name(), BigDecimal.valueOf(exigeCiencia)};
         }
 
         private Query stubPendentes(String condAlvoFragmento, List<Object[]> rows) {
@@ -1360,6 +1511,7 @@ class AvisoServiceTest {
                     "c.TIPO IN ('ESCALA','PESSOAL','GERAL')",
                     "(al.ALVO_TIPO = 'OPERADOR' AND al.OPERADOR_ID = ?) OR al.ALVO_TIPO IN ('TODOS_OPERADORES','TODOS')",
                     "c.STATUS = 'Ativo'",
+                    "c.EXIGE_CIENCIA",   // a exigência vem do cadastro, não do tipo
                     "ORDER BY c.CRIADO_EM");
             when(q.getResultList()).thenReturn(List.of());
 
@@ -1463,6 +1615,45 @@ class AvisoServiceTest {
             assertEquals("Primeira", mensagens.get(0).get("texto"));
             assertEquals("Segunda", mensagens.get(1).get("texto"));
 
+            verifyNoInteractions(cienciaRepo);
+        }
+
+        @Test
+        @DisplayName("buscarPendentes — comunicado GERAL cadastrado COM ciência some depois que a pessoa a registra (como Escala/Pessoal)")
+        void buscarPendentes_geralComCienciaSomeAposCiencia() {
+            stubPendentes("al.OPERADOR_ID = ?", List.of(
+                    row("cad-geral-ciente", 0, TipoAviso.GERAL, null, 1),
+                    row("cad-geral-pendente", 0, TipoAviso.GERAL, null, 1)));
+            when(cienciaRepo.findByCadastroIdAndOperadorId("cad-geral-ciente", OPERADOR_ID))
+                    .thenReturn(Optional.of(new AvisoCiencia()));
+            when(cienciaRepo.findByCadastroIdAndOperadorId("cad-geral-pendente", OPERADOR_ID))
+                    .thenReturn(Optional.empty());
+            when(mensagemRepo.findByCadastroIdOrderByOrdem("cad-geral-pendente"))
+                    .thenReturn(List.of(mensagem(1, "Leia e confirme")));
+
+            List<Map<String, Object>> out = service.buscarPendentes(OPERADOR_ID, PapelPessoa.OPERADOR,
+                    List.of(TipoAviso.GERAL));
+
+            assertEquals(1, out.size());
+            assertEquals("cad-geral-pendente", out.get(0).get("cadastro_id"));
+            assertEquals(true, out.get(0).get("exige_ciencia"), "o payload reflete o cadastro, não o tipo");
+        }
+
+        @Test
+        @DisplayName("buscarPendentes — Escala/Pessoal cadastrados SEM ciência seguem sempre retornando e nem consultam a tabela de ciência")
+        void buscarPendentes_escalaEPessoalSemCiencia() {
+            stubPendentes("al.OPERADOR_ID = ?", List.of(
+                    row("cad-escala", 0, TipoAviso.ESCALA, SubtipoAviso.ESCALA, 0),
+                    row("cad-pessoal", 0, TipoAviso.PESSOAL, SubtipoAviso.PESSOAL, 0)));
+            when(mensagemRepo.findByCadastroIdOrderByOrdem("cad-escala")).thenReturn(List.of(mensagem(1, "Escala publicada")));
+            when(mensagemRepo.findByCadastroIdOrderByOrdem("cad-pessoal")).thenReturn(List.of(mensagem(1, "Recado")));
+
+            List<Map<String, Object>> out = service.buscarPendentes(OPERADOR_ID, PapelPessoa.OPERADOR,
+                    List.of(TipoAviso.ESCALA, TipoAviso.PESSOAL));
+
+            assertEquals(2, out.size());
+            assertEquals(false, out.get(0).get("exige_ciencia"));
+            assertEquals(false, out.get(1).get("exige_ciencia"));
             verifyNoInteractions(cienciaRepo);
         }
 

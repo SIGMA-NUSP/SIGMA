@@ -55,7 +55,7 @@ describe('AvisoEscalaFormComponent', () => {
     expect(comp.plenarioOptions().map(o => o.id)).toEqual(['2']);
   });
 
-  it('onSubmit válido: POST tipo ESCALA (escala_id + sala_ids numéricos + manter), reset e emite cadastrado', async () => {
+  it('onSubmit válido: POST tipo ESCALA (escala_id + sala_ids numéricos + ciência + manter), reset e emite cadastrado', async () => {
     await montar();
     let emitido = false;
     comp.cadastrado.subscribe(() => (emitido = true));
@@ -67,11 +67,40 @@ describe('AvisoEscalaFormComponent', () => {
     comp.onSubmit();
 
     expect(apiPost).toHaveBeenCalledWith('/api/admin/avisos', {
-      tipo: 'ESCALA', escala_id: 1, sala_ids: [2, 3], manter_apos_ciencia: true, mensagens: ['Confira sua escala'],
+      tipo: 'ESCALA', escala_id: 1, sala_ids: [2, 3],
+      exige_ciencia: true, manter_apos_ciencia: true, mensagens: ['Confira sua escala'],
     });
     expect(emitido).toBe(true);
     expect(comp.escalaId()).toBeNull();          // reset
+    expect(comp.exigeCiencia).toBe(true);        // o reset devolve o default (marcado)
     expect(apiGet).toHaveBeenCalledTimes(2);   // recarrega escalas (a usada passa a aparecer travada)
+  });
+
+  it('ciência vem marcada por default e o "manter" só existe com ela ligada', async () => {
+    await montar();
+    expect(comp.exigeCiencia).toBe(true);
+    expect(fixture.nativeElement.querySelector('input[name="ciencia"]')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('input[name="manter"]')).not.toBeNull();
+
+    comp.manterAposCiencia = true;
+    comp.onCienciaChange(false);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('input[name="manter"]')).toBeNull();
+    expect(comp.manterAposCiencia).toBe(false);   // desligar a ciência zera o manter escondido
+  });
+
+  it('sem ciência: o POST leva exige_ciencia=false e manter_apos_ciencia=false', async () => {
+    await montar();
+    comp.escalaId.set(1);
+    comp.selectedPlenarios = ['2'];
+    comp.mensagens = ['Só informativo'];
+    comp.manterAposCiencia = true;
+    comp.onCienciaChange(false);
+
+    comp.onSubmit();
+
+    expect(apiPost.mock.calls[0][1]).toMatchObject({ exige_ciencia: false, manter_apos_ciencia: false });
   });
 
   it('validações: sem escala, sem plenário e mensagem em branco não emitem POST', async () => {

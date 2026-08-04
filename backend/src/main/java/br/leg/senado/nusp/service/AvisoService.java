@@ -75,7 +75,11 @@ public class AvisoService {
      */
     private static final String MODO_PESSOAS = "PESSOAS";
 
-    /** Payload de criação (montado pelo controller a partir do JSON snake_case). */
+    /**
+     * Payload de criação (montado pelo controller a partir do JSON snake_case). {@code exigeCiencia}
+     * nulo = o form não ofereceu a escolha (tipo sem controle ou payload antigo) → vale o padrão do
+     * tipo.
+     */
     public record CriarAvisoRequest(
             String tipo,
             Boolean permanente,
@@ -87,7 +91,8 @@ public class AvisoService {
             List<String> operadorIds,
             List<String> tecnicoIds,
             List<String> adminIds,
-            Long escalaId) {}
+            Long escalaId,
+            Boolean exigeCiencia) {}
 
     // ═══ Cadastro (admin) ═══════════════════════════════════════
 
@@ -103,8 +108,9 @@ public class AvisoService {
         // Card "Pessoal" — modo "Pessoas específicas": listas MISTAS (op/téc/adm) num só cadastro PESSOAL (§7.2).
         if (MODO_PESSOAS.equalsIgnoreCase(req.alvoTipo())) return criarPessoas(req, mensagens, criadoPorId);
 
-        // ── Vigência (permanente/duração/expira + manter) ──
-        Vigencia vig = resolverVigencia(req);
+        // ── Ciência e vigência (permanente/duração/expira + manter) ──
+        boolean exigeCiencia = resolverExigeCiencia(tipo, req.exigeCiencia());
+        Vigencia vig = resolverVigencia(req, exigeCiencia);
 
         // ── Público (alvo) ──
         AlvoTipoAviso alvoTipo = parseAlvoTipo(req.alvoTipo());
@@ -129,6 +135,7 @@ public class AvisoService {
         cad.setPermanente(vig.permanente());
         cad.setDuracaoDias(vig.duracaoDias());
         cad.setManterAposCiencia(vig.manter());
+        cad.setExigeCiencia(exigeCiencia);
         cad.setStatus(StatusAviso.ATIVO);
         cad.setCriadoPorId(criadoPorId);
         cad.setExpiraEm(vig.expiraEm());
@@ -161,7 +168,8 @@ public class AvisoService {
         cad.setSubtipo(SubtipoAviso.AGENDA);
         cad.setPermanente(true);          // vigência por usuário (visto); sem duração/expira
         cad.setDuracaoDias(null);
-        cad.setManterAposCiencia(false);  // AGENDA não tem ciência
+        cad.setExigeCiencia(false);       // AGENDA nunca exige ciência — o form nem oferece a escolha
+        cad.setManterAposCiencia(false);  // sem ciência, não há o que manter
         cad.setStatus(StatusAviso.ATIVO);
         cad.setCriadoPorId(criadoPorId);
         cad.setExpiraEm(null);
@@ -180,11 +188,13 @@ public class AvisoService {
      * Card "Pessoal", modo "Pessoas específicas" (§7.2): um único cadastro PESSOAL com destinatários
      * MISTOS — operadores, técnicos e/ou administradores selecionados por nome. É o espelho, via form,
      * do que {@link #criarPessoalIndividual} grava internamente na publicação de folha; a diferença é
-     * que aqui cada pessoa é revalidada (o form pode enviar id inválido). Com ciência, permanente ou
-     * com duração, "manter após ciência" opcional. NÃO persiste o seletor "PESSOAS" (não é alvoTipo).
+     * que aqui cada pessoa é revalidada (o form pode enviar id inválido). Ciência escolhida no form
+     * (default ligada), permanente ou com duração, "manter após ciência" opcional. NÃO persiste o
+     * seletor "PESSOAS" (não é alvoTipo).
      */
     private Map<String, Object> criarPessoas(CriarAvisoRequest req, List<String> mensagens, String criadoPorId) {
-        Vigencia vig = resolverVigencia(req);
+        boolean exigeCiencia = resolverExigeCiencia(TipoAviso.PESSOAL, req.exigeCiencia());
+        Vigencia vig = resolverVigencia(req, exigeCiencia);
 
         List<String> operadorIds = distinctStr(req.operadorIds());
         List<String> tecnicoIds = distinctStr(req.tecnicoIds());
@@ -210,6 +220,7 @@ public class AvisoService {
         cad.setPermanente(vig.permanente());
         cad.setDuracaoDias(vig.duracaoDias());
         cad.setManterAposCiencia(vig.manter());
+        cad.setExigeCiencia(exigeCiencia);
         cad.setStatus(StatusAviso.ATIVO);
         cad.setCriadoPorId(criadoPorId);
         cad.setExpiraEm(vig.expiraEm());
@@ -281,7 +292,8 @@ public class AvisoService {
             throw new ServiceValidationException("Esta escala já possui um aviso (cadastro nº " + ocupadaPor
                     + "). Desative-o antes de cadastrar outro.");
 
-        boolean manter = req.manterAposCiencia() != null && req.manterAposCiencia();
+        boolean exigeCiencia = resolverExigeCiencia(TipoAviso.ESCALA, req.exigeCiencia());
+        boolean manter = resolverManter(req.manterAposCiencia(), exigeCiencia);
 
         AvisoCadastro cad = new AvisoCadastro();
         cad.setNumero(proximoNumeroCadastro());
@@ -291,6 +303,7 @@ public class AvisoService {
         cad.setPermanente(true);          // vigência = período da escala; sem duração/expira
         cad.setDuracaoDias(null);
         cad.setManterAposCiencia(manter);
+        cad.setExigeCiencia(exigeCiencia);
         cad.setStatus(StatusAviso.ATIVO);
         cad.setCriadoPorId(criadoPorId);
         cad.setExpiraEm(null);
@@ -443,6 +456,7 @@ public class AvisoService {
         cad.setNumero(proximoNumeroCadastro());
         cad.setTipo(TipoAviso.PESSOAL);
         cad.setPermanente(true);          // sem prazo
+        cad.setExigeCiencia(true);        // o destinatário precisa confirmar que leu
         cad.setManterAposCiencia(false);  // some quando a pessoa marca ciência
         cad.setStatus(StatusAviso.ATIVO);
         cad.setCriadoPorId(criadoPorId);
@@ -588,10 +602,11 @@ public class AvisoService {
         ResolvedorNomes nomes = new ResolvedorNomes();
         List<AvisoAlvo> alvos = alvoRepo.findByCadastroId(id);
         m.put("alvos", alvos.stream().map(a -> alvoToMap(a, nomes)).toList());
-        // Carrega as ciências/vistos 1× (tipos com ciência OU AGENDA) — reusadas por cientes/destinatarios/exibido.
-        boolean temRegistro = cad.getTipo() != null && (cad.getTipo().exigeCiencia() || cad.getTipo() == TipoAviso.AGENDA);
+        // Carrega as ciências/vistos 1× (cadastro com ciência OU AGENDA) — reusadas por cientes/destinatarios/exibido.
+        boolean exigeCiencia = Boolean.TRUE.equals(cad.getExigeCiencia());
+        boolean temRegistro = exigeCiencia || cad.getTipo() == TipoAviso.AGENDA;
         List<AvisoCiencia> ciencias = temRegistro ? cienciaRepo.findByCadastroIdOrderByCienteEm(id) : List.of();
-        m.put("cientes", cad.getTipo() != null && cad.getTipo().exigeCiencia()
+        m.put("cientes", exigeCiencia
                 ? ciencias.stream().map(c -> cienciaToMap(c, nomes)).toList()
                 : List.of());
         // Escala do aviso carregada 1× — alimenta o bloco 'escala', o status/expira calculados e os destinatários.
@@ -768,7 +783,7 @@ public class AvisoService {
     public Optional<Map<String, Object>> buscarPendenteVerificacao(Integer salaId, String pessoaId, PapelPessoa papel) {
         @SuppressWarnings("unchecked")
         List<Object[]> rows = entityManager.createNativeQuery("""
-                SELECT c.ID, c.MANTER_APOS_CIENCIA
+                SELECT c.ID, c.MANTER_APOS_CIENCIA, c.EXIGE_CIENCIA
                   FROM FRM_AVISO_CADASTRO c
                   JOIN FRM_AVISO_ALVO al ON al.CADASTRO_ID = c.ID
                  WHERE c.TIPO = 'VERIFICACAO'
@@ -782,9 +797,10 @@ public class AvisoService {
         for (Object[] r : rows) {
             String cadastroId = (String) r[0];
             boolean manter = ((Number) r[1]).intValue() == 1;
+            boolean exigeCiencia = ((Number) r[2]).intValue() == 1;
             boolean jaCiente = temCiencia(cadastroId, salaId, pessoaId, papel);
             if (!manter && jaCiente) continue; // já marcou NESTA sala e não é pra manter → pula
-            return Optional.of(montarPayloadPendente(cadastroId, manter, TipoAviso.VERIFICACAO, null));
+            return Optional.of(montarPayloadPendente(cadastroId, manter, TipoAviso.VERIFICACAO, null, exigeCiencia));
         }
         return Optional.empty();
     }
@@ -806,9 +822,9 @@ public class AvisoService {
      * Avisos pendentes (sem sala) para a pessoa logada, dentre os TIPOS pedidos
      * (ex.: ESCALA/PESSOAL/GERAL em qualquer página; AGENDA nas telas de agenda).
      * Considera os alvos individuais do papel e os coletivos correspondentes.
-     * Tipos que exigem ciência saem da lista quando a pessoa já deu ciência (e
-     * não é "manter após ciência"); tipos sem ciência (GERAL/AGENDA) são sempre
-     * retornados — o front os dispensa por sessão. Do mais antigo ao mais novo.
+     * Cadastros que exigem ciência saem da lista quando a pessoa já deu ciência
+     * (e não é "manter após ciência"); os que não exigem são sempre retornados —
+     * o front os dispensa por sessão. Do mais antigo ao mais novo.
      */
     @Transactional
     public List<Map<String, Object>> buscarPendentes(String pessoaId, PapelPessoa papel, List<TipoAviso> tipos) {
@@ -835,7 +851,7 @@ public class AvisoService {
                 : "";
 
         Query q = entityManager.createNativeQuery(
-                "SELECT c.ID, c.MANTER_APOS_CIENCIA, c.TIPO, c.SUBTIPO " +
+                "SELECT c.ID, c.MANTER_APOS_CIENCIA, c.TIPO, c.SUBTIPO, c.EXIGE_CIENCIA " +
                 "  FROM FRM_AVISO_CADASTRO c " +
                 " WHERE c.TIPO IN (" + inTipos + ") " +
                 "   AND c.STATUS = 'Ativo' " +
@@ -853,12 +869,14 @@ public class AvisoService {
             boolean manter = ((Number) r[1]).intValue() == 1;
             TipoAviso tipo = TipoAviso.fromString((String) r[2]);
             SubtipoAviso subtipo = SubtipoAviso.fromString((String) r[3]);
-            // Tipos com ciência: se já ciente e não é "manter", já não está pendente.
-            if (tipo.exigeCiencia() && !manter && temCiencia(cadastroId, null, pessoaId, papel)) continue;
-            // AGENDA: some depois que a pessoa a VÊ (visto persistente por usuário, §6.2 — reusa a
-            // tabela de ciência). GERAL segue sempre retornando (dispensa por sessão no front, decisão 19).
+            boolean exigeCiencia = ((Number) r[4]).intValue() == 1;
+            // Com ciência: se já ciente e não é "manter", já não está pendente.
+            if (exigeCiencia && !manter && temCiencia(cadastroId, null, pessoaId, papel)) continue;
+            // AGENDA: some depois que a pessoa a VÊ (visto persistente por usuário — reusa a tabela
+            // de ciência). Sem ciência e sem visto, o aviso segue sempre retornando: quem o dispensa
+            // por sessão é o front.
             if (tipo == TipoAviso.AGENDA && temCiencia(cadastroId, null, pessoaId, papel)) continue;
-            out.add(montarPayloadPendente(cadastroId, manter, tipo, subtipo));
+            out.add(montarPayloadPendente(cadastroId, manter, tipo, subtipo, exigeCiencia));
         }
         return out;
     }
@@ -872,10 +890,10 @@ public class AvisoService {
     public void registrarCiencia(String cadastroId, Integer salaId, String pessoaId, PapelPessoa papel) {
         AvisoCadastro cad = cadastroRepo.findById(cadastroId).orElseThrow(() ->
                 new ServiceValidationException("Comunicação não encontrada.", HttpStatus.NOT_FOUND));
-        if (cad.getTipo() == null || !cad.getTipo().exigeCiencia())
-            throw new ServiceValidationException("Este tipo de aviso não registra ciência.");
+        if (!Boolean.TRUE.equals(cad.getExigeCiencia()))
+            throw new ServiceValidationException("Esta comunicação não registra ciência.");
         // Sala obrigatória só para tipos amarrados a sala (VERIFICACAO); PESSOAL não tem sala.
-        if (cad.getTipo().exigeSala() && salaId == null)
+        if (cad.getTipo() != null && cad.getTipo().exigeSala() && salaId == null)
             throw new ServiceValidationException("Sala é obrigatória para registrar ciência.");
         // Aviso não mais ativo (expirou/desativou entre a exibição e o clique):
         // nada a registrar, mas não bloqueia o destinatário.
@@ -966,14 +984,28 @@ public class AvisoService {
      * fluxo padrão (Verificação/Grupo) e ao modo "Pessoas específicas" do card Pessoal. Default é
      * permanente; não-permanente exige duração 1..{@value #MAX_DURACAO_DIAS} e calcula EXPIRA_EM = agora + dias.
      */
-    private Vigencia resolverVigencia(CriarAvisoRequest req) {
+    private Vigencia resolverVigencia(CriarAvisoRequest req, boolean exigeCiencia) {
         boolean permanente = req.permanente() == null || req.permanente(); // default true
         Integer duracao = permanente ? null : req.duracaoDias();
         if (!permanente && (duracao == null || duracao < 1 || duracao > MAX_DURACAO_DIAS))
             throw new ServiceValidationException("A duração deve estar entre 1 e " + MAX_DURACAO_DIAS + " dias.");
-        boolean manter = req.manterAposCiencia() != null && req.manterAposCiencia();
         LocalDateTime expiraEm = permanente ? null : LocalDateTime.now().plusDays(duracao);
-        return new Vigencia(permanente, duracao, expiraEm, manter);
+        return new Vigencia(permanente, duracao, expiraEm, resolverManter(req.manterAposCiencia(), exigeCiencia));
+    }
+
+    /**
+     * Exigência de ciência do cadastro: nos tipos configuráveis vale a escolha do form (ausente → o
+     * padrão do tipo); em Verificação e Agenda o valor é IMPOSTO — o form não exibe o controle e um
+     * payload que insista no contrário é ignorado, não recusado.
+     */
+    private boolean resolverExigeCiencia(TipoAviso tipo, Boolean escolha) {
+        if (!tipo.cienciaConfiguravel()) return tipo.cienciaPadrao();
+        return escolha != null ? escolha : tipo.cienciaPadrao();
+    }
+
+    /** "Manter após ciência" só existe com ciência ligada: sem ela não há ciência para o aviso sobreviver. */
+    private boolean resolverManter(Boolean escolha, boolean exigeCiencia) {
+        return exigeCiencia && Boolean.TRUE.equals(escolha);
     }
 
     /**
@@ -1200,14 +1232,14 @@ public class AvisoService {
      * Verificação e o legado PESSOAL não têm subtipo.
      */
     private Map<String, Object> montarPayloadPendente(String cadastroId, boolean manter, TipoAviso tipo,
-                                                      SubtipoAviso subtipo) {
+                                                      SubtipoAviso subtipo, boolean exigeCiencia) {
         RotuloAviso rotulo = RotuloAviso.de(tipo, subtipo);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("cadastro_id", cadastroId);
         m.put("tipo", tipo.name());
         m.put("categoria", rotulo.categoria().name());
         m.put("titulo", rotulo.contextoPopup());
-        m.put("exige_ciencia", tipo.exigeCiencia());
+        m.put("exige_ciencia", exigeCiencia);
         m.put("manter_apos_ciencia", manter);
         m.put("mensagens", mensagemRepo.findByCadastroIdOrderByOrdem(cadastroId).stream()
                 .map(this::mensagemToMap).toList());
@@ -1316,6 +1348,7 @@ public class AvisoService {
         m.put("tipo_label", c.getTipo() != null ? c.getTipo().getLabel() : null);
         m.put("permanente", Boolean.TRUE.equals(c.getPermanente()));
         m.put("duracao_dias", c.getDuracaoDias());
+        m.put("exige_ciencia", Boolean.TRUE.equals(c.getExigeCiencia()));
         m.put("manter_apos_ciencia", Boolean.TRUE.equals(c.getManterAposCiencia()));
         m.put("status", c.getStatus() != null ? c.getStatus().getValor() : null);
         m.put("criado_em", c.getCriadoEm() != null ? c.getCriadoEm().toString() : null);

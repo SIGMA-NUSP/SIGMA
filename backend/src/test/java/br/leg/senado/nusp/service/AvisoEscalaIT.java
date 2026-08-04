@@ -123,8 +123,14 @@ class AvisoEscalaIT {
 
     /** Cria o aviso de escala pela via real (service.criar) e devolve o id do cadastro. */
     private String criarAvisoEscala(Long escalaId, List<Integer> salaIds, boolean manter, String... mensagens) {
+        return criarAvisoEscala(escalaId, salaIds, manter, null, mensagens);
+    }
+
+    /** Idem, com a escolha de ciência do form; {@code exigeCiencia} nulo = default do tipo (ligada). */
+    private String criarAvisoEscala(Long escalaId, List<Integer> salaIds, boolean manter,
+                                    Boolean exigeCiencia, String... mensagens) {
         var req = new AvisoService.CriarAvisoRequest("ESCALA", null, null, manter,
-                List.of(mensagens), null, salaIds, List.of(), List.of(), List.of(), escalaId);
+                List.of(mensagens), null, salaIds, List.of(), List.of(), List.of(), escalaId, exigeCiencia);
         return (String) service.criar(req, admin.getId()).get("id");
     }
 
@@ -152,7 +158,7 @@ class AvisoEscalaIT {
         @DisplayName("escalaId nulo é rejeitado")
         void semEscalaId() {
             var req = new AvisoService.CriarAvisoRequest("ESCALA", null, null, false,
-                    List.of("Confira sua escala"), null, List.of(1), List.of(), List.of(), List.of(), null);
+                    List.of("Confira sua escala"), null, List.of(1), List.of(), List.of(), List.of(), null, null);
             var ex = assertThrows(ServiceValidationException.class, () -> service.criar(req, admin.getId()));
             assertEquals("Selecione a escala do aviso.", ex.getMessage());
         }
@@ -161,7 +167,7 @@ class AvisoEscalaIT {
         @DisplayName("escala inexistente responde 404")
         void escalaInexistente() {
             var req = new AvisoService.CriarAvisoRequest("ESCALA", null, null, false,
-                    List.of("x"), null, List.of(1), List.of(), List.of(), List.of(), 999999L);
+                    List.of("x"), null, List.of(1), List.of(), List.of(), List.of(), 999999L, null);
             var ex = assertThrows(ServiceValidationException.class, () -> service.criar(req, admin.getId()));
             assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
         }
@@ -176,7 +182,7 @@ class AvisoEscalaIT {
             vincular(esc.getId(), pleno.getId(), op.getId(), "M");
 
             var req = new AvisoService.CriarAvisoRequest("ESCALA", null, null, false,
-                    List.of("x"), null, List.of(outro.getId()), List.of(), List.of(), List.of(), esc.getId());
+                    List.of("x"), null, List.of(outro.getId()), List.of(), List.of(), List.of(), esc.getId(), null);
             var ex = assertThrows(ServiceValidationException.class, () -> service.criar(req, admin.getId()));
             assertTrue(ex.getMessage().contains("fora da escala"), ex.getMessage());
         }
@@ -186,7 +192,7 @@ class AvisoEscalaIT {
         void escalaSemPlenarios() {
             EscalaSemanal esc = novaEscala(HOJE, HOJE.plusDays(4));
             var req = new AvisoService.CriarAvisoRequest("ESCALA", null, null, false,
-                    List.of("x"), null, List.of(1), List.of(), List.of(), List.of(), esc.getId());
+                    List.of("x"), null, List.of(1), List.of(), List.of(), List.of(), esc.getId(), null);
             var ex = assertThrows(ServiceValidationException.class, () -> service.criar(req, admin.getId()));
             assertTrue(ex.getMessage().contains("nenhum plenário"), ex.getMessage());
         }
@@ -209,6 +215,7 @@ class AvisoEscalaIT {
             assertNull(cad.getExpiraEm());
             assertNull(cad.getDuracaoDias());
             assertTrue(cad.getManterAposCiencia());
+            assertTrue(cad.getExigeCiencia(), "sem escolha no payload, o aviso de escala nasce pedindo ciência");
             assertEquals(StatusAviso.ATIVO, cad.getStatus());
 
             var alvos = alvoRepo.findByCadastroId(id);
@@ -227,7 +234,7 @@ class AvisoEscalaIT {
             criarAvisoEscala(esc.getId(), List.of(pleno.getId()), false, "Primeiro");
 
             var req = new AvisoService.CriarAvisoRequest("ESCALA", null, null, false,
-                    List.of("Segundo"), null, List.of(pleno.getId()), List.of(), List.of(), List.of(), esc.getId());
+                    List.of("Segundo"), null, List.of(pleno.getId()), List.of(), List.of(), List.of(), esc.getId(), null);
             var ex = assertThrows(ServiceValidationException.class, () -> service.criar(req, admin.getId()));
             assertTrue(ex.getMessage().contains("já possui um aviso"), ex.getMessage());
         }
@@ -351,6 +358,28 @@ class AvisoEscalaIT {
             String comManter = criarAvisoEscala(esc2.getId(), List.of(pleno2.getId()), true, "Com manter");
             darCiencia(comManter, op.getId());
             assertTrue(vePendente(op.getId(), comManter), "com manter: reaparece mesmo após a ciência");
+        }
+
+        @Test
+        @DisplayName("escala cadastrada SEM ciência: o aviso continua aparecendo mesmo com registro na tabela, e 'manter' é zerado")
+        void escalaSemCiencia() {
+            Sala pleno = CenarioFactory.novaSala(emReal(), "Plenario02");
+            Operador op = CenarioFactory.novoOperador(emReal());
+            EscalaSemanal esc = novaEscala(HOJE.minusDays(1), HOJE.plusDays(1));
+            vincular(esc.getId(), pleno.getId(), op.getId(), "M");
+
+            String id = criarAvisoEscala(esc.getId(), List.of(pleno.getId()), true, Boolean.FALSE, "Só informativo");
+
+            var cad = cadastroRepo.findById(id).orElseThrow();
+            assertFalse(cad.getExigeCiencia());
+            assertFalse(cad.getManterAposCiencia(), "sem ciência, 'manter' é zerado mesmo pedido no payload");
+            assertTrue(vePendente(op.getId(), id));
+
+            darCiencia(id, op.getId());
+            assertTrue(vePendente(op.getId(), id),
+                    "sem ciência exigida, o registro na tabela não tira o aviso da lista");
+            assertTrue(((List<?>) service.obterDetalhe(id).get("cientes")).isEmpty(),
+                    "sem ciência exigida, ninguém é 'ciente'");
         }
     }
 

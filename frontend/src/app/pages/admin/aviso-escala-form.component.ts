@@ -19,7 +19,8 @@ interface EscalaDisponivel {
 /**
  * Painel "Escala" do cadastro de avisos: escolhe uma escala (atual/futura) e os plenários dela; as
  * mensagens valem para os operadores escalados nesses plenários. Sem permanente/duração — a vigência
- * é o período da escala. Escala já com aviso não-desativado aparece travada ("— Cadastro nº X"). A
+ * é o período da escala. A ciência do destinatário é opcional (vem marcada) e comanda a existência do
+ * "manter após ciência". Escala já com aviso não-desativado aparece travada ("— Cadastro nº X"). A
  * carga das escalas é FAIL-CLOSED: se falhar, o cadastro fica bloqueado (não dá para saber quais
  * escalas estão ocupadas). Emite {@link cadastrado} no sucesso.
  */
@@ -63,10 +64,19 @@ interface EscalaDisponivel {
 
       <div class="form-row">
         <label class="check-opt">
-          <input type="checkbox" [(ngModel)]="manterAposCiencia" name="manter">
-          Manter aviso após ciência do operador
+          <input type="checkbox" [ngModel]="exigeCiencia" (ngModelChange)="onCienciaChange($event)" name="ciencia">
+          Exigir ciência do destinatário
         </label>
       </div>
+
+      @if (exigeCiencia) {
+        <div class="form-row">
+          <label class="check-opt check-sub">
+            <input type="checkbox" [(ngModel)]="manterAposCiencia" name="manter">
+            Manter aviso após ciência do operador
+          </label>
+        </div>
+      }
 
       @if (errorMsg()) { <div class="error-box">{{ errorMsg() }}</div> }
 
@@ -84,6 +94,8 @@ interface EscalaDisponivel {
     .req { color:#dc2626; }
     .check-opt { display:flex; align-items:center; gap:8px; font-weight:500; cursor:pointer; }
     .check-opt input { width:auto; }
+    /* Subordinado à ciência: só existe quando ela está ligada. */
+    .check-sub { margin-left:26px; }
   `],
 })
 export class AvisoEscalaFormComponent implements OnInit {
@@ -99,6 +111,8 @@ export class AvisoEscalaFormComponent implements OnInit {
   escalaId = signal<number | null>(null);
   selectedPlenarios: string[] = [];
   mensagens: string[] = [''];
+  /** Aviso de escala nasce pedindo ciência (o operador confirma que viu a folha). */
+  exigeCiencia = true;
   manterAposCiencia = false;
   saving = signal(false);
   errorMsg = signal('');
@@ -139,6 +153,12 @@ export class AvisoEscalaFormComponent implements OnInit {
     this.selectedPlenarios = [];
   }
 
+  /** Sem ciência não há o que manter: desligar a ciência zera o "manter" junto com o campo escondido. */
+  onCienciaChange(exige: boolean): void {
+    this.exigeCiencia = exige;
+    if (!exige) this.manterAposCiencia = false;
+  }
+
   onSubmit(): void {
     if (this.escalasIndisponiveis()) return;   // defesa dupla além do [disabled]
     this.errorMsg.set('');
@@ -152,6 +172,7 @@ export class AvisoEscalaFormComponent implements OnInit {
       tipo: 'ESCALA',
       escala_id: this.escalaId(),
       sala_ids: this.selectedPlenarios.map(Number),
+      exige_ciencia: this.exigeCiencia,
       manter_apos_ciencia: this.manterAposCiencia,
       mensagens: msgs,
     }).subscribe({
@@ -177,6 +198,7 @@ export class AvisoEscalaFormComponent implements OnInit {
     this.escalaId.set(null);
     this.selectedPlenarios = [];
     this.mensagens = [''];
+    this.exigeCiencia = true;
     this.manterAposCiencia = false;
   }
 }

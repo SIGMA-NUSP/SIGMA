@@ -91,3 +91,5 @@ databaseChangeLog:
       file: db/changelog/045-aviso-escala-subtipo.yaml
   - include:
       file: db/changelog/046-ponto-tipo-marcacao.yaml
+  - include:
+      file: db/changelog/047-aviso-exige-ciencia.yaml

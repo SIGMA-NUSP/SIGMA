@@ -30,15 +30,16 @@ const POLL_MS = 60_000;
  * aparece para qualquer papel logado em QUALQUER página. Reconsulta os pendentes
  * a cada navegação e periodicamente (mesmo parado). A CATEGORIA que o backend envia
  * comanda o título ("Comunicado — Agenda Legislativa"), o selo e as cores da caixa;
- * um aviso sem contexto sai só com o nome da categoria. Por aviso:
- *  - exige_ciencia (ESCALA/PESSOAL): botão "Estou ciente" → grava no banco e some;
- *    com "manter após ciência", o servidor continua devolvendo o aviso — a exibição
- *    é segurada por sessão de LOGIN (sessionStorage, sobrevive a F5; o AuthService
- *    limpa a chave no login) → o aviso confirmado só volta no próximo login;
- *  - sem ciência (GERAL/AGENDA): botão "Fechar" → dispensa só nesta sessão. AGENDA,
- *    além disso, registra o "visto" no servidor NA EXIBIÇÃO (1× por aviso, fire-and-
- *    forget) — o backend passa a filtrá-lo para o usuário em qualquer sessão (§6.2);
- *    GERAL segue só com a dispensa em memória e volta no próximo login (decisão 19).
+ * um aviso sem contexto sai só com o nome da categoria. Quem manda no botão é o
+ * {@code exige_ciencia} do PAYLOAD — escolha do cadastro, não do tipo. Por aviso:
+ *  - com ciência: botão "Estou ciente" → grava no banco e some; com "manter após
+ *    ciência", o servidor continua devolvendo o aviso — a exibição é segurada por
+ *    sessão de LOGIN (sessionStorage, sobrevive a F5; o AuthService limpa a chave no
+ *    login) → o aviso confirmado só volta no próximo login;
+ *  - sem ciência: botão "Fechar" → dispensa só nesta sessão. AGENDA, além disso,
+ *    registra o "visto" no servidor NA EXIBIÇÃO (1× por aviso, fire-and-forget) — o
+ *    backend passa a filtrá-lo para o usuário em qualquer sessão; os demais sem
+ *    ciência ficam só com a dispensa em memória e voltam no próximo login.
  * AGENDA só é consultado nas rotas de Agenda Legislativa.
  */
 @Component({
@@ -96,12 +97,12 @@ export class AvisoPopupComponent implements OnInit, OnDestroy {
   enviando = signal(false);
 
   private subs = new Subscription();
-  /** Avisos sem ciência (GERAL/AGENDA) dispensados nesta sessão (memória; reaparecem no próximo login). */
+  /** Avisos sem ciência dispensados nesta sessão (memória; reaparecem no próximo login). */
   private dispensados = new Set<string>();
   /** Avisos de AGENDA cujo "visto" já foi disparado nesta sessão (evita repetir o POST no polling/navegação). */
   private vistoDisparado = new Set<string>();
   /**
-   * Avisos "manter após ciência" (ESCALA/PESSOAL) confirmados nesta sessão de LOGIN. O servidor
+   * Avisos "manter após ciência" confirmados nesta sessão de LOGIN. O servidor
    * continua devolvendo-os (é o que os faz voltar a cada login); sem esta memória, o popup
    * reabriria a CADA navegação/polling. Persistido em sessionStorage: F5 não reexibe; o
    * AuthService limpa a chave no login → volta a exibir 1× por sessão.
@@ -164,7 +165,7 @@ export class AvisoPopupComponent implements OnInit, OnDestroy {
   }
 
   fechar(a: AvisoPendente): void {
-    // GERAL/AGENDA: dispensa só nesta sessão (reaparece no próximo login).
+    // Sem ciência a registrar: dispensa só nesta sessão (reaparece no próximo login).
     this.dispensados.add(a.cadastro_id);
     this.remover(a.cadastro_id);
   }

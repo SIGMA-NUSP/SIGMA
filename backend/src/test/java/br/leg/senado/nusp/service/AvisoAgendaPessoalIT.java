@@ -92,20 +92,30 @@ class AvisoAgendaPessoalIT {
 
     private String criarAgenda(String... mensagens) {
         var req = new AvisoService.CriarAvisoRequest("AGENDA", null, null, null,
-                List.of(mensagens), null, null, null, null, null, null);
+                List.of(mensagens), null, null, null, null, null, null, null);
         return (String) service.criar(req, admin.getId()).get("id");
     }
 
     private String criarGrupo(String alvoTipo, String... mensagens) {
+        return criarGrupo(alvoTipo, null, mensagens);
+    }
+
+    /** Grupo (GERAL) com a escolha de ciência do form; {@code exigeCiencia} nulo = default do tipo. */
+    private String criarGrupo(String alvoTipo, Boolean exigeCiencia, String... mensagens) {
         var req = new AvisoService.CriarAvisoRequest("GERAL", null, null, null,
-                List.of(mensagens), alvoTipo, null, null, null, null, null);
+                List.of(mensagens), alvoTipo, null, null, null, null, null, exigeCiencia);
         return (String) service.criar(req, admin.getId()).get("id");
     }
 
     private String criarPessoas(List<String> operadorIds, List<String> tecnicoIds, List<String> adminIds,
                                 boolean manter, String... mensagens) {
+        return criarPessoas(operadorIds, tecnicoIds, adminIds, manter, null, mensagens);
+    }
+
+    private String criarPessoas(List<String> operadorIds, List<String> tecnicoIds, List<String> adminIds,
+                                boolean manter, Boolean exigeCiencia, String... mensagens) {
         var req = new AvisoService.CriarAvisoRequest("PESSOAL", null, null, manter,
-                List.of(mensagens), "PESSOAS", null, operadorIds, tecnicoIds, adminIds, null);
+                List.of(mensagens), "PESSOAS", null, operadorIds, tecnicoIds, adminIds, null, exigeCiencia);
         return (String) service.criar(req, admin.getId()).get("id");
     }
 
@@ -149,6 +159,7 @@ class AvisoAgendaPessoalIT {
             assertEquals(TipoAviso.AGENDA, cad.getTipo());
             assertEquals(SubtipoAviso.AGENDA, cad.getSubtipo());
             assertTrue(cad.getPermanente());
+            assertFalse(cad.getExigeCiencia(), "o registro da agenda é visto, não ciência");
             assertNull(cad.getExpiraEm());
             assertNull(cad.getDuracaoDias());
 
@@ -295,6 +306,26 @@ class AvisoAgendaPessoalIT {
         }
 
         @Test
+        @DisplayName("grupo cadastrado COM ciência: some da lista depois da ciência (como Escala/Pessoal) e o detalhe passa a listar quem deu")
+        void grupoComCiencia() {
+            Operador op = CenarioFactory.novoOperador(emReal());
+            String id = criarGrupo("TODOS_OPERADORES", true, "Leia e confirme");
+            assertTrue(cadastroRepo.findById(id).orElseThrow().getExigeCiencia());
+            assertTrue(vePendente(op.getId(), PapelPessoa.OPERADOR, TipoAviso.GERAL, id));
+
+            darCiencia(id, PapelPessoa.OPERADOR, op.getId());
+            assertFalse(vePendente(op.getId(), PapelPessoa.OPERADOR, TipoAviso.GERAL, id),
+                    "com ciência exigida, o comunicado some depois de registrada");
+
+            Map<String, Object> det = service.obterDetalhe(id);
+            assertEquals(true, det.get("exige_ciencia"));
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> cientes = (List<Map<String, Object>>) det.get("cientes");
+            assertEquals(1, cientes.size());
+            assertEquals("Operador", cientes.get(0).get("papel"));
+        }
+
+        @Test
         @DisplayName("detalhe: GERAL não tem tabela — sem 'destinatarios' e 'cientes' vazio; subtipo/tipo_tabela do grupo")
         void detalheGrupoSemTabela() {
             String id = criarGrupo("TODOS_OPERADORES", "Comunicado geral");
@@ -378,6 +409,30 @@ class AvisoAgendaPessoalIT {
             assertNotNull(lOp.get("ciente_em"), "o operador deu ciência");
             assertNull(lTec.get("ciente_em"), "o técnico ainda está pendente");
             assertFalse(dest.stream().anyMatch(d -> d.containsKey("plenarios")), "PESSOAL não tem plenários");
+        }
+
+        @Test
+        @DisplayName("cadastro SEM ciência: continua aparecendo mesmo com registro na tabela, o detalhe não lista cientes e os destinatários seguem visíveis")
+        void pessoasSemCiencia() {
+            Operador op = CenarioFactory.novoOperador(emReal());
+            String id = criarPessoas(List.of(op.getId()), List.of(), List.of(), true, Boolean.FALSE,
+                    "Recado sem confirmação");
+            var cad = cadastroRepo.findById(id).orElseThrow();
+            assertFalse(cad.getExigeCiencia());
+            assertFalse(cad.getManterAposCiencia(), "sem ciência, 'manter' é zerado mesmo pedido no payload");
+            assertTrue(vePendente(op.getId(), PapelPessoa.OPERADOR, TipoAviso.PESSOAL, id));
+
+            darCiencia(id, PapelPessoa.OPERADOR, op.getId());
+            assertTrue(vePendente(op.getId(), PapelPessoa.OPERADOR, TipoAviso.PESSOAL, id),
+                    "sem ciência exigida, o registro na tabela não tira o aviso da lista");
+
+            Map<String, Object> det = service.obterDetalhe(id);
+            assertEquals(false, det.get("exige_ciencia"));
+            assertTrue(((List<?>) det.get("cientes")).isEmpty(), "sem ciência exigida, ninguém é 'ciente'");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> dest = (List<Map<String, Object>>) det.get("destinatarios");
+            assertEquals(1, dest.size(), "os destinatários continuam listados");
+            assertEquals(op.getNomeCompleto(), dest.get(0).get("nome"));
         }
 
         @Test

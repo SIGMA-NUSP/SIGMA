@@ -2,6 +2,7 @@ package br.leg.senado.nusp.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.LocalDateTime;
@@ -21,7 +22,9 @@ import br.leg.senado.nusp.entity.AvisoCiencia;
 import br.leg.senado.nusp.entity.Operador;
 import br.leg.senado.nusp.entity.Sala;
 import br.leg.senado.nusp.enums.PapelPessoa;
+import br.leg.senado.nusp.enums.StatusAviso;
 import br.leg.senado.nusp.enums.TipoAviso;
+import br.leg.senado.nusp.it.support.Causas;
 import br.leg.senado.nusp.it.support.CenarioFactory;
 import br.leg.senado.nusp.it.support.OracleIT;
 import br.leg.senado.nusp.it.support.VigiaDeFacetas;
@@ -83,8 +86,13 @@ class AvisoDetalheIT {
 
     /** Cria um aviso de VERIFICACAO (público SALA) pela via real e devolve o id do cadastro. */
     private String criarVerificacao(List<Integer> salaIds, String... mensagens) {
+        return criarVerificacao(salaIds, null, mensagens);
+    }
+
+    /** Idem, com a escolha de ciência do payload — que a Verificação ignora. */
+    private String criarVerificacao(List<Integer> salaIds, Boolean exigeCiencia, String... mensagens) {
         var req = new AvisoService.CriarAvisoRequest("VERIFICACAO", true, null, false,
-                List.of(mensagens), "SALA", salaIds, List.of(), List.of(), List.of(), null);
+                List.of(mensagens), "SALA", salaIds, List.of(), List.of(), List.of(), null, exigeCiencia);
         return (String) service.criar(req, admin.getId()).get("id");
     }
 
@@ -150,5 +158,55 @@ class AvisoDetalheIT {
                 "criado_por", "mensagens", "alvos", "cientes")) {
             assertTrue(det.containsKey(chave), "campo preexistente ausente: " + chave);
         }
+    }
+
+    @Test
+    @DisplayName("Verificação ignora a escolha de ciência do payload: grava e devolve sempre 'exige ciência'")
+    void verificacaoIgnoraEscolhaDeCiencia() {
+        Sala sala = CenarioFactory.novaSala(emReal(), "Plenario02");
+        String id = criarVerificacao(List.of(sala.getId()), Boolean.FALSE, "Confira a sala");
+
+        assertTrue(cadastroRepo.findById(id).orElseThrow().getExigeCiencia());
+        assertEquals(true, service.obterDetalhe(id).get("exige_ciencia"));
+    }
+
+    /**
+     * Cadastro cru (sem passar pelo service) para exercitar as constraints da tabela. O número vem da
+     * mesma sequence do service — NUMERO é NUMBER(10) e tem índice único.
+     */
+    private AvisoCadastro cadastroCru(TipoAviso tipo, boolean exigeCiencia) {
+        AvisoCadastro cad = new AvisoCadastro();
+        cad.setNumero(((Number) emReal()
+                .createNativeQuery("SELECT SEQ_FRM_AVISO_CADASTRO.NEXTVAL FROM DUAL")
+                .getSingleResult()).longValue());
+        cad.setTipo(tipo);
+        cad.setPermanente(true);
+        cad.setManterAposCiencia(false);
+        cad.setExigeCiencia(exigeCiencia);
+        cad.setStatus(StatusAviso.ATIVO);
+        cad.setCriadoPorId(admin.getId());
+        return cad;
+    }
+
+    @Test
+    @DisplayName("o banco é a rede de segurança: Verificação sem ciência viola CK_FRM_AVISO_CAD_CIENCIA")
+    void checkRecusaVerificacaoSemCiencia() {
+        AvisoCadastro cad = cadastroCru(TipoAviso.VERIFICACAO, false);
+        Exception ex = assertThrows(Exception.class, () -> {
+            emReal().persist(cad);
+            emReal().flush();
+        });
+        assertTrue(Causas.contem(ex, "CK_FRM_AVISO_CAD_CIENCIA"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("o banco é a rede de segurança: Agenda com ciência viola CK_FRM_AVISO_CAD_CIENCIA")
+    void checkRecusaAgendaComCiencia() {
+        AvisoCadastro cad = cadastroCru(TipoAviso.AGENDA, true);
+        Exception ex = assertThrows(Exception.class, () -> {
+            emReal().persist(cad);
+            emReal().flush();
+        });
+        assertTrue(Causas.contem(ex, "CK_FRM_AVISO_CAD_CIENCIA"), ex.getMessage());
     }
 }

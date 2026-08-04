@@ -1,0 +1,25 @@
+databaseChangeLog:
+  # ============================================================
+  # 047 — Avisos: EXIGE_CIENCIA em FRM_AVISO_CADASTRO
+  #
+  # A exigência de ciência vira escolha do cadastro (ESCALA, PESSOAL e GERAL),
+  # com valor imposto em VERIFICACAO (sempre 1) e AGENDA (sempre 0), amarrado
+  # pelo CHECK de coerência.
+  #
+  # Aditivo: a coluna é preenchida por tipo com o comportamento que os avisos já
+  # gravados tinham antes da escolha existir, e só então recebe o NOT NULL.
+  # ============================================================
+  - changeSet:
+      id: 047-aviso-exige-ciencia
+      author: douglas.antunes
+      comment: "Avisos: EXIGE_CIENCIA em FRM_AVISO_CADASTRO (backfill por tipo, NOT NULL e CHECK de coerência)"
+      changes:
+        - sqlFile:
+            path: db/changelog/047-aviso-exige-ciencia.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "ALTER TABLE FRM_AVISO_CADASTRO DROP CONSTRAINT CK_FRM_AVISO_CAD_CIENCIA"
+        - sql:
+            sql: "ALTER TABLE FRM_AVISO_CADASTRO DROP COLUMN EXIGE_CIENCIA"
