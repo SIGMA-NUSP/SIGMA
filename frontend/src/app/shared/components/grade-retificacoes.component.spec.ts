@@ -13,13 +13,14 @@ import { ToastService } from './toast.component';
  * GradeRetificacoesComponent (card admin "Retificações"): carga da grade, montagem das células
  * fiel ao payload (a precedência por célula é do BACKEND — nada é recalculado aqui), paginação
  * client-side de 8 colunas, troca de categoria/mês, download do XLSX (o erro vai ao TOAST,
- * canal separado do erro da grade) e o modal Ocorrências (catálogo de tipos + marcações, diff
- * aplicar/remover, gate do Aplicar, retry).
+ * canal separado do erro da grade) e a marcação de ocorrências na PRÓPRIA grade.
  *
- * Os tipos de ocorrência NÃO são constantes do front: vêm do catálogo do backend, e o modal
- * faz DUAS cargas em sequência — `/tipos-marcacao` e, só depois, `/marcacoes` do mês. Por isso
- * o `get` mockado é roteado por endpoint em três respostas independentes (tipos, marcações,
- * grade): derrubar uma não mexe nas outras.
+ * As ocorrências são marcadas clicando: o rótulo do dia abre os tipos GERAIS (valem para todos
+ * os funcionários do mês, independentemente da paginação) e a célula de um funcionário abre os
+ * INDIVIDUAIS. A escolha grava na hora, num lote de um item só; a ação do dia — aplicar ou
+ * remover — passa antes por uma confirmação dentro do próprio popover, nunca por `confirm()`.
+ * O estado de cada célula vem do payload da grade (`tipo_id`/`marcacao_global_id`): não há GET
+ * de marcações, e o catálogo de tipos é buscado uma vez, junto da grade.
  *
  * TestBed sem `detectChanges()` por padrão — `ngOnInit` à mão, filhos não instanciados;
  * `ApiService` e `ToastService` mockados via `useValue`; `AuthService` é um stub com o signal
@@ -29,7 +30,11 @@ import { ToastService } from './toast.component';
  * `mes-ano-selector.component.spec.ts` — aqui só o que a grade exibe através dele.
  */
 
-/** Payload representativo de `GET /api/admin/ponto/retificacoes/grade` (julho/2026). */
+/**
+ * Payload representativo de `GET /api/admin/ponto/retificacoes/grade` (julho/2026), com os
+ * quatro casos que a tela precisa distinguir: dia útil livre, fim de semana, dia inteiro sob
+ * uma ocorrência geral e célula com ocorrência individual.
+ */
 function payloadGrade(qtdFuncionarios = 3) {
   return {
     categoria: 'operadores',
@@ -41,23 +46,26 @@ function payloadGrade(qtdFuncionarios = 3) {
       folgas: i,
     })),
     dias: [
-      { dia: 1, data: '2026-07-01', dow: 3, fim_semana: false, marcacao_global: null },
-      { dia: 4, data: '2026-07-04', dow: 6, fim_semana: true, marcacao_global: null },
-      { dia: 6, data: '2026-07-06', dow: 1, fim_semana: false, marcacao_global: 'Feriado' },
+      { dia: 1, data: '2026-07-01', dow: 3, fim_semana: false, marcacao_global: null, marcacao_global_id: null },
+      { dia: 4, data: '2026-07-04', dow: 6, fim_semana: true, marcacao_global: null, marcacao_global_id: null },
+      { dia: 6, data: '2026-07-06', dow: 1, fim_semana: false, marcacao_global: 'Feriado', marcacao_global_id: 'tp-feriado' },
+      { dia: 7, data: '2026-07-07', dow: 2, fim_semana: false, marcacao_global: null, marcacao_global_id: null },
     ],
     celulas: {
       'op-1': {
         1: { tipo: 'horarios', texto: '08:00 12:00 13:00 17:00', tem_obs: true, obs: 'esqueci de bater' },
-        6: { tipo: 'marcacao_global', texto: 'Feriado', tem_obs: false },
+        6: { tipo: 'marcacao_global', texto: 'Feriado', tem_obs: false, tipo_id: 'tp-feriado' },
+        7: { tipo: 'marcacao_pessoa', texto: 'Atestado', tem_obs: false, tipo_id: 'tp-atestado' },
       },
       'op-2': {
         1: { tipo: 'banco', texto: 'Folga', tem_obs: false },
+        6: { tipo: 'marcacao_global', texto: 'Feriado', tem_obs: false, tipo_id: 'tp-feriado' },
       },
     },
   };
 }
 
-/** Endpoints do componente, em três canais independentes de resposta. */
+/** Endpoints do componente, em canais independentes de resposta. */
 type Rota = 'tipos' | 'marcacoes' | 'grade';
 function rotaDe(url: string): Rota {
   if (url.includes('/tipos-marcacao')) return 'tipos';
@@ -79,8 +87,8 @@ describe('GradeRetificacoesComponent', () => {
   const XLSX = new Blob(['PK'], { type: 'application/vnd.ms-excel' });
 
   /**
-   * Catálogo de `GET /api/admin/ponto/tipos-marcacao`. A ORDEM importa: o modal ativa o
-   * primeiro tipo do escopo exibido (Feriado nas globais, À Disposição nas individuais).
+   * Catálogo de `GET /api/admin/ponto/tipos-marcacao`. A ORDEM importa: é a ordem em que os
+   * tipos aparecem na lista do popover, logo abaixo do "Nenhuma".
    */
   const TIPOS: TipoMarcacao[] = [
     { id: 'tp-feriado', nome: 'Feriado', badge: 'Fer', escopo: 'GLOBAL' },
@@ -90,19 +98,10 @@ describe('GradeRetificacoesComponent', () => {
     { id: 'tp-ferias', nome: 'Férias', badge: 'Fér', escopo: 'INDIVIDUAL' },
   ];
 
-  /** Marcações de `GET /api/admin/ponto/marcacoes` (julho/2026) — já descritas pelo backend. */
-  const MARCACOES = {
-    globais: [{ data: '2026-07-09', tipo_id: 'tp-feriado', nome: 'Feriado', badge: 'Fer' }],
-    pessoais: [
-      { pessoa_id: 'op-1', pessoa_tipo: 'OPERADOR', data: '2026-07-15', tipo_id: 'tp-atestado', nome: 'Atestado', badge: 'Atest' },
-      { pessoa_id: 'op-2', pessoa_tipo: 'OPERADOR', data: '2026-07-20', tipo_id: 'tp-ferias', nome: 'Férias', badge: 'Fér' },
-    ],
-  };
-
   /** Resposta de erro com corpo do backend. */
   const falha = (msg: string) => () => throwError(() => ({ error: { message: msg } }));
 
-  /** Quantas vezes cada endpoint foi pedido (o modal pede dois; a grade, um). */
+  /** Quantas vezes cada endpoint foi pedido. */
   const chamadasDe = (rota: Rota) => apiGet.mock.calls.filter(c => rotaDe(c[0]) === rota).length;
 
   /** Monta o TestBed com o papel desejado — só o master enxerga o botão "Configurar". */
@@ -110,7 +109,7 @@ describe('GradeRetificacoesComponent', () => {
     TestBed.resetTestingModule();
     respostas = {
       tipos: () => of({ data: { tipos: structuredClone(TIPOS) } }),
-      marcacoes: () => of({ data: structuredClone(MARCACOES) }),
+      marcacoes: () => of({ data: { globais: [], pessoais: [] } }),
       grade: () => of({ data: payloadGrade() }),
     };
     apiGet = vi.fn((url: string) => respostas[rotaDe(url)]());
@@ -129,7 +128,7 @@ describe('GradeRetificacoesComponent', () => {
           provide: ApiService,
           useValue: { get: apiGet, put: apiPut, post: apiPost, delete: apiDelete, getBlob: apiGetBlob, baixarBlob },
         },
-        // O erro do DOWNLOAD sai pelo toast (canal separado do erro da grade)
+        // Erro de AÇÃO (download, gravação de ocorrência) sai pelo toast — canal separado do erro da grade
         { provide: ToastService, useValue: { error: toastError, success: vi.fn(), warning: vi.fn(), show: vi.fn() } },
         { provide: AuthService, useValue: { isMaster: signal(master) } },
       ],
@@ -159,23 +158,35 @@ describe('GradeRetificacoesComponent', () => {
     return comp;
   }
 
-  /** Componente + modal Ocorrências aberto (catálogo e marcações já carregados). */
-  function criarComConfigurar(): GradeRetificacoesComponent {
-    const comp = criarCarregado();
-    comp.abrirConfigurar();
-    return comp;
-  }
-
-  /** `Event` de <select> com `target.value` MUTÁVEL (o `onEscopo` escreve de volta ao cancelar). */
+  /** `Event` de <select> com `target.value` (a barra lê o valor escolhido). */
   function eventoSelect(value: string): Event {
     const sel = document.createElement('select');
-    for (const v of ['todos', 'op-1', 'op-2', 'operadores', 'tecnicos', 'administradores', value]) {
+    for (const v of ['operadores', 'tecnicos', 'administradores', value]) {
       const opt = document.createElement('option');
       opt.value = v;
       sel.appendChild(opt);
     }
     sel.value = value;
     return { target: sel } as unknown as Event;
+  }
+
+  /** Clique com a âncora do popover (o componente lê o retângulo do elemento clicado). */
+  function clique(): MouseEvent {
+    return {
+      stopPropagation: vi.fn(),
+      currentTarget: { getBoundingClientRect: () => ({ left: 120, bottom: 260 }) },
+    } as unknown as MouseEvent;
+  }
+
+  /** O dia do payload, pelo número. */
+  const dia = (comp: GradeRetificacoesComponent, n: number) => comp.dias().find(d => d.dia === n)!;
+  const funcionario = (comp: GradeRetificacoesComponent, id: string) =>
+    comp.funcionarios().find(f => f.id === id)!;
+  /** Rótulos das opções do popover aberto. */
+  const rotulos = (comp: GradeRetificacoesComponent) => comp.opcoes().map(o => o.rotulo);
+  /** Abre o popover na célula (funcionário, dia) e devolve o componente. */
+  function abrirCelula(comp: GradeRetificacoesComponent, pessoaId: string, n: number): void {
+    comp.abrirNaCelula(funcionario(comp, pessoaId), dia(comp, n), clique());
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -188,15 +199,31 @@ describe('GradeRetificacoesComponent', () => {
         categoria: 'operadores', ano: 2026, mes: 7,
       });
       expect(comp.funcionarios().map(f => f.id)).toEqual(['op-1', 'op-2', 'op-3']);
-      expect(comp.dias().map(d => d.dia)).toEqual([1, 4, 6]);
+      expect(comp.dias().map(d => d.dia)).toEqual([1, 4, 6, 7]);
       expect(comp.carregando()).toBe(false);
       expect(comp.erro()).toBe('');
     });
 
-    it('a grade não puxa o catálogo de tipos: ele é carregado só quando o modal abre', () => {
-      criarCarregado();
-      expect(chamadasDe('tipos')).toBe(0);
+    it('o catálogo de tipos vem JUNTO com a grade, uma vez — e não há GET de marcações', () => {
+      // O estado de cada célula já vem no payload da grade (tipo_id/marcacao_global_id): abrir o
+      // popover não pode custar rede, senão cada clique numa célula viraria uma ida ao servidor.
+      const comp = criarCarregado();
+
+      expect(chamadasDe('tipos')).toBe(1);
       expect(chamadasDe('marcacoes')).toBe(0);
+      expect(comp.tipos()).toHaveLength(5);
+
+      comp.abrirNoDia(dia(comp, 1), clique());
+      expect(chamadasDe('tipos')).toBe(1);       // o popover abre com o que já está em memória
+      expect(chamadasDe('marcacoes')).toBe(0);
+    });
+
+    it('trocar de mês recarrega a grade sem repuxar o catálogo (ele não muda com o mês)', () => {
+      const comp = criarCarregado();
+      comp.onMesAno({ ano: 2026, mes: 6 });
+
+      expect(chamadasDe('grade')).toBe(2);
+      expect(chamadasDe('tipos')).toBe(1);
     });
 
     it('carregando fica true enquanto a resposta não chega', () => {
@@ -235,6 +262,16 @@ describe('GradeRetificacoesComponent', () => {
       expect(comp.grade()).toBeNull();
       expect(comp.funcionarios()).toEqual([]);
       expect(comp.dias()).toEqual([]);
+    });
+
+    it('o catálogo indisponível não derruba a grade: ela carrega e o erro fica no popover', () => {
+      respostas.tipos = falha('500');
+      const comp = criarCarregado();
+
+      expect(comp.funcionarios()).toHaveLength(3);   // a grade não depende do catálogo
+      expect(comp.erro()).toBe('');
+      expect(comp.catalogoErro()).toBe(true);
+      expect(comp.tipos()).toEqual([]);
     });
   });
 
@@ -275,13 +312,6 @@ describe('GradeRetificacoesComponent', () => {
 
     it('mesAbrev cai no mês do seletor enquanto não há grade', () => {
       expect(criar('2026-09-10T12:00:00-03:00').mesAbrev()).toBe('set');
-    });
-
-    it('tituloMesAno / primeiroDiaMes / ultimoDiaMes seguem o mês selecionado', () => {
-      const comp = criar('2026-02-10T12:00:00-03:00'); // fevereiro (bissexto? 2026 não é)
-      expect(comp.tituloMesAno()).toBe('Fevereiro de 2026');
-      expect(comp.primeiroDiaMes().getDate()).toBe(1);
-      expect(comp.ultimoDiaMes().getDate()).toBe(28);
     });
   });
 
@@ -414,445 +444,479 @@ describe('GradeRetificacoesComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Ocorrências — abertura (catálogo + marcações) e escopo
+  // Ocorrências — onde o popover abre e onde o clique é recusado
   // ═══════════════════════════════════════════════════════════════════
-  describe('Ocorrências — abertura e escopo', () => {
-    it('abrir carrega o CATÁLOGO e depois as marcações do mês, começando no escopo "todos"', () => {
-      const comp = criarComConfigurar();
-
-      expect(comp.configurarAberto()).toBe(true);
-      expect(apiGet).toHaveBeenCalledWith('/api/admin/ponto/tipos-marcacao');
-      expect(apiGet).toHaveBeenLastCalledWith('/api/admin/ponto/marcacoes', { ano: 2026, mes: 7 });
-      expect(comp.carregandoConfig()).toBe(false);
-      expect(comp.tipos()).toHaveLength(5);
-      expect(comp.escopo()).toBe('todos');
-      expect(comp.modo()).toBe('tp-feriado');                          // 1º tipo GLOBAL do catálogo
-      expect([...comp.marcacoesEscopo()]).toEqual([[9, 'tp-feriado']]); // só as globais
-    });
-
-    it('as marcações do mês só são pedidas DEPOIS que o catálogo responde', () => {
-      const tiposEmVoo = new Subject<any>();
-      respostas.tipos = () => tiposEmVoo;
+  describe('ocorrências — abertura e bloqueios de clique', () => {
+    it('o rótulo do dia abre a lista dos tipos GERAIS, com "Nenhuma" na frente', () => {
       const comp = criarCarregado();
-      comp.abrirConfigurar();
+      comp.abrirNoDia(dia(comp, 1), clique());
 
-      expect(comp.carregandoConfig()).toBe(true);
-      expect(chamadasDe('marcacoes')).toBe(0);   // são os chips que dizem o que cada dia significa
-
-      tiposEmVoo.next({ data: { tipos: structuredClone(TIPOS) } });
-
-      expect(chamadasDe('marcacoes')).toBe(1);
-      expect(comp.carregandoConfig()).toBe(false);
-      expect(comp.modo()).toBe('tp-feriado');
+      expect(comp.alvo()).toMatchObject({ escopo: 'dia', dia: 1, data: '2026-07-01', atual: null });
+      expect(rotulos(comp)).toEqual(['Nenhuma', 'Feriado', 'Ponto Facultativo']);
     });
 
-    it('carregando fica true até as marcações chegarem', () => {
-      const resposta = new Subject<any>();
-      respostas.marcacoes = () => resposta;
+    it('o dia que já tem geral abre com o tipo dele selecionado', () => {
       const comp = criarCarregado();
-      comp.abrirConfigurar();
+      comp.abrirNoDia(dia(comp, 6), clique());
 
-      expect(comp.carregandoConfig()).toBe(true);
-      resposta.next({ data: structuredClone(MARCACOES) });
-      expect(comp.carregandoConfig()).toBe(false);
+      expect(comp.alvo()?.atual).toBe('tp-feriado');
     });
 
-    it('erro no CATÁLOGO: mensagem própria, marcações nem pedidas e Aplicar travado', () => {
-      respostas.tipos = falha('Sem permissão');
+    it('a célula do funcionário abre a lista dos tipos INDIVIDUAIS', () => {
       const comp = criarCarregado();
-      comp.abrirConfigurar();
+      abrirCelula(comp, 'op-3', 1);   // célula vazia
 
-      // canal de CARGA: o guia da tela vem na frente e o detalhe do servidor entre parênteses
-      expect(comp.erroConfig()).toBe('Erro ao carregar os tipos de ocorrência. (Sem permissão)');
-      expect(chamadasDe('marcacoes')).toBe(0);   // sem tipos não há o que aplicar num dia
-      expect(comp.carregandoConfig()).toBe(false);
-      expect(comp.configurarAberto()).toBe(true);
-      expect(comp.configCarregado()).toBe(false);
-      expect(comp.tipos()).toEqual([]);
+      expect(comp.alvo()).toMatchObject({ escopo: 'pessoa', pessoaId: 'op-3', dia: 1, atual: null });
+      expect(rotulos(comp)).toEqual(['Nenhuma', 'À Disposição', 'Atestado', 'Férias']);
     });
 
-    it('erro no catálogo sem corpo: fallback próprio dos tipos', () => {
-      respostas.tipos = () => throwError(() => new Error('rede'));
+    it('a célula com ocorrência individual abre com o tipo dela selecionado', () => {
       const comp = criarCarregado();
-      comp.abrirConfigurar();
-      expect(comp.erroConfig()).toBe('Erro ao carregar os tipos de ocorrência.');
+      abrirCelula(comp, 'op-1', 7);
+
+      expect(comp.alvo()?.atual).toBe('tp-atestado');
     });
 
-    it('o retry depois do erro do catálogo refaz as DUAS cargas', () => {
-      respostas.tipos = falha('Sem permissão');
+    it('fim de semana não abre nada — nem no rótulo do dia, nem na célula', () => {
       const comp = criarCarregado();
-      comp.abrirConfigurar();
-      expect(comp.configCarregado()).toBe(false);
 
-      respostas.tipos = () => of({ data: { tipos: structuredClone(TIPOS) } });
-      comp.carregarMarcacoes();                  // é o que a caixa app-erro-carga dispara
+      comp.abrirNoDia(dia(comp, 4), clique());
+      expect(comp.alvo()).toBeNull();
 
-      expect(chamadasDe('tipos')).toBe(2);
-      expect(chamadasDe('marcacoes')).toBe(1);
-      expect(comp.erroConfig()).toBe('');
-      expect(comp.configCarregado()).toBe(true);
-      expect(comp.modo()).toBe('tp-feriado');
+      abrirCelula(comp, 'op-1', 4);
+      expect(comp.alvo()).toBeNull();
     });
 
-    it('erro ao carregar as marcações: mensagem no modal, sem travar em "carregando" — e SEM destravar o Aplicar', () => {
-      respostas.marcacoes = falha('Sem permissão');
+    it('célula com horários de retificação ou com folga aprovada não abre: a marcação ficaria invisível', () => {
       const comp = criarCarregado();
-      comp.abrirConfigurar();
 
-      expect(comp.erroConfig()).toBe('Sem permissão');
-      expect(comp.carregandoConfig()).toBe(false);
-      expect(comp.configurarAberto()).toBe(true);
-      expect(comp.configCarregado()).toBe(false);   // sem carga, o Aplicar não age
-      expect(comp.tipos()).toHaveLength(5);         // o catálogo, esse, chegou
+      abrirCelula(comp, 'op-1', 1);   // horários
+      expect(comp.alvo()).toBeNull();
+
+      abrirCelula(comp, 'op-2', 1);   // "Banco de horas"
+      expect(comp.alvo()).toBeNull();
     });
 
-    it('escopo por funcionário traz só as marcações dele e ativa o primeiro tipo INDIVIDUAL', () => {
-      const comp = criarComConfigurar();
-      comp.onEscopo(eventoSelect('op-1'));
+    it('no dia sob uma ocorrência geral, as células individuais ficam bloqueadas — mas o rótulo do dia não', () => {
+      const comp = criarCarregado();
 
-      expect(comp.escopo()).toBe('op-1');
-      expect(comp.modo()).toBe('tp-disposicao');
-      expect([...comp.marcacoesEscopo()]).toEqual([[15, 'tp-atestado']]); // nada da op-2
+      abrirCelula(comp, 'op-1', 6);   // tem célula (a geral)
+      expect(comp.alvo()).toBeNull();
+      abrirCelula(comp, 'op-3', 6);   // sem célula na página, mesmo assim sob a geral
+      expect(comp.alvo()).toBeNull();
+
+      comp.abrirNoDia(dia(comp, 6), clique());
+      expect(comp.alvo()?.escopo).toBe('dia');   // a geral se troca/remove pelo próprio rótulo
     });
 
-    it('voltar para "todos" recupera as marcações globais', () => {
-      const comp = criarComConfigurar();
-      comp.onEscopo(eventoSelect('op-2'));
-      expect([...comp.marcacoesEscopo()]).toEqual([[20, 'tp-ferias']]);
+    it('os bloqueios são consultáveis pelo template (cursor e aria-disabled saem daqui)', () => {
+      const comp = criarCarregado();
 
-      comp.onEscopo(eventoSelect('todos'));
-      expect(comp.modo()).toBe('tp-feriado');
-      expect([...comp.marcacoesEscopo()]).toEqual([[9, 'tp-feriado']]);
+      expect(comp.diaClicavel(dia(comp, 1))).toBe(true);
+      expect(comp.diaClicavel(dia(comp, 4))).toBe(false);
+      expect(comp.celulaClicavel('op-3', dia(comp, 1))).toBe(true);
+      expect(comp.celulaClicavel('op-1', dia(comp, 1))).toBe(false);
+      expect(comp.celulaClicavel('op-2', dia(comp, 1))).toBe(false);
+      expect(comp.celulaClicavel('op-1', dia(comp, 6))).toBe(false);
+      expect(comp.celulaClicavel('op-1', dia(comp, 4))).toBe(false);
     });
 
-    it('selecionar o MESMO escopo é no-op (não pergunta nem recarrega o mapa)', () => {
-      const comp = criarComConfigurar();
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-      const antes = comp.marcacoesEscopo();
+    it('o clique que ABRE não borbulha (senão o handler de clique-fora fecharia na mesma hora)', () => {
+      const comp = criarCarregado();
+      const ev = clique();
+      comp.abrirNoDia(dia(comp, 1), ev);
 
-      comp.onEscopo(eventoSelect('todos'));
-
-      expect(confirmSpy).not.toHaveBeenCalled();
-      expect(comp.marcacoesEscopo()).toBe(antes); // mesma referência
+      expect(ev.stopPropagation).toHaveBeenCalled();
     });
 
-    it('trocar de escopo com edições pendentes: confirma antes de descartar', () => {
-      const comp = criarComConfigurar();
-      comp.onDiaConfig(new Date(2026, 6, 13)); // marca o dia 13 (pendente)
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    it('clique fora e Esc fecham o popover', () => {
+      const comp = criarCarregado();
 
-      comp.onEscopo(eventoSelect('op-1'));
+      comp.abrirNoDia(dia(comp, 1), clique());
+      comp.onCliqueFora();
+      expect(comp.alvo()).toBeNull();
 
-      expect(confirmSpy).toHaveBeenCalled();
-      expect(comp.escopo()).toBe('op-1'); // aceitou → trocou (edições descartadas)
+      comp.abrirNoDia(dia(comp, 1), clique());
+      comp.onEscape();
+      expect(comp.alvo()).toBeNull();
     });
 
-    it('confirmação negada: mantém o escopo, as edições e devolve o <select> ao valor antigo', () => {
-      const comp = criarComConfigurar();
-      comp.onDiaConfig(new Date(2026, 6, 13));
-      vi.spyOn(window, 'confirm').mockReturnValue(false);
-      const ev = eventoSelect('op-1');
+    it('sem tipo cadastrado no escopo, não há opção nenhuma (nem o "Nenhuma" sozinho)', () => {
+      respostas.tipos = () => of({ data: { tipos: [{ id: 'tp-feriado', nome: 'Feriado', badge: 'F', escopo: 'GLOBAL' }] } });
+      const comp = criarCarregado();
 
-      comp.onEscopo(ev);
+      abrirCelula(comp, 'op-3', 1);            // escopo INDIVIDUAL, catálogo só com GLOBAL
+      expect(comp.opcoes()).toEqual([]);
 
-      expect(comp.escopo()).toBe('todos');
-      expect(comp.marcacoesEscopo().get(13)).toBe('tp-feriado'); // edição preservada
-      expect((ev.target as HTMLSelectElement).value).toBe('todos'); // <select> revertido
-    });
-
-    it('modosDisponiveis é o catálogo do escopo (globais × individuais) mais o "Limpar"', () => {
-      const comp = criarComConfigurar();
-      expect(comp.modosDisponiveis()).toEqual([
-        { valor: 'tp-feriado', rotulo: 'Feriado' },
-        { valor: 'tp-facultativo', rotulo: 'Ponto Facultativo' },
-        { valor: '__limpar', rotulo: 'Limpar' },
-      ]);
-
-      comp.onEscopo(eventoSelect('op-1'));
-      expect(comp.modosDisponiveis().map(m => m.valor)).toEqual(
-        ['tp-disposicao', 'tp-atestado', 'tp-ferias', '__limpar'],
-      );
-    });
-
-    it('catálogo vazio: nenhum chip (nem o "Limpar") e nenhum modo ativo', () => {
-      respostas.tipos = () => of({ data: { tipos: [] } });
-      const comp = criarComConfigurar();
-
-      expect(comp.modosDisponiveis()).toEqual([]);
-      expect(comp.modo()).toBe('');
-      expect(comp.configCarregado()).toBe(true);   // as marcações vieram: o modal está íntegro
-    });
-
-    it('escopo sem tipo no catálogo: trocar para um funcionário zera chips e modo', () => {
-      respostas.tipos = () => of({ data: { tipos: TIPOS.filter(t => t.escopo === 'GLOBAL') } });
-      const comp = criarComConfigurar();
-      expect(comp.modo()).toBe('tp-feriado');
-
-      comp.onEscopo(eventoSelect('op-1'));
-
-      expect(comp.modosDisponiveis()).toEqual([]);
-      expect(comp.modo()).toBe('');
-    });
-
-    it('fechar não pergunta nada (as edições pendentes são descartadas em silêncio)', () => {
-      const comp = criarComConfigurar();
-      comp.onDiaConfig(new Date(2026, 6, 13));
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
-      comp.fecharConfigurar();
-
-      expect(comp.configurarAberto()).toBe(false);
-      expect(confirmSpy).not.toHaveBeenCalled(); // assimetria conhecida com a troca de escopo
+      comp.fecharPopover();
+      comp.abrirNoDia(dia(comp, 1), clique()); // escopo GLOBAL: tem tipo
+      expect(rotulos(comp)).toEqual(['Nenhuma', 'Feriado']);
     });
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Ocorrências — clique no dia (toggle) e estado do calendário
+  // Ocorrências — a escolha grava na hora (lote de um item só)
   // ═══════════════════════════════════════════════════════════════════
-  describe('Ocorrências — marcação do dia', () => {
-    it('clicar num dia livre aplica o tipo ativo', () => {
-      const comp = criarComConfigurar();
-      const antes = comp.marcacoesEscopo();
+  describe('ocorrências — gravação individual', () => {
+    it('escolher um tipo na célula aplica só para aquele (funcionário, dia), sem confirmação', () => {
+      const comp = criarCarregado();
+      abrirCelula(comp, 'op-3', 1);
 
-      comp.onDiaConfig(new Date(2026, 6, 13));
+      comp.escolher(comp.opcoes()[2]);   // "Atestado"
 
-      expect(comp.marcacoesEscopo().get(13)).toBe('tp-feriado');
-      expect(comp.marcacoesEscopo()).not.toBe(antes); // Map novo (reatividade)
-    });
-
-    it('clicar de novo no MESMO tipo remove a marcação (toggle)', () => {
-      const comp = criarComConfigurar();
-      comp.onDiaConfig(new Date(2026, 6, 13));
-      comp.onDiaConfig(new Date(2026, 6, 13));
-      expect(comp.marcacoesEscopo().has(13)).toBe(false);
-    });
-
-    it('com outro tipo ativo, o clique SUBSTITUI o tipo do dia', () => {
-      const comp = criarComConfigurar();
-      comp.onDiaConfig(new Date(2026, 6, 13)); // Feriado
-      comp.modo.set('tp-facultativo');
-      comp.onDiaConfig(new Date(2026, 6, 13));
-      expect(comp.marcacoesEscopo().get(13)).toBe('tp-facultativo');
-    });
-
-    it('modo "Limpar" remove a marcação existente (e não faz nada num dia livre)', () => {
-      const comp = criarComConfigurar();
-      comp.modo.set('__limpar');
-
-      comp.onDiaConfig(new Date(2026, 6, 9)); // dia que veio marcado do backend
-      expect(comp.marcacoesEscopo().has(9)).toBe(false);
-
-      comp.onDiaConfig(new Date(2026, 6, 13)); // dia livre → segue livre
-      expect(comp.marcacoesEscopo().has(13)).toBe(false);
-    });
-
-    it('sem nenhum tipo cadastrado, o clique no dia não marca nada', () => {
-      respostas.tipos = () => of({ data: { tipos: [] } });
-      const comp = criarComConfigurar();
-      const antes = comp.marcacoesEscopo();
-
-      comp.onDiaConfig(new Date(2026, 6, 13));
-
-      expect(comp.marcacoesEscopo()).toBe(antes);   // nem o Map é recriado
-      expect(comp.marcacoesEscopo().has(13)).toBe(false);
-      expect(comp.estadoDiaConfig(new Date(2026, 6, 13))).toBeNull();
-    });
-
-    it('estadoDiaConfig: dia útil marcado vem selecionado, com o badge e o nome do catálogo', () => {
-      const comp = criarComConfigurar();
-      expect(comp.estadoDiaConfig(new Date(2026, 6, 9))).toEqual({
-        selecionado: true, badge: 'Fer', rotulo: 'Feriado',
-      });
-    });
-
-    it('estadoDiaConfig: tipo fora do catálogo usa a descrição que veio na própria marcação', () => {
-      // Um dia marcado nunca aparece sem rótulo: a marcação já chega descrita (nome + badge),
-      // então nem um catálogo desatualizado deixa o calendário mudo.
-      respostas.tipos = () => of({ data: { tipos: TIPOS.filter(t => t.id !== 'tp-feriado') } });
-      const comp = criarComConfigurar();
-
-      expect(comp.estadoDiaConfig(new Date(2026, 6, 9))).toEqual({
-        selecionado: true, badge: 'Fer', rotulo: 'Feriado',
-      });
-    });
-
-    it('estadoDiaConfig: o catálogo tem precedência sobre a descrição embutida na marcação', () => {
-      respostas.marcacoes = () => of({
-        data: {
-          globais: [{ data: '2026-07-09', tipo_id: 'tp-feriado', nome: 'Nome antigo', badge: 'Ant' }],
-          pessoais: [],
-        },
-      });
-      const comp = criarComConfigurar();
-
-      expect(comp.estadoDiaConfig(new Date(2026, 6, 9))).toEqual({
-        selecionado: true, badge: 'Fer', rotulo: 'Feriado',
-      });
-    });
-
-    it('estadoDiaConfig: dia útil livre não tem override (null)', () => {
-      const comp = criarComConfigurar();
-      expect(comp.estadoDiaConfig(new Date(2026, 6, 13))).toBeNull();
-    });
-
-    it('estadoDiaConfig: fim de semana e dia de outro mês ficam desabilitados', () => {
-      const comp = criarComConfigurar();
-      expect(comp.estadoDiaConfig(new Date(2026, 6, 11))).toEqual({ desabilitado: true }); // sábado
-      expect(comp.estadoDiaConfig(new Date(2026, 6, 12))).toEqual({ desabilitado: true }); // domingo
-      expect(comp.estadoDiaConfig(new Date(2026, 7, 3))).toEqual({ desabilitado: true });  // agosto
-      expect(comp.estadoDiaConfig(new Date(2025, 6, 8))).toEqual({ desabilitado: true });  // outro ano
-    });
-
-    it('estadoDiaConfig segue o escopo pessoal (badge do tipo daquela pessoa)', () => {
-      const comp = criarComConfigurar();
-      comp.onEscopo(eventoSelect('op-1'));
-      expect(comp.estadoDiaConfig(new Date(2026, 6, 15))).toEqual({
-        selecionado: true, badge: 'Atest', rotulo: 'Atestado',
-      });
-      expect(comp.estadoDiaConfig(new Date(2026, 6, 9))).toBeNull(); // a global não aparece no escopo pessoal
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // Ocorrências — Aplicar: envia o DIFF (aplicar + remover) do escopo
-  // ═══════════════════════════════════════════════════════════════════
-  describe('Ocorrências — aplicar', () => {
-    it('sem mudanças: fecha o modal sem chamar a API', () => {
-      const comp = criarComConfigurar();
-      comp.aplicarConfig();
-
-      expect(apiPut).not.toHaveBeenCalled();
-      expect(comp.configurarAberto()).toBe(false);
-    });
-
-    it('globais: envia os dias novos em "aplicar" (com tipo_id) e os retirados em "remover"', () => {
-      const comp = criarComConfigurar();
-      comp.onDiaConfig(new Date(2026, 6, 13)); // novo Feriado
-      comp.modo.set('__limpar');
-      comp.onDiaConfig(new Date(2026, 6, 9));  // remove o feriado que veio do backend
-
-      comp.aplicarConfig();
-
-      expect(apiPut).toHaveBeenCalledWith('/api/admin/ponto/marcacoes', {
-        globais: {
-          aplicar: [{ data: '2026-07-13', tipo_id: 'tp-feriado' }],
-          remover: ['2026-07-09'],
-        },
-      });
-    });
-
-    it('mudar só o TIPO do dia entra em "aplicar" (não vira remover+aplicar)', () => {
-      const comp = criarComConfigurar();
-      comp.modo.set('tp-facultativo');
-      comp.onDiaConfig(new Date(2026, 6, 9)); // era Feriado
-
-      comp.aplicarConfig();
-
-      expect(apiPut).toHaveBeenCalledWith('/api/admin/ponto/marcacoes', {
-        globais: { aplicar: [{ data: '2026-07-09', tipo_id: 'tp-facultativo' }], remover: [] },
-      });
-    });
-
-    it('pessoais: envia pessoa_id + pessoa_tipo derivado da categoria da grade', () => {
-      const comp = criarComConfigurar();
-      comp.onCategoria(eventoSelect('tecnicos'));
-      comp.onEscopo(eventoSelect('op-1'));
-      comp.onDiaConfig(new Date(2026, 6, 22)); // À Disposição (1º tipo individual do catálogo)
-
-      comp.aplicarConfig();
-
+      expect(comp.confirmacao()).toBeNull();
       expect(apiPut).toHaveBeenCalledWith('/api/admin/ponto/marcacoes', {
         pessoais: {
-          pessoa_id: 'op-1',
-          pessoa_tipo: 'TECNICO',
-          aplicar: [{ data: '2026-07-22', tipo_id: 'tp-disposicao' }],
-          remover: [],
+          pessoa_id: 'op-3', pessoa_tipo: 'OPERADOR',
+          aplicar: [{ data: '2026-07-01', tipo_id: 'tp-atestado' }],
         },
       });
     });
 
-    it('as datas do diff usam o mês/ano selecionado, com zero à esquerda', () => {
-      const comp = criarCarregado('2026-03-10T12:00:00-03:00');
-      respostas.marcacoes = () => of({ data: { globais: [], pessoais: [] } });
-      comp.abrirConfigurar();
-      comp.onDiaConfig(new Date(2026, 2, 5));
+    it('"Nenhuma" numa célula preenchida REMOVE a ocorrência daquele dia', () => {
+      const comp = criarCarregado();
+      abrirCelula(comp, 'op-1', 7);      // tem "Atestado"
 
-      comp.aplicarConfig();
+      comp.escolher(comp.opcoes()[0]);   // "Nenhuma"
 
-      expect(apiPut.mock.calls[0][1].globais.aplicar).toEqual([{ data: '2026-03-05', tipo_id: 'tp-feriado' }]);
+      expect(apiPut).toHaveBeenCalledWith('/api/admin/ponto/marcacoes', {
+        pessoais: { pessoa_id: 'op-1', pessoa_tipo: 'OPERADOR', remover: ['2026-07-07'] },
+      });
     });
 
-    it('sucesso: fecha o modal e recarrega a grade', () => {
-      const comp = criarComConfigurar();
-      const chamadasAntes = apiGet.mock.calls.length;
-      comp.onDiaConfig(new Date(2026, 6, 13));
+    it('trocar de tipo é um upsert só (não vira remover + aplicar)', () => {
+      const comp = criarCarregado();
+      abrirCelula(comp, 'op-1', 7);      // "Atestado"
 
-      comp.aplicarConfig();
+      comp.escolher(comp.opcoes()[3]);   // "Férias"
 
-      expect(comp.aplicandoConfig()).toBe(false);
-      expect(comp.configurarAberto()).toBe(false);
-      expect(apiGet.mock.calls.length).toBe(chamadasAntes + 1);
-      expect(apiGet.mock.calls.at(-1)![0]).toBe('/api/admin/ponto/retificacoes/grade');
+      expect(apiPut).toHaveBeenCalledTimes(1);
+      expect(apiPut).toHaveBeenCalledWith('/api/admin/ponto/marcacoes', {
+        pessoais: {
+          pessoa_id: 'op-1', pessoa_tipo: 'OPERADOR',
+          aplicar: [{ data: '2026-07-07', tipo_id: 'tp-ferias' }],
+        },
+      });
     });
 
-    it('erro: modal segue aberto com a mensagem do backend, sem recarregar a grade', () => {
-      const comp = criarComConfigurar();
-      comp.onDiaConfig(new Date(2026, 6, 13));
-      apiPut.mockReturnValue(throwError(() => ({ error: { message: 'Dia inválido' } })));
-      const chamadasAntes = apiGet.mock.calls.length;
+    it('escolher a opção que já está marcada não chama a API: só fecha', () => {
+      const comp = criarCarregado();
+      abrirCelula(comp, 'op-1', 7);
 
-      comp.aplicarConfig();
+      comp.escolher(comp.opcoes()[2]);   // "Atestado", o mesmo que já está lá
 
-      expect(comp.erroConfig()).toBe('Dia inválido');
-      expect(comp.aplicandoConfig()).toBe(false);
-      expect(comp.configurarAberto()).toBe(true);
-      expect(apiGet.mock.calls.length).toBe(chamadasAntes); // não recarregou
+      expect(apiPut).not.toHaveBeenCalled();
+      expect(comp.alvo()).toBeNull();
+    });
+
+    it('"Nenhuma" numa célula VAZIA também é no-op (nada a remover)', () => {
+      const comp = criarCarregado();
+      abrirCelula(comp, 'op-3', 1);
+
+      comp.escolher(comp.opcoes()[0]);
+
+      expect(apiPut).not.toHaveBeenCalled();
+      expect(comp.alvo()).toBeNull();
+    });
+
+    it('o pessoa_tipo acompanha a categoria exibida na barra', () => {
+      const comp = criarCarregado();
+      comp.onCategoria(eventoSelect('tecnicos'));
+      abrirCelula(comp, 'op-3', 1);
+
+      comp.escolher(comp.opcoes()[1]);
+
+      expect(apiPut.mock.calls[0][1].pessoais.pessoa_tipo).toBe('TECNICO');
+    });
+
+    it('sucesso: fecha o popover e recarrega a grade (a precedência é recalculada no servidor)', () => {
+      const comp = criarCarregado();
+      const antes = chamadasDe('grade');
+      abrirCelula(comp, 'op-3', 1);
+
+      comp.escolher(comp.opcoes()[1]);
+
+      expect(comp.alvo()).toBeNull();
+      expect(comp.salvandoEm()).toBeNull();
+      expect(chamadasDe('grade')).toBe(antes + 1);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Ocorrências — a ação do dia é coletiva e passa por confirmação
+  // ═══════════════════════════════════════════════════════════════════
+  describe('ocorrências — ação geral com mini-confirmação', () => {
+    it('escolher um tipo no dia PERGUNTA antes, sem chamar a API', () => {
+      const comp = criarCarregado();
+      comp.abrirNoDia(dia(comp, 1), clique());
+
+      comp.escolher(comp.opcoes()[1]);   // "Feriado"
+
+      expect(comp.confirmacao()?.pergunta).toBe('Aplicar "Feriado" para todos os funcionários?');
+      expect(apiPut).not.toHaveBeenCalled();
+    });
+
+    it('confirmar aplica o tipo na DATA — vale para todos, inclusive quem está em outra página', () => {
+      const comp = criarCarregado();
+      comp.abrirNoDia(dia(comp, 1), clique());
+      comp.escolher(comp.opcoes()[1]);
+
+      comp.confirmar();
+
+      expect(apiPut).toHaveBeenCalledWith('/api/admin/ponto/marcacoes', {
+        globais: { aplicar: [{ data: '2026-07-01', tipo_id: 'tp-feriado' }] },
+      });
+      expect(comp.alvo()).toBeNull();
+    });
+
+    it('remover a geral também é coletivo: pergunta nomeando a ocorrência e manda "remover"', () => {
+      const comp = criarCarregado();
+      comp.abrirNoDia(dia(comp, 6), clique());   // dia com "Feriado"
+
+      comp.escolher(comp.opcoes()[0]);           // "Nenhuma"
+      expect(comp.confirmacao()?.pergunta).toBe('Remover "Feriado" de todos os funcionários?');
+      expect(apiPut).not.toHaveBeenCalled();
+
+      comp.confirmar();
+      expect(apiPut).toHaveBeenCalledWith('/api/admin/ponto/marcacoes', {
+        globais: { remover: ['2026-07-06'] },
+      });
+    });
+
+    it('cancelar a confirmação não grava nada e devolve a lista de opções', () => {
+      const comp = criarCarregado();
+      comp.abrirNoDia(dia(comp, 1), clique());
+      comp.escolher(comp.opcoes()[1]);
+
+      comp.cancelarConfirmacao();
+
+      expect(comp.confirmacao()).toBeNull();
+      expect(comp.alvo()).not.toBeNull();   // o popover continua aberto, na lista
+      expect(apiPut).not.toHaveBeenCalled();
+    });
+
+    it('a confirmação é do próprio popover: `confirm()` do navegador nunca é usado', () => {
+      // O confirm() nativo já mordeu este projeto (ele bloqueia a thread e some em alguns fluxos).
+      const nativo = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const comp = criarCarregado();
+
+      comp.abrirNoDia(dia(comp, 1), clique());
+      comp.escolher(comp.opcoes()[1]);
+      comp.confirmar();
+
+      expect(nativo).not.toHaveBeenCalled();
+    });
+
+    it('reabrir o popover começa sem confirmação pendente da vez anterior', () => {
+      const comp = criarCarregado();
+      comp.abrirNoDia(dia(comp, 1), clique());
+      comp.escolher(comp.opcoes()[1]);
+      comp.fecharPopover();
+
+      comp.abrirNoDia(dia(comp, 7), clique());
+
+      expect(comp.confirmacao()).toBeNull();
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Ocorrências — erro, gravação em voo e resposta obsoleta
+  // ═══════════════════════════════════════════════════════════════════
+  describe('ocorrências — robustez da gravação', () => {
+    it('erro vai para o TOAST com a mensagem do servidor: a grade fica na tela', () => {
+      const comp = criarCarregado();
+      const antes = chamadasDe('grade');
+      apiPut.mockReturnValue(throwError(() => ({
+        error: { message: 'O dia 01/07/2026 tem uma ocorrência geral, que vale para todos os funcionários. Recarregue a tela e tente novamente.' },
+      })));
+      abrirCelula(comp, 'op-3', 1);
+
+      comp.escolher(comp.opcoes()[1]);
+
+      expect(toastError).toHaveBeenCalledWith(
+        'O dia 01/07/2026 tem uma ocorrência geral, que vale para todos os funcionários. Recarregue a tela e tente novamente.');
+      expect(comp.erro()).toBe('');                  // o canal da GRADE não é o da gravação
+      expect(comp.funcionarios()).toHaveLength(3);
+      expect(chamadasDe('grade')).toBe(antes);       // nada mudou no servidor: não recarrega
+      expect(comp.salvandoEm()).toBeNull();          // e a célula destrava
     });
 
     it('erro sem corpo: fallback', () => {
-      const comp = criarComConfigurar();
-      comp.onDiaConfig(new Date(2026, 6, 13));
+      const comp = criarCarregado();
       apiPut.mockReturnValue(throwError(() => new Error('rede')));
-      comp.aplicarConfig();
-      expect(comp.erroConfig()).toBe('Erro ao aplicar as marcações.');
+      abrirCelula(comp, 'op-3', 1);
+
+      comp.escolher(comp.opcoes()[1]);
+
+      expect(toastError).toHaveBeenCalledWith('Erro ao salvar a ocorrência.');
     });
 
-    it('aplicando fica true enquanto o PUT não responde', () => {
-      const comp = criarComConfigurar();
-      comp.onDiaConfig(new Date(2026, 6, 13));
-      const resposta = new Subject<any>();
-      apiPut.mockReturnValue(resposta);
+    it('com uma gravação em voo, a célula fica marcada e a próxima escolha não dispara outro PUT', () => {
+      const comp = criarCarregado();
+      const emVoo = new Subject<any>();
+      apiPut.mockReturnValue(emVoo);
+      abrirCelula(comp, 'op-3', 1);
+      const opcoes = comp.opcoes();
 
-      comp.aplicarConfig();
-      expect(comp.aplicandoConfig()).toBe(true);
-      expect(comp.erroConfig()).toBe('');
+      comp.escolher(opcoes[1]);
+      expect(comp.salvandoEm()).toBe('op-3|1');
 
-      resposta.next({ ok: true });
-      expect(comp.aplicandoConfig()).toBe(false);
+      // Duplo clique impaciente: a segunda escolha cai no vazio enquanto a primeira não volta
+      comp.escolher(opcoes[2]);
+      expect(apiPut).toHaveBeenCalledTimes(1);
+
+      // E o popover nem reabre em outra célula enquanto a gravação está em voo
+      comp.fecharPopover();
+      abrirCelula(comp, 'op-3', 7);
+      expect(comp.alvo()).toBeNull();
+
+      emVoo.next({ ok: true });
+      expect(comp.salvandoEm()).toBeNull();
+    });
+
+    it('a confirmação coletiva também não grava duas vezes com o PUT em voo', () => {
+      const comp = criarCarregado();
+      apiPut.mockReturnValue(new Subject<any>());
+      comp.abrirNoDia(dia(comp, 1), clique());
+      comp.escolher(comp.opcoes()[1]);
+
+      comp.confirmar();
+      comp.confirmar();
+
+      expect(apiPut).toHaveBeenCalledTimes(1);
+    });
+
+    it('marcar uma ocorrência não tira o admin da página em que ele está', () => {
+      // A recarga da gravação traz a MESMA lista de funcionários; só a troca de categoria/mês
+      // muda a lista e justifica voltar para a primeira página.
+      respostas.grade = () => of({ data: { ...payloadGrade(9), celulas: {} } });
+      const comp = criarCarregado();
+      comp.paginaSeguinte();
+      expect(comp.pagina()).toBe(1);
+
+      comp.abrirNaCelula(funcionario(comp, 'op-9'), dia(comp, 1), clique());
+      comp.escolher(comp.opcoes()[1]);
+
+      expect(apiPut).toHaveBeenCalledTimes(1);
+      expect(comp.pagina()).toBe(1);
+    });
+
+    it('a resposta ATRASADA de uma carga anterior não sobrescreve a grade mais nova', () => {
+      // Duas cargas em voo deixaram de ser exceção: toda gravação bem-sucedida dispara uma.
+      const lenta = new Subject<any>();
+      respostas.grade = () => lenta;
+      const comp = criarCarregado();
+
+      respostas.grade = () => of({ data: payloadGrade(5) });
+      comp.onMesAno({ ano: 2026, mes: 8 });          // a 2ª carga responde na hora
+      expect(comp.funcionarios()).toHaveLength(5);
+
+      lenta.next({ data: payloadGrade(3) });          // a 1ª chega atrasada
+      expect(comp.funcionarios()).toHaveLength(5);    // e é descartada
+    });
+
+    it('o catálogo que falhou é tentado de novo na próxima carga da grade (não é beco sem saída)', () => {
+      respostas.tipos = falha('500');
+      const comp = criarCarregado();
+      expect(comp.catalogoErro()).toBe(true);
+      expect(chamadasDe('tipos')).toBe(1);
+
+      respostas.tipos = () => of({ data: { tipos: structuredClone(TIPOS) } });
+      comp.onMesAno({ ano: 2026, mes: 8 });
+
+      expect(chamadasDe('tipos')).toBe(2);
+      expect(comp.catalogoErro()).toBe(false);
+      comp.abrirNoDia(dia(comp, 1), clique());
+      expect(rotulos(comp)).toEqual(['Nenhuma', 'Feriado', 'Ponto Facultativo']);
+    });
+
+    it('com o catálogo saudável, trocar de mês não repete o GET de tipos', () => {
+      const comp = criarCarregado();
+      comp.onMesAno({ ano: 2026, mes: 8 });
+      comp.onCategoria(eventoSelect('tecnicos'));
+
+      expect(chamadasDe('tipos')).toBe(1);
+    });
+
+    it('a ação do dia marca o rótulo do dia enquanto grava', () => {
+      const comp = criarCarregado();
+      apiPut.mockReturnValue(new Subject<any>());
+      comp.abrirNoDia(dia(comp, 1), clique());
+      comp.escolher(comp.opcoes()[1]);
+
+      comp.confirmar();
+
+      expect(comp.salvandoEm()).toBe('dia|1');
+    });
+
+    it('a resposta que chega DEPOIS de trocar de mês não recarrega nem avisa nada', () => {
+      // O usuário clicou, mudou de mês e a resposta do PUT chegou atrasada: recarregar ali traria a
+      // grade de outro contexto, e um toast falaria de uma tela que não está mais na frente dele.
+      const comp = criarCarregado();
+      const emVoo = new Subject<any>();
+      apiPut.mockReturnValue(emVoo);
+      abrirCelula(comp, 'op-3', 1);
+      comp.escolher(comp.opcoes()[1]);
+
+      comp.onMesAno({ ano: 2026, mes: 8 });
+      const aposTroca = chamadasDe('grade');
+      emVoo.next({ ok: true });
+
+      expect(chamadasDe('grade')).toBe(aposTroca);   // a recarga da troca de mês já aconteceu
+      expect(toastError).not.toHaveBeenCalled();
+    });
+
+    it('o ERRO de uma gravação obsoleta não pinta toast na grade nova', () => {
+      const comp = criarCarregado();
+      const emVoo = new Subject<any>();
+      apiPut.mockReturnValue(emVoo);
+      abrirCelula(comp, 'op-3', 1);
+      comp.escolher(comp.opcoes()[1]);
+
+      comp.onCategoria(eventoSelect('tecnicos'));
+      emVoo.error({ error: { message: 'falhou' } });
+
+      expect(toastError).not.toHaveBeenCalled();
+    });
+
+    it('trocar de contexto destrava a célula e fecha o popover (nada preso em "salvando")', () => {
+      const comp = criarCarregado();
+      apiPut.mockReturnValue(new Subject<any>());
+      abrirCelula(comp, 'op-3', 1);
+      comp.escolher(comp.opcoes()[1]);
+
+      comp.onMesAno({ ano: 2026, mes: 8 });
+
+      expect(comp.salvandoEm()).toBeNull();
+      expect(comp.alvo()).toBeNull();
     });
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Configurar — o catálogo de tipos alterado repercute na grade
+  // Configurar — catálogo de tipos (modal do master)
   // ═══════════════════════════════════════════════════════════════════
   describe('Configurar — catálogo de tipos', () => {
-    it('abrir o Configurar não mexe no modal de Ocorrências nem carrega marcações', () => {
+    it('abrir o Configurar não dispara carga nenhuma', () => {
       const comp = criarCarregado();
+      const antes = { grade: chamadasDe('grade'), tipos: chamadasDe('tipos') };
+
       comp.abrirConfigurarTipos();
 
       expect(comp.configurarTiposAberto()).toBe(true);
-      expect(comp.configurarAberto()).toBe(false);
-      expect(chamadasDe('marcacoes')).toBe(0);
+      expect(chamadasDe('grade')).toBe(antes.grade);
+      expect(chamadasDe('tipos')).toBe(antes.tipos);
     });
 
-    it('o catálogo alterado recarrega a GRADE (excluir um tipo apaga as marcações feitas com ele)', () => {
+    it('o catálogo alterado recarrega a GRADE e a lista de tipos', () => {
+      // Excluir um tipo apaga as marcações feitas com ele (some da grade) e tira a opção do popover.
       const comp = criarCarregado();
-      const chamadasAntes = chamadasDe('grade');
+      const antes = { grade: chamadasDe('grade'), tipos: chamadasDe('tipos') };
 
       comp.onTiposAlterados();
 
-      expect(chamadasDe('grade')).toBe(chamadasAntes + 1);
-      expect(apiGet).toHaveBeenLastCalledWith('/api/admin/ponto/retificacoes/grade', {
+      expect(chamadasDe('grade')).toBe(antes.grade + 1);
+      expect(chamadasDe('tipos')).toBe(antes.tipos + 1);
+      expect(apiGet).toHaveBeenCalledWith('/api/admin/ponto/retificacoes/grade', {
         categoria: 'operadores', ano: 2026, mes: 7,
       });
     });
@@ -864,187 +928,17 @@ describe('GradeRetificacoesComponent', () => {
 
       comp.onTiposAlterados();
 
-      expect(apiGet).toHaveBeenLastCalledWith('/api/admin/ponto/retificacoes/grade', {
+      const ultimaGrade = apiGet.mock.calls.filter(c => rotaDe(c[0]) === 'grade').at(-1);
+      expect(ultimaGrade).toEqual(['/api/admin/ponto/retificacoes/grade', {
         categoria: 'administradores', ano: 2025, mes: 11,
-      });
+      }]);
     });
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // O modal de Ocorrências não reabre com o estado do mês/escopo anterior
+  // render — o que só existe no template (bindings de clique e popover)
   // ═══════════════════════════════════════════════════════════════════
-  describe('reabertura do modal de Ocorrências sem estado velho', () => {
-    /** Faz o GET das marcações falhar (catálogo e grade continuam respondendo normalmente). */
-    function marcacoesFalham(msg = 'Erro no servidor') {
-      respostas.marcacoes = falha(msg);
-    }
-
-    it('abrir em junho, fechar, ir para julho e reabrir com o GET FALHANDO: calendário vazio, erro visível, Aplicar travado', () => {
-      // O defeito: só o ramo de SUCESSO repovoava o modal (via aplicarEscopo). No erro, nada era
-      // limpo — o calendário de JULHO exibia as marcações de JUNHO, e o Aplicar monta o ISO com o mês
-      // CORRENTE: um clique mandava `remover: ['2026-07-05']` por causa de um feriado que era 05/06.
-      const comp = criarCarregado('2026-06-10T10:00:00-03:00');
-      comp.abrirConfigurar();
-      expect([...comp.marcacoesEscopo()]).toEqual([[9, 'tp-feriado']]);   // marcação de junho na tela
-      comp.fecharConfigurar();
-
-      comp.onMesAno({ ano: 2026, mes: 7 });   // o usuário vai para julho
-      marcacoesFalham();
-      comp.abrirConfigurar();
-
-      expect(comp.marcacoesEscopo().size).toBe(0);      // nada de junho sobrevive
-      expect(comp.erroConfig()).toBe('Erro no servidor');
-      expect(comp.configCarregado()).toBe(false);       // Aplicar travado
-      expect(comp.escopo()).toBe('todos');              // escopo e modo também voltam ao inicial
-      expect(comp.modo()).toBe('');                     // sem marcações carregadas, nenhum tipo fica ativo
-    });
-
-    it('o escopo PESSOAL escolhido antes não sobrevive à reabertura', () => {
-      const comp = criarComConfigurar();
-      comp.onEscopo(eventoSelect('op-1'));
-      expect(comp.escopo()).toBe('op-1');
-      expect(comp.modo()).toBe('tp-disposicao');
-      comp.fecharConfigurar();
-
-      marcacoesFalham();
-      comp.abrirConfigurar();
-
-      expect(comp.escopo()).toBe('todos');
-      expect(comp.modo()).toBe('');
-      expect(comp.marcacoesEscopo().size).toBe(0);
-    });
-
-    it('com a carga falhada, o Aplicar NÃO age nem que seja chamado à força (nenhum PUT fantasma)', () => {
-      marcacoesFalham();
-      const comp = criarCarregado();
-      comp.abrirConfigurar();
-      comp.modo.set('tp-feriado');               // os chips do catálogo estão na tela: o usuário
-      comp.onDiaConfig(new Date(2026, 6, 13));   // escolhe um tipo e até consegue clicar no dia
-
-      comp.aplicarConfig();
-
-      expect(apiPut).not.toHaveBeenCalled();
-      expect(comp.configurarAberto()).toBe(true);   // o modal não some fingindo que aplicou
-    });
-
-    it('a resposta OBSOLETA de uma abertura anterior não repovoa o modal (token de recência)', () => {
-      // abrir (GET lento) → fechar → trocar de mês → reabrir (GET rápido, OK) → a resposta VELHA chega.
-      const lenta = new Subject<any>();
-      respostas.marcacoes = () => lenta;
-      const comp = criarCarregado('2026-06-10T10:00:00-03:00');
-      comp.abrirConfigurar();          // 1ª carga (junho) — fica no ar
-      comp.fecharConfigurar();
-
-      comp.onMesAno({ ano: 2026, mes: 7 });
-      respostas.marcacoes = () => of({ data: { globais: [], pessoais: [] } });
-      comp.abrirConfigurar();          // 2ª carga (julho) — responde na hora: julho está VAZIO
-      expect(comp.marcacoesEscopo().size).toBe(0);
-
-      lenta.next({ data: structuredClone(MARCACOES) });   // a de junho chega atrasada
-
-      expect(comp.marcacoesEscopo().size).toBe(0);        // e é ignorada
-      expect(comp.configCarregado()).toBe(true);
-    });
-
-    it('o CATÁLOGO obsoleto de uma sessão morta não dispara o GET das marcações dela', () => {
-      const tiposLentos = new Subject<any>();
-      respostas.tipos = () => tiposLentos;
-      const comp = criarCarregado();
-      comp.abrirConfigurar();          // 1ª sessão: o catálogo fica no ar
-      comp.fecharConfigurar();
-
-      respostas.tipos = () => of({ data: { tipos: structuredClone(TIPOS) } });
-      comp.abrirConfigurar();          // 2ª sessão: carrega inteira
-      const marcacoesAte = chamadasDe('marcacoes');
-
-      tiposLentos.next({ data: { tipos: [] } });   // o catálogo velho responde agora
-
-      expect(chamadasDe('marcacoes')).toBe(marcacoesAte);   // sem 2º GET encadeado
-      expect(comp.tipos()).toHaveLength(5);                 // e sem esvaziar os chips da sessão viva
-    });
-
-    it('reabrir com um PUT em voo: o modal NÃO volta preso em "Aplicando..." — e a resposta velha não o fecha', () => {
-      // O reset esquecia `aplicandoConfig`, e o PUT não
-      // tinha token. Aplicar (PUT lento) → Cancelar → Ocorrências de novo devolvia um modal INÚTIL (botão
-      // travado em "Aplicando...") que a resposta velha depois FECHAVA sozinha — ou enchia de erro
-      // fantasma de uma ação que o usuário não repetiu nesta sessão.
-      const comp = criarComConfigurar();
-      comp.onDiaConfig(new Date(2026, 6, 13));
-      const putEmVoo = new Subject<any>();
-      apiPut.mockReturnValue(putEmVoo);
-
-      comp.aplicarConfig();
-      expect(comp.aplicandoConfig()).toBe(true);
-      comp.fecharConfigurar();          // o Cancelar não é bloqueado durante o PUT
-
-      apiPut.mockReturnValue(of({ ok: true }));
-      comp.abrirConfigurar();           // sessão NOVA
-
-      expect(comp.aplicandoConfig()).toBe(false);   // o Aplicar reabre utilizável
-      expect(comp.configCarregado()).toBe(true);
-
-      putEmVoo.next({ ok: true });                  // o PUT velho responde agora
-
-      expect(comp.configurarAberto()).toBe(true);   // e NÃO fecha o modal que o usuário acabou de abrir
-      expect(comp.erroConfig()).toBe('');
-    });
-
-    it('o ERRO de um PUT velho não pinta mensagem fantasma na sessão nova', () => {
-      const comp = criarComConfigurar();
-      comp.onDiaConfig(new Date(2026, 6, 13));
-      const putEmVoo = new Subject<any>();
-      apiPut.mockReturnValue(putEmVoo);
-      comp.aplicarConfig();
-      comp.fecharConfigurar();
-
-      comp.abrirConfigurar();
-      putEmVoo.error({ error: { message: 'Dia inválido' } });
-
-      expect(comp.erroConfig()).toBe('');
-      expect(comp.aplicandoConfig()).toBe(false);
-    });
-
-    it('o modal com a carga falhada oferece RETRY (não é beco sem saída) — e o retry o destrava', () => {
-      marcacoesFalham();
-      const comp = criarCarregado();
-      comp.abrirConfigurar();
-      expect(comp.configCarregado()).toBe(false);
-
-      respostas.marcacoes = () => of({ data: structuredClone(MARCACOES) });
-      comp.carregarMarcacoes();                      // é o que a caixa app-erro-carga dispara
-
-      expect(comp.erroConfig()).toBe('');
-      expect(comp.configCarregado()).toBe(true);
-      expect([...comp.marcacoesEscopo()]).toEqual([[9, 'tp-feriado']]);
-    });
-
-    it('a carga bem-sucedida destrava o Aplicar; o erro do PUT NÃO o trava de novo (retry legítimo)', () => {
-      const comp = criarComConfigurar();
-      expect(comp.configCarregado()).toBe(true);
-
-      comp.onDiaConfig(new Date(2026, 6, 13));
-      apiPut.mockReturnValue(throwError(() => ({ error: { message: 'Dia inválido' } })));
-      comp.aplicarConfig();
-
-      expect(comp.erroConfig()).toBe('Dia inválido');
-      expect(comp.configCarregado()).toBe(true);   // ← repetir o Aplicar é o retry
-
-      apiPut.mockReturnValue(of({ ok: true }));
-      comp.aplicarConfig();
-      expect(apiPut).toHaveBeenCalledTimes(2);
-      expect(comp.configurarAberto()).toBe(false);
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // RENDER — o que o usuário VÊ: a grade que não some e o
-  // Aplicar que não age sobre estado desconhecido
-  // ═══════════════════════════════════════════════════════════════════
-  describe('render — grade preservada no erro de download e gate do Aplicar', () => {
-    // Exceção deliberada ao GATE "só lógica": as duas correções SÓ existem no template — a grade que
-    // sobrevive (o primeiro @if) e o [disabled] do Aplicar. Sem render, apagar os bindings deixaria a
-    // suíte verde e devolveria os defeitos na pior forma.
-
+  describe('render — grade, popover e barra', () => {
     function renderizar(): ComponentFixture<GradeRetificacoesComponent> {
       vi.useFakeTimers({ toFake: ['Date'] });
       vi.setSystemTime(new Date('2026-07-12T10:00:00-03:00'));
@@ -1053,10 +947,17 @@ describe('GradeRetificacoesComponent', () => {
       return fixture;
     }
 
-    const btnAplicar = (f: ComponentFixture<GradeRetificacoesComponent>) =>
-      f.debugElement.queryAll(By.css('.modal-actions button'))
-        .find(b => (b.nativeElement as HTMLButtonElement).textContent?.trim().startsWith('Aplic'))
-        ?.nativeElement as HTMLButtonElement | undefined;
+    /** Célula (linha do dia, coluna do funcionário) como o usuário a vê. */
+    function celulaDe(f: ComponentFixture<GradeRetificacoesComponent>, diaIdx: number, colIdx: number): HTMLElement {
+      const linha = f.debugElement.queryAll(By.css('tbody tr'))[diaIdx + 1];   // +1: a linha "Folgas"
+      return linha.queryAll(By.css('td.cel'))[colIdx].nativeElement as HTMLElement;
+    }
+    const rotuloDia = (f: ComponentFixture<GradeRetificacoesComponent>, diaIdx: number) =>
+      f.debugElement.queryAll(By.css('tbody tr'))[diaIdx + 1].query(By.css('td.rot-dia')).nativeElement as HTMLElement;
+    const popover = (f: ComponentFixture<GradeRetificacoesComponent>) => f.debugElement.query(By.css('.popover'));
+    const itens = (f: ComponentFixture<GradeRetificacoesComponent>) =>
+      f.debugElement.queryAll(By.css('.popover .pop-item'))
+        .map(b => (b.nativeElement as HTMLElement).textContent?.trim());
 
     it('com o download falhando, a TABELA continua na tela e não há caixa de erro', () => {
       const fixture = renderizar();
@@ -1071,221 +972,216 @@ describe('GradeRetificacoesComponent', () => {
       expect(toastError).toHaveBeenCalledWith('Erro ao baixar a tabela.');
     });
 
-    it('reabertura com o GET falhando → calendário sem marcações, erro no modal e Aplicar DESABILITADO', () => {
+    it('o botão "Ocorrências" saiu da barra: a marcação é na própria grade', () => {
       const fixture = renderizar();
-      const comp = fixture.componentInstance;
+      const botoes = fixture.debugElement.queryAll(By.css('.barra button'))
+        .map(b => (b.nativeElement as HTMLButtonElement).textContent?.trim());
 
-      comp.abrirConfigurar();                 // 1ª abertura: OK (dia 9 marcado)
-      fixture.detectChanges();
-      expect(btnAplicar(fixture)!.disabled).toBe(false);
-      comp.fecharConfigurar();
-
-      respostas.marcacoes = falha('Erro interno do servidor');
-      comp.abrirConfigurar();                 // 2ª abertura: o GET falha
-      fixture.detectChanges();
-
-      expect(comp.marcacoesEscopo().size).toBe(0);
-      expect(fixture.debugElement.query(By.css('.modal-card .error-box'))!.nativeElement.textContent)
-        .toContain('Erro interno do servidor');
-      expect(btnAplicar(fixture)!.disabled).toBe(true);   // não age sobre estado desconhecido
+      expect(botoes).not.toContain('Ocorrências');
+      expect(botoes).toEqual(expect.arrayContaining(['Configurar', 'Baixar tabela']));
     });
 
-    it('o modal com a carga falhada mostra a caixa COM RETRY, e o clique nela recarrega e libera o Aplicar', () => {
+    it('clicar numa célula livre abre o popover ancorado, com a lista dos tipos individuais', () => {
       const fixture = renderizar();
-      const comp = fixture.componentInstance;
-      respostas.marcacoes = falha('Erro interno do servidor');
 
-      comp.abrirConfigurar();
+      celulaDe(fixture, 0, 2).click();   // dia 1, Operador 3 (vazia)
       fixture.detectChanges();
 
-      const caixa = fixture.debugElement.query(By.css('.modal-card .erro-carga'));
-      expect(caixa).not.toBeNull();                       // sem isto o modal seria um beco sem saída
-      expect(btnAplicar(fixture)!.disabled).toBe(true);
-
-      respostas.marcacoes = () => of({ data: structuredClone(MARCACOES) });
-      (caixa.query(By.css('button')).nativeElement as HTMLButtonElement).click();   // "Tentar novamente"
-      fixture.detectChanges();
-
-      expect(fixture.debugElement.query(By.css('.modal-card .erro-carga'))).toBeNull();
-      expect(btnAplicar(fixture)!.disabled).toBe(false);
+      expect(popover(fixture)).not.toBeNull();
+      expect(itens(fixture)).toEqual(['Nenhuma', 'À Disposição', 'Atestado', 'Férias']);
     });
 
-    it('o erro do CATÁLOGO também abre a caixa com retry (o modal nunca fica sem saída)', () => {
+    it('a opção já marcada aparece destacada na lista', () => {
       const fixture = renderizar();
-      const comp = fixture.componentInstance;
-      respostas.tipos = falha('Erro interno do servidor');
 
-      comp.abrirConfigurar();
+      celulaDe(fixture, 3, 0).click();   // dia 7, Operador 1 — "Atestado"
       fixture.detectChanges();
 
-      const caixa = fixture.debugElement.query(By.css('.modal-card .erro-carga'));
-      expect(caixa).not.toBeNull();
-      expect(btnAplicar(fixture)!.disabled).toBe(true);
-
-      respostas.tipos = () => of({ data: { tipos: structuredClone(TIPOS) } });
-      (caixa.query(By.css('button')).nativeElement as HTMLButtonElement).click();
-      fixture.detectChanges();
-
-      expect(fixture.debugElement.queryAll(By.css('.modal-card .chip')).length).toBeGreaterThan(0);
-      expect(btnAplicar(fixture)!.disabled).toBe(false);
-    });
-
-    it('enquanto a carga do modal está EM VOO, o Aplicar não está disponível (o modal ainda diz "Carregando marcações...")', () => {
-      const fixture = renderizar();
-      const emVoo = new Subject<any>();
-      respostas.marcacoes = () => emVoo;
-
-      fixture.componentInstance.abrirConfigurar();
-      fixture.detectChanges();
-
-      expect(fixture.componentInstance.configCarregado()).toBe(false);
-      expect(btnAplicar(fixture)).toBeUndefined();   // o botão nem existe: o modal está no ramo "carregando"
-
-      emVoo.next({ data: structuredClone(MARCACOES) });
-      fixture.detectChanges();
-      expect(btnAplicar(fixture)!.disabled).toBe(false);   // a carga bem-sucedida o libera
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // RENDER — os chips do modal saem do catálogo, e sem catálogo não há calendário
-  // ═══════════════════════════════════════════════════════════════════
-  describe('render — chips do catálogo e modal sem tipos', () => {
-    function renderizarAberto(): ComponentFixture<GradeRetificacoesComponent> {
-      vi.useFakeTimers({ toFake: ['Date'] });
-      vi.setSystemTime(new Date('2026-07-12T10:00:00-03:00'));
-      const fixture = TestBed.createComponent(GradeRetificacoesComponent);
-      fixture.detectChanges();
-      fixture.componentInstance.abrirConfigurar();
-      fixture.detectChanges();
-      return fixture;
-    }
-
-    const chips = (f: ComponentFixture<GradeRetificacoesComponent>) =>
-      f.debugElement.queryAll(By.css('.modal-card .modos .chip'))
+      const marcado = fixture.debugElement.queryAll(By.css('.popover .pop-item.atual'))
         .map(b => (b.nativeElement as HTMLElement).textContent?.trim());
-
-    it('os chips são os tipos do catálogo (nomes do backend) mais o "Limpar"', () => {
-      const fixture = renderizarAberto();
-      expect(chips(fixture)).toEqual(['Feriado', 'Ponto Facultativo', 'Limpar']);
+      expect(marcado).toEqual(['Atestado']);
     });
 
-    it('trocar para um funcionário troca os chips pelos tipos individuais', () => {
-      const fixture = renderizarAberto();
-      const sel = fixture.debugElement.query(By.css('.modal-card select[aria-label="Funcionário"]'))
-        .nativeElement as HTMLSelectElement;
-      sel.value = 'op-1';
-      sel.dispatchEvent(new Event('change'));
+    it('clicar no rótulo do dia e escolher um tipo mostra a confirmação, não a gravação', () => {
+      const fixture = renderizar();
+
+      rotuloDia(fixture, 0).click();
+      fixture.detectChanges();
+      (fixture.debugElement.queryAll(By.css('.popover .pop-item'))[1].nativeElement as HTMLElement).click();
       fixture.detectChanges();
 
-      expect(chips(fixture)).toEqual(['À Disposição', 'Atestado', 'Férias', 'Limpar']);
-    });
+      expect(fixture.debugElement.query(By.css('.popover .pop-pergunta')).nativeElement.textContent.trim())
+        .toBe('Aplicar "Feriado" para todos os funcionários?');
+      expect(apiPut).not.toHaveBeenCalled();
 
-    it('clicar num chip ativa aquele tipo (e o dia clicado no calendário recebe o badge dele)', () => {
-      const fixture = renderizarAberto();
-      const comp = fixture.componentInstance;
-      const chipFacultativo = fixture.debugElement.queryAll(By.css('.modal-card .modos .chip'))
-        .find(b => (b.nativeElement as HTMLElement).textContent?.trim() === 'Ponto Facultativo')!;
-
-      (chipFacultativo.nativeElement as HTMLButtonElement).click();
+      const confirmar = fixture.debugElement.queryAll(By.css('.popover .pop-acoes button'))
+        .find(b => (b.nativeElement as HTMLButtonElement).textContent?.trim() === 'Confirmar')!;
+      (confirmar.nativeElement as HTMLButtonElement).click();
       fixture.detectChanges();
 
-      expect(comp.modo()).toBe('tp-facultativo');
-      expect((chipFacultativo.nativeElement as HTMLElement).classList.contains('active')).toBe(true);
-
-      comp.onDiaConfig(new Date(2026, 6, 13));
-      expect(comp.estadoDiaConfig(new Date(2026, 6, 13))).toEqual({
-        selecionado: true, badge: 'PF', rotulo: 'Ponto Facultativo',
+      expect(apiPut).toHaveBeenCalledWith('/api/admin/ponto/marcacoes', {
+        globais: { aplicar: [{ data: '2026-07-01', tipo_id: 'tp-feriado' }] },
       });
     });
 
-    it('catálogo vazio: o modal diz "Nenhum tipo cadastrado" e não renderiza chips nem calendário', () => {
-      respostas.tipos = () => of({ data: { tipos: [] } });
-      const fixture = renderizarAberto();
-
-      expect((fixture.debugElement.query(By.css('.modal-card .empty-state'))!.nativeElement as HTMLElement)
-        .textContent?.trim()).toBe('Nenhum tipo cadastrado');
-      expect(fixture.debugElement.query(By.css('.modal-card .modos'))).toBeNull();
-      expect(fixture.debugElement.query(By.css('.modal-card app-mini-calendario'))).toBeNull();
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // RENDER — os textos da barra e do modal de Ocorrências
-  //
-  // O rebatismo Configurar→Ocorrências vive SÓ no template (os identificadores
-  // abrirConfigurar/configurarAberto não mudaram): sem render, os rótulos antigos —
-  // inclusive a label solta "Funcionário" e o parágrafo de instrução, removidos de
-  // propósito — poderiam voltar com a suíte verde. E o "Configurar" de hoje é OUTRO
-  // botão: o do catálogo de tipos, exclusivo do master.
-  // ═══════════════════════════════════════════════════════════════════
-  describe('render — textos do modal de Ocorrências', () => {
-    function renderizar(): ComponentFixture<GradeRetificacoesComponent> {
-      vi.useFakeTimers({ toFake: ['Date'] });
-      vi.setSystemTime(new Date('2026-07-12T10:00:00-03:00'));
-      const fixture = TestBed.createComponent(GradeRetificacoesComponent);
-      fixture.detectChanges();   // ngOnInit + render (as respostas do mock são síncronas)
-      return fixture;
-    }
-
-    /** Renderiza com o modal de Ocorrências já aberto (catálogo e marcações carregados na hora). */
-    function renderizarAberto(): ComponentFixture<GradeRetificacoesComponent> {
+    it('células bloqueadas e fim de semana ficam com aria-disabled e sem a marca de clicável', () => {
       const fixture = renderizar();
-      fixture.componentInstance.abrirConfigurar();
+
+      const horarios = celulaDe(fixture, 0, 0);       // dia 1, Operador 1
+      const livre = celulaDe(fixture, 0, 2);          // dia 1, Operador 3
+      const sobGeral = celulaDe(fixture, 2, 0);       // dia 6 (feriado), Operador 1
+      const fds = rotuloDia(fixture, 1);              // dia 4, sábado
+
+      expect(horarios.getAttribute('aria-disabled')).toBe('true');
+      expect(horarios.classList.contains('clicavel')).toBe(false);
+      expect(sobGeral.getAttribute('aria-disabled')).toBe('true');
+      expect(fds.getAttribute('aria-disabled')).toBe('true');
+      expect(livre.getAttribute('aria-disabled')).toBeNull();
+      expect(livre.classList.contains('clicavel')).toBe(true);
+    });
+
+    it('clicar numa célula bloqueada não abre popover nenhum', () => {
+      const fixture = renderizar();
+
+      celulaDe(fixture, 0, 0).click();   // horários
       fixture.detectChanges();
-      return fixture;
-    }
 
-    const botoesDaBarra = (f: ComponentFixture<GradeRetificacoesComponent>) =>
-      f.debugElement.queryAll(By.css('.barra button'))
-        .map(b => (b.nativeElement as HTMLButtonElement).textContent?.trim());
+      expect(popover(fixture)).toBeNull();
+    });
 
-    const botaoDaBarra = (f: ComponentFixture<GradeRetificacoesComponent>, texto: string) =>
-      f.debugElement.queryAll(By.css('.barra button'))
-        .find(b => (b.nativeElement as HTMLButtonElement).textContent?.trim() === texto)
-        ?.nativeElement as HTMLButtonElement | undefined;
-
-    it('a barra separa "Ocorrências" (marcações do mês) de "Configurar" (catálogo de tipos)', () => {
+    it('um clique REAL no documento fecha o popover; o clique que o abriu, não', () => {
+      // O handler está no document: sem o stopPropagation da abertura, o popover se fecharia sozinho.
       const fixture = renderizar();
-      const comp = fixture.componentInstance;
-      expect(botoesDaBarra(fixture)).toContain('Ocorrências');
 
-      botaoDaBarra(fixture, 'Ocorrências')!.click();
-      expect(comp.configurarAberto()).toBe(true);
-      expect(comp.configurarTiposAberto()).toBe(false);
-      comp.fecharConfigurar();
+      celulaDe(fixture, 0, 2).click();
+      fixture.detectChanges();
+      expect(popover(fixture)).not.toBeNull();
 
-      botaoDaBarra(fixture, 'Configurar')!.click();
-      expect(comp.configurarTiposAberto()).toBe(true);
-      expect(comp.configurarAberto()).toBe(false);
+      document.body.click();
+      fixture.detectChanges();
+      expect(popover(fixture)).toBeNull();
     });
 
-    it('o título do modal é "Ocorrências — <mês selecionado>"', () => {
-      const fixture = renderizarAberto();
-      expect((fixture.debugElement.query(By.css('.modal-title')).nativeElement as HTMLElement)
-        .textContent?.trim()).toBe('Ocorrências — Julho de 2026');
+    it('clicar DENTRO do popover não o fecha (a lista sobrevive à própria interação)', () => {
+      const fixture = renderizar();
+      celulaDe(fixture, 0, 2).click();
+      fixture.detectChanges();
+
+      (popover(fixture).nativeElement as HTMLElement).click();
+      fixture.detectChanges();
+
+      expect(popover(fixture)).not.toBeNull();
     });
 
-    it('o escopo global se chama "Todos os Funcionários" e o select carrega aria-label "Funcionário"', () => {
-      const fixture = renderizarAberto();
-      const sel = fixture.debugElement.query(By.css('.modal-card select[aria-label="Funcionário"]'));
-      expect(sel).not.toBeNull();
+    it('Esc de verdade (evento no documento) fecha o popover', () => {
+      const fixture = renderizar();
+      celulaDe(fixture, 0, 2).click();
+      fixture.detectChanges();
 
-      const opcaoTodos = (sel.nativeElement as HTMLSelectElement).options[0];
-      expect(opcaoTodos.value).toBe('todos');
-      expect(opcaoTodos.textContent?.trim()).toBe('Todos os Funcionários');
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      fixture.detectChanges();
+
+      expect(popover(fixture)).toBeNull();
     });
 
-    it('a label visível "Funcionário" e o parágrafo de instrução do calendário saíram do modal', () => {
-      const fixture = renderizarAberto();
-      // a orientação do select vive só no aria-label — nenhuma <label> sobrou no modal
-      expect(fixture.debugElement.queryAll(By.css('.modal-card label'))).toHaveLength(0);
-      expect(fixture.debugElement.query(By.css('.modal-card .legenda'))).toBeNull();
+    it('a lista abre ancorada na célula clicada (posição fixa vinda do retângulo dela)', () => {
+      const fixture = renderizar();
+      const celula = celulaDe(fixture, 0, 2);
+      celula.getBoundingClientRect = () => ({ left: 340, bottom: 210, top: 190 }) as DOMRect;
+
+      celula.click();
+      fixture.detectChanges();
+
+      const caixa = popover(fixture).nativeElement as HTMLElement;
+      expect(caixa.style.left).toBe('340px');
+      expect(caixa.style.top).toBe('210px');
+      expect(caixa.classList.contains('acima')).toBe(false);
+    });
+
+    it('sem espaço abaixo, a lista sobe: ancora no topo da célula e cresce para cima', () => {
+      const fixture = renderizar();
+      const celula = celulaDe(fixture, 0, 2);
+      // Célula colada no rodapé da janela do jsdom (768px de altura)
+      celula.getBoundingClientRect = () => ({ left: 340, bottom: 760, top: 740 }) as DOMRect;
+
+      celula.click();
+      fixture.detectChanges();
+
+      const caixa = popover(fixture).nativeElement as HTMLElement;
+      expect(caixa.style.top).toBe('740px');
+      expect(caixa.classList.contains('acima')).toBe(true);
+    });
+
+    it('célula colada na borda direita: a lista recua para caber na janela', () => {
+      const fixture = renderizar();
+      const celula = celulaDe(fixture, 0, 2);
+      celula.getBoundingClientRect = () => ({ left: 1000, bottom: 210, top: 190 }) as DOMRect;
+
+      celula.click();
+      fixture.detectChanges();
+
+      // jsdom: innerWidth 1024 → 1024 - 260 (largura máxima) - 8 (margem)
+      expect((popover(fixture).nativeElement as HTMLElement).style.left).toBe('756px');
+    });
+
+    it('a célula que está gravando mostra o indicador e a lista fica travada', () => {
+      const fixture = renderizar();
+      apiPut.mockReturnValue(new Subject<any>());
+
+      celulaDe(fixture, 0, 2).click();
+      fixture.detectChanges();
+      (fixture.debugElement.queryAll(By.css('.popover .pop-item'))[1].nativeElement as HTMLElement).click();
+      fixture.detectChanges();
+
+      expect(celulaDe(fixture, 0, 2).querySelector('.salvando')).not.toBeNull();
+      expect(fixture.componentInstance.salvandoEm()).toBe('op-3|1');
+    });
+
+    it('a ação do dia em voo marca o rótulo do dia e desabilita o Confirmar', () => {
+      const fixture = renderizar();
+      apiPut.mockReturnValue(new Subject<any>());
+
+      rotuloDia(fixture, 0).click();
+      fixture.detectChanges();
+      (fixture.debugElement.queryAll(By.css('.popover .pop-item'))[1].nativeElement as HTMLElement).click();
+      fixture.detectChanges();
+
+      const confirmar = fixture.debugElement.queryAll(By.css('.popover .pop-acoes button'))
+        .find(b => (b.nativeElement as HTMLButtonElement).textContent?.trim() === 'Confirmar')!
+        .nativeElement as HTMLButtonElement;
+      confirmar.click();
+      fixture.detectChanges();
+
+      expect(rotuloDia(fixture, 0).querySelector('.salvando')).not.toBeNull();
+      expect(confirmar.disabled).toBe(true);
+    });
+
+    it('sem tipo no escopo, o popover explica em vez de mostrar uma lista só com "Nenhuma"', () => {
+      respostas.tipos = () => of({ data: { tipos: [] } });
+      const fixture = renderizar();
+
+      celulaDe(fixture, 0, 2).click();
+      fixture.detectChanges();
+
+      expect(itens(fixture)).toEqual([]);
+      expect(fixture.debugElement.query(By.css('.popover .pop-vazio')).nativeElement.textContent.trim())
+        .toBe('Nenhum tipo cadastrado');
+    });
+
+    it('catálogo que falhou não se disfarça de catálogo vazio', () => {
+      respostas.tipos = falha('500');
+      const fixture = renderizar();
+
+      celulaDe(fixture, 0, 2).click();
+      fixture.detectChanges();
+
+      expect(fixture.debugElement.query(By.css('.popover .pop-vazio')).nativeElement.textContent.trim())
+        .toBe('Não foi possível carregar os tipos de ocorrência.');
     });
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // RENDER — o "Configurar" (catálogo) é do master, e o que ele altera volta à grade
+  // render — botão Configurar (só master) e o catálogo alterado
   // ═══════════════════════════════════════════════════════════════════
   describe('render — botão Configurar e o catálogo alterado', () => {
     function renderizar(): ComponentFixture<GradeRetificacoesComponent> {
@@ -1309,8 +1205,17 @@ describe('GradeRetificacoesComponent', () => {
       const fixture = renderizar();
 
       expect(botoesDaBarra(fixture)).not.toContain('Configurar');
-      expect(botoesDaBarra(fixture)).toContain('Ocorrências');   // as marcações seguem acessíveis
+      expect(botoesDaBarra(fixture)).toContain('Baixar tabela');
       expect(fixture.debugElement.query(By.directive(ConfigurarTiposMarcacaoComponent))).toBeNull();
+    });
+
+    it('o admin comum marca ocorrências normalmente (o catálogo é dele também)', () => {
+      // Cadastrar TIPOS é do master; usar os tipos cadastrados é de qualquer admin.
+      return configurar(false).then(() => {
+        const comp = criarCarregado();
+        abrirCelula(comp, 'op-3', 1);
+        expect(comp.opcoes()).not.toEqual([]);
+      });
     });
 
     it('o modal do catálogo abre sem amarrar-se ao mês exibido e some ao emitir "fechar"', () => {
@@ -1347,12 +1252,15 @@ describe('GradeRetificacoesComponent', () => {
       fixture.detectChanges();
 
       expect(chamadasDe('grade')).toBe(chamadasAntes + 1);
-      expect(apiGet).toHaveBeenLastCalledWith('/api/admin/ponto/retificacoes/grade', {
+      expect(apiGet).toHaveBeenCalledWith('/api/admin/ponto/retificacoes/grade', {
         categoria: 'operadores', ano: 2026, mes: 7,
       });
     });
   });
 
+  // ═══════════════════════════════════════════════════════════════════
+  // render — o seletor da barra propaga o período mensal
+  // ═══════════════════════════════════════════════════════════════════
   describe('render — o seletor da barra propaga o período mensal', () => {
     function renderizar(hoje: string): ComponentFixture<GradeRetificacoesComponent> {
       vi.useFakeTimers({ toFake: ['Date'] });
@@ -1384,7 +1292,6 @@ describe('GradeRetificacoesComponent', () => {
       expect(apiGet).toHaveBeenCalledWith('/api/admin/ponto/retificacoes/grade', {
         categoria: 'operadores', ano: 2026, mes: 1,
       });
-      expect(comp.tituloMesAno()).toBe('Janeiro de 2026');
     });
 
     it('navegar até o teto futuro pede a grade e desabilita a seta seguinte', () => {
@@ -1403,7 +1310,6 @@ describe('GradeRetificacoesComponent', () => {
       expect(apiGet).toHaveBeenLastCalledWith('/api/admin/ponto/retificacoes/grade', {
         categoria: 'operadores', ano: 2026, mes: 9,
       });
-      expect(comp.tituloMesAno()).toBe('Setembro de 2026');
       expect(setaAvancar(fixture).disabled).toBe(true);
     });
   });

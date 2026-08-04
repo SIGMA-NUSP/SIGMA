@@ -1,12 +1,10 @@
-import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, HostListener, OnInit, computed, inject, signal } from '@angular/core';
 import { ApiService } from '../../core/services/api.service';
 import { AuthService } from '../../core/services/auth.service';
-import { erroCargaMsg, httpErrorMsg } from '../../core/helpers/http.helpers';
+import { httpErrorMsg } from '../../core/helpers/http.helpers';
 import { MESES } from '../../core/helpers/table.helpers';
 import { ConfigurarTiposMarcacaoComponent, TipoMarcacao } from './configurar-tipos-marcacao.component';
 import { MesAno, MesAnoSelectorComponent, anosNavegaveis } from './mes-ano-selector.component';
-import { DiaEstado, MiniCalendarioComponent } from './mini-calendario.component';
-import { ErroCargaComponent } from './erro-carga.component';
 import { ToastService } from './toast.component';
 
 /** Categoria exibida no combobox (B-3.1) — casa com o PESSOA_TIPO no backend. */
@@ -18,6 +16,8 @@ interface Celula {
   texto: string;
   tem_obs: boolean;
   obs?: string;
+  /** Tipo do catálogo por trás da ocorrência — ausente em horários e folga aprovada. */
+  tipo_id?: string;
 }
 interface DiaInfo {
   dia: number;
@@ -25,10 +25,10 @@ interface DiaInfo {
   dow: number;           // 1=segunda … 7=domingo
   fim_semana: boolean;
   marcacao_global: string | null;
+  /** Tipo da ocorrência geral do dia; preenchido = o dia inteiro está sob ela. */
+  marcacao_global_id: string | null;
 }
 interface Funcionario { id: string; nome: string; folgas: number; }
-/** Marcação de um dia como o backend a devolve: o tipo já vem descrito. */
-interface MarcacaoRaw { data: string; tipo_id: string; nome: string; badge: string; }
 interface GradeData {
   categoria: string;
   ano: number;
@@ -39,24 +39,47 @@ interface GradeData {
 }
 
 /**
+ * O que o popover de ocorrências está editando: o dia inteiro (vale para todos os
+ * funcionários) ou a célula de um funcionário. `atual` é o tipo já marcado ali — é
+ * ele que aparece selecionado ao abrir.
+ */
+interface AlvoOcorrencia {
+  escopo: 'dia' | 'pessoa';
+  dia: number;
+  data: string;
+  pessoaId: string | null;
+  atual: string | null;
+  x: number;
+  y: number;
+  /** Sem espaço abaixo, a lista sobe: `y` passa a ser o topo da célula e o popover cresce para cima. */
+  acima: boolean;
+}
+
+/** Opção do popover: "Nenhuma" (remove) ou um tipo do catálogo. */
+interface OpcaoOcorrencia { id: string | null; rotulo: string; }
+
+/**
  * Card admin "Retificações" (E10, B-2/B-3): grade mensal dia × funcionário. O
  * backend entrega o payload já com a precedência do §1 resolvida por célula
- * (horários → banco → marcação pessoa-dia → marcação global → vazia); aqui é só
- * apresentação. Paleta da referência 7.2.5: célula preenchida em dia útil =
+ * (horários → banco → ocorrência geral → ocorrência do funcionário → vazia); aqui é
+ * só apresentação. Paleta da referência 7.2.5: célula preenchida em dia útil =
  * amarelo + fonte vermelha, vazia = azul-claro, linha de fim de semana = cinza
  * (independentemente do conteúdo — B-3.4). 1ª coluna fixa (sticky — B-3.10,
  * gotcha 7) e paginação client-side de 8 colunas de funcionários (B-3.9/F#2).
  *
- * TODO(E10.3/Q1 — fora da v1): clicar numa célula para abrir/editar a
- * retificação daquele (funcionário, dia); edição de retificação existente.
+ * <p>As ocorrências são marcadas na própria grade: o rótulo do dia abre os tipos
+ * gerais (aplicam a todos, independentemente da paginação) e a célula de um
+ * funcionário abre os individuais. A escolha grava na hora.
+ *
+ * <p>Editar a RETIFICAÇÃO (os horários) pela célula ainda não existe — a célula de
+ * horários é só leitura, e o clique nela não abre nada.
  */
 @Component({
   selector: 'app-grade-retificacoes',
   standalone: true,
-  imports: [MesAnoSelectorComponent, MiniCalendarioComponent, ErroCargaComponent,
-            ConfigurarTiposMarcacaoComponent],
+  imports: [MesAnoSelectorComponent, ConfigurarTiposMarcacaoComponent],
   template: `
-    <!-- B-3.1: combobox categoria · seletor mês/ano · Ocorrências -->
+    <!-- B-3.1: combobox categoria · seletor mês/ano · catálogo · exportação -->
     <div class="barra">
       <select class="sel-cat" [value]="categoria()" (change)="onCategoria($event)" aria-label="Categoria">
         <option value="operadores">Operadores</option>
@@ -67,7 +90,6 @@ interface GradeData {
       <!-- O seletor compartilhado mantém a grade no range mensal válido do Ponto. -->
       <app-mes-ano-selector [anos]="anosSeletor" (mudou)="onMesAno($event)" />
 
-      <button type="button" class="btn-outline" (click)="abrirConfigurar()">Ocorrências</button>
       <!-- Cadastrar e excluir tipos é do admin master; esconder o botão não é a segurança (o backend recusa). -->
       @if (isMaster()) {
         <button type="button" class="btn-outline" (click)="abrirConfigurarTipos()">Configurar</button>
@@ -113,11 +135,22 @@ interface GradeData {
             <!-- B-3.3: uma linha por dia do mês; fim de semana pinta a linha inteira (B-3.4) -->
             @for (d of dias(); track d.dia) {
               <tr [class.fds]="d.fim_semana">
-                <td class="sticky-col rot-dia">{{ d.dia }}-{{ mesAbrev() }}</td>
+                @let diaAberto = diaClicavel(d);
+                <td class="sticky-col rot-dia" [class.clicavel]="diaAberto"
+                    [attr.aria-disabled]="diaAberto ? null : 'true'"
+                    [title]="diaAberto ? 'Ocorrência para todos os funcionários' : null"
+                    (click)="abrirNoDia(d, $event)">
+                  {{ d.dia }}-{{ mesAbrev() }}
+                  @if (salvandoEm() === chaveDia(d.dia)) { <span class="salvando" aria-label="Salvando"></span> }
+                </td>
                 @for (f of funcsPagina(); track f.id) {
                   @let c = celula(f.id, d.dia);
+                  @let celulaAberta = celulaClicavel(f.id, d);
                   <td class="cel" [class.preenchida]="!!c" [class.vazia]="!c" [class.tem-obs]="c?.tem_obs"
-                      [title]="c?.obs || null">
+                      [class.clicavel]="celulaAberta"
+                      [attr.aria-disabled]="celulaAberta ? null : 'true'"
+                      [title]="c?.obs || null"
+                      (click)="abrirNaCelula(f, d, $event)">
                     @if (c) {
                       @if (c.tipo === 'horarios') {
                         @for (linha of horariosLinhas(c.texto); track $index) { <span class="hl">{{ linha }}</span> }
@@ -126,6 +159,7 @@ interface GradeData {
                       }
                       @if (c.tem_obs) { <span class="marca-obs" aria-label="Possui observação"></span> }
                     }
+                    @if (salvandoEm() === chaveCelula(f.id, d.dia)) { <span class="salvando" aria-label="Salvando"></span> }
                   </td>
                 }
               </tr>
@@ -135,70 +169,30 @@ interface GradeData {
       </div>
     }
 
-    <!-- Modal "Ocorrências" — marcações globais/pessoa-dia -->
-    @if (configurarAberto()) {
-      <div class="modal-overlay" (click)="fecharConfigurar()">
-        <div class="modal-card card-custom" (click)="$event.stopPropagation()">
-          <h2 class="modal-title">Ocorrências — {{ tituloMesAno() }}</h2>
-
-          @if (carregandoConfig()) {
-            <p class="text-muted-sm">Carregando marcações...</p>
-          } @else {
-            <!-- Escopo: "Todos os Funcionários" (marcações globais) | um funcionário (pessoa-dia) -->
-            <div class="form-row">
-              <select [value]="escopo()" (change)="onEscopo($event)" aria-label="Funcionário">
-                <option value="todos">Todos os Funcionários</option>
-                @for (f of funcionarios(); track f.id) {
-                  <option [value]="f.id">{{ f.nome }}</option>
-                }
-              </select>
-            </div>
-
-            <!-- Modos: os tipos do catálogo no escopo escolhido, mais o "Limpar" -->
-            @if (modosDisponiveis().length === 0) {
-              <p class="empty-state">Nenhum tipo cadastrado</p>
-            } @else {
-              <div class="modos">
-                @for (m of modosDisponiveis(); track m.valor) {
-                  <button type="button" class="chip" [class.active]="modo() === m.valor" (click)="modo.set(m.valor)">{{ m.rotulo }}</button>
-                }
-              </div>
-
-              <!-- Calendário estendido do E4 (multi-seleção + badges por dia) -->
-              <div class="cfg-cal">
-                <app-mini-calendario
-                  [multiSelecao]="true"
-                  [estadoDia]="estadoDiaConfig"
-                  [valorSelecionado]="primeiroDiaMes()"
-                  [min]="primeiroDiaMes()"
-                  [max]="ultimoDiaMes()"
-                  (dataSelecionada)="onDiaConfig($event)" />
-              </div>
-            }
-
-            @if (erroConfig()) {
-              @if (configCarregado()) {
-                <!-- erro do APLICAR: o retry dele é repetir o Aplicar, que segue habilitado -->
-                <div class="error-box">{{ erroConfig() }}</div>
-              } @else {
-                <!-- erro da CARGA: com o Aplicar travado (F41), sem retry aqui o modal seria um beco
-                     sem saída — o usuário teria de adivinhar que fechar e reabrir recarrega. -->
-                <app-erro-carga [mensagem]="erroConfig()" (tentarNovamente)="carregarMarcacoes()" />
-              }
-            }
-
-            <div class="modal-actions" style="gap:8px">
-              <button type="button" class="btn-outline" (click)="fecharConfigurar()">Cancelar</button>
-              <!-- F41: sem a carga do modal bem-sucedida, o Aplicar não age — ele calcula um diff
-                   contra as marcações do mês, e um diff sobre estado desconhecido REMOVE dias que
-                   ninguém pediu para remover. (O erro do PUT NÃO desabilita: repetir é o retry.) -->
-              <button type="button" class="btn-primary-custom"
-                      [disabled]="aplicandoConfig() || !configCarregado()" (click)="aplicarConfig()">
-                {{ aplicandoConfig() ? 'Aplicando...' : 'Aplicar' }}
-              </button>
-            </div>
+    <!-- Ocorrências: lista ancorada na célula/rótulo clicado, gravando na escolha -->
+    @if (alvo(); as a) {
+      <div class="popover" [class.acima]="a.acima" [style.left.px]="a.x" [style.top.px]="a.y"
+           (click)="$event.stopPropagation()">
+        @if (confirmacao(); as cf) {
+          <!-- A ação do dia atinge todos os funcionários do mês: confirma antes de gravar -->
+          <p class="pop-pergunta">{{ cf.pergunta }}</p>
+          <div class="pop-acoes">
+            <button type="button" class="btn-outline" (click)="cancelarConfirmacao()">Cancelar</button>
+            <button type="button" class="btn-primary-custom" [disabled]="!!salvandoEm()" (click)="confirmar()">Confirmar</button>
+          </div>
+        } @else if (catalogoErro()) {
+          <p class="pop-vazio">Não foi possível carregar os tipos de ocorrência.</p>
+        } @else if (opcoes().length <= 1) {
+          <p class="pop-vazio">Nenhum tipo cadastrado</p>
+        } @else {
+          <p class="pop-titulo">{{ a.escopo === 'dia' ? 'Todos os funcionários' : nomeDoAlvo() }} · {{ a.dia }}-{{ mesAbrev() }}</p>
+          @for (o of opcoes(); track o.id) {
+            <button type="button" class="pop-item" [class.atual]="o.id === a.atual"
+                    [disabled]="!!salvandoEm()" (click)="escolher(o)">
+              {{ o.rotulo }}
+            </button>
           }
-        </div>
+        }
       </div>
     }
 
@@ -241,7 +235,7 @@ interface GradeData {
     thead .sticky-col { z-index: 3; }
     .corner { background: #FF0000; }
     .rot-folgas { background: #434343; color: #fff; font-weight: 600; text-align: left; }
-    .rot-dia { background: #DEEAF6; color: var(--text); font-weight: 500; text-align: left; }
+    .rot-dia { background: #DEEAF6; color: var(--text); font-weight: 500; text-align: left; position: relative; }
 
     .cel-folgas { background: #434343; color: #fff; font-weight: 600; }
 
@@ -250,11 +244,22 @@ interface GradeData {
     .cel.preenchida { background: #FFFF00; color: #FF0000; font-weight: 600; }
     .cel.vazia { background: #DEEAF6; }
 
+    /* Onde a ocorrência pode ser marcada: afordância discreta, sem competir com o conteúdo */
+    .clicavel { cursor: pointer; }
+    .clicavel:hover { outline: 2px solid var(--primary); outline-offset: -2px; }
+
     /* Marca de observação: triângulo vermelho no canto superior direito (B-3.7/Q25) */
     .marca-obs {
       position: absolute; top: 0; right: 0; width: 0; height: 0;
       border-top: 7px solid #b91c1c; border-left: 7px solid transparent;
     }
+
+    /* Gravação em voo naquela célula: enquanto ela existe, novos cliques ficam travados */
+    .salvando {
+      position: absolute; bottom: 1px; left: 1px; width: 6px; height: 6px;
+      border-radius: 50%; background: var(--primary); animation: pulsar 1s ease-in-out infinite;
+    }
+    @keyframes pulsar { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 
     /* B-3.4: fim de semana pinta a linha inteira de cinza, vencendo amarelo/azul-claro */
     tr.fds td { background: #434343 !important; color: #fff; }
@@ -272,14 +277,29 @@ interface GradeData {
     .nav-btn:hover:not(:disabled) { background: var(--row-hover); }
     .nav-btn:disabled { opacity: .35; cursor: default; }
 
-    /* Modal Ocorrências */
-    .modos { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
-    .chip {
-      border: 1px solid var(--border); background: #fff; border-radius: 999px;
-      padding: 5px 12px; font-size: .85rem; cursor: pointer; color: var(--text);
+    /* Popover de ocorrências: ancorado na célula, acima do sticky da 1ª coluna */
+    .popover {
+      position: fixed; z-index: 60; min-width: 180px; max-width: 260px;
+      max-height: 280px; overflow-y: auto;
+      background: #fff; border: 1px solid var(--border); border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .18); padding: 6px;
     }
-    .chip.active { background: var(--primary); color: #fff; border-color: var(--primary); }
-    .cfg-cal { display: flex; justify-content: center; margin: 6px 0; }
+    /* Ancorado no TOPO da célula quando não há espaço abaixo: a lista cresce para cima */
+    .popover.acima { transform: translateY(-100%); }
+    .pop-titulo {
+      margin: 2px 6px 6px; font-size: .78rem; color: var(--muted);
+      border-bottom: 1px solid var(--border); padding-bottom: 4px;
+    }
+    .pop-item {
+      display: block; width: 100%; text-align: left; border: 0; background: transparent;
+      padding: 7px 8px; border-radius: 6px; font-size: .88rem; color: var(--text); cursor: pointer;
+    }
+    .pop-item:hover:not(:disabled) { background: var(--row-hover); }
+    .pop-item.atual { background: var(--primary); color: #fff; font-weight: 600; }
+    .pop-item:disabled { opacity: .5; cursor: default; }
+    .pop-vazio { margin: 6px 8px; font-size: .85rem; color: var(--muted); }
+    .pop-pergunta { margin: 6px 8px; font-size: .88rem; color: var(--text); white-space: normal; }
+    .pop-acoes { display: flex; gap: 8px; justify-content: flex-end; padding: 4px 4px 2px; }
 
     @media (max-width: 640px) {
       .barra { gap: 8px; }
@@ -306,69 +326,38 @@ export class GradeRetificacoesComponent implements OnInit {
   erro = signal('');
   pagina = signal(0);
 
-  // ── Ocorrências: modal de marcações globais/pessoa-dia ──
-  configurarAberto = signal(false);
-  carregandoConfig = signal(false);
-  aplicandoConfig = signal(false);
-  erroConfig = signal('');
-  /**
-   * A carga do modal SUCEDEU para o mês/escopo exibido (F41). Gate do Aplicar: ele monta um diff
-   * (aplicar/remover) contra `marcacoesOriginal`, e um diff sobre estado que não veio do backend
-   * manda remoções fantasmas. Signal PRÓPRIO (e não `!erroConfig()`): o `erroConfig` também
-   * carrega o erro do PUT, e o Aplicar precisa continuar clicável nesse ramo — é o retry dele.
-   */
-  configCarregado = signal(false);
-  escopo = signal<string>('todos');                 // 'todos' (globais) | pessoaId (pessoa-dia)
-  modo = signal<string>('');                        // id do tipo ativo | '__limpar' | '' (sem tipo)
-  /** Catálogo de tipos: a fonte dos chips e dos rótulos do calendário. */
+  // ── Ocorrências na própria grade ─────────────────────────────
+
+  /** Catálogo de tipos: a fonte das opções do popover. Carregado com a grade, não a cada clique. */
   tipos = signal<TipoMarcacao[]>([]);
+  catalogoErro = signal(false);
   configurarTiposAberto = signal(false);
-  private globaisRaw = signal<MarcacaoRaw[]>([]);
-  private pessoaisRaw = signal<(MarcacaoRaw & { pessoa_id: string })[]>([]);
-  private marcacoesOriginal = signal<Map<number, string>>(new Map());
-  marcacoesEscopo = signal<Map<number, string>>(new Map());
-  /**
-   * Token da SESSÃO do modal (F61/idioma C8): incrementa a cada abertura e vale para as DUAS
-   * requisições do modal de Ocorrências — o GET das marcações e o PUT do Aplicar. Sem ele, a resposta de uma
-   * sessão anterior age sobre a sessão nova: a do GET repovoa o calendário com o mês abandonado; a
-   * do PUT **fecha o modal que o usuário acabou de abrir** (no `next`) ou pinta um erro fantasma de
-   * uma ação que ele não repetiu (no `error`).
-   */
-  private seqModal = 0;
 
-  primeiroDiaMes = computed(() => new Date(this.anoMes().ano, this.anoMes().mes - 1, 1));
-  ultimoDiaMes = computed(() => new Date(this.anoMes().ano, this.anoMes().mes, 0));
-  tituloMesAno = computed(() => `${MESES[this.anoMes().mes]} de ${this.anoMes().ano}`);
-
-  /** Escopo do catálogo correspondente ao seletor de funcionário do modal. */
-  private escopoDoCatalogo = computed(() => this.escopo() === 'todos' ? 'GLOBAL' : 'INDIVIDUAL');
-  private tiposDoEscopo = computed(() => this.tipos().filter(t => t.escopo === this.escopoDoCatalogo()));
+  /** Célula/rótulo com o popover aberto; nulo = nenhum. */
+  alvo = signal<AlvoOcorrencia | null>(null);
+  /** Ação coletiva aguardando confirmação dentro do próprio popover. */
+  confirmacao = signal<{ pergunta: string; opcao: OpcaoOcorrencia } | null>(null);
+  /** Chave da célula com gravação em voo — trava novos cliques e marca a célula. */
+  salvandoEm = signal<string | null>(null);
 
   /**
-   * Chips do modal: um por tipo do escopo, mais o "Limpar". Catálogo vazio para
-   * aquele escopo = nenhum chip (e nada aplicável).
+   * Contexto (categoria + mês) da grade exibida. A resposta de uma gravação feita no
+   * contexto anterior não pode agir sobre a tela nova: o usuário pode ter trocado de
+   * mês enquanto o PUT estava em voo, e recarregar/avisar ali seria sobre outra grade.
    */
-  modosDisponiveis = computed(() => {
-    const doEscopo = this.tiposDoEscopo();
-    if (doEscopo.length === 0) return [];
-    return [
-      ...doEscopo.map(t => ({ valor: t.id, rotulo: t.nome })),
-      { valor: MODO_LIMPAR, rotulo: 'Limpar' },
-    ];
+  private seqContexto = 0;
+
+  /** Escopo do catálogo correspondente ao que está sendo marcado. */
+  private tiposDoEscopo = computed(() => {
+    const escopo = this.alvo()?.escopo === 'dia' ? 'GLOBAL' : 'INDIVIDUAL';
+    return this.tipos().filter(t => t.escopo === escopo);
   });
 
-  /**
-   * Nome e badge por tipo. Vem do catálogo e, como reforço, das próprias
-   * marcações do mês — que já chegam descritas: um dia marcado nunca aparece sem
-   * rótulo, mesmo que o catálogo não tenha sido carregado.
-   */
-  private descricaoTipo = computed(() => {
-    const desc = new Map<string, { nome: string; badge: string }>();
-    for (const t of this.tipos()) desc.set(t.id, { nome: t.nome, badge: t.badge });
-    for (const m of [...this.globaisRaw(), ...this.pessoaisRaw()]) {
-      if (!desc.has(m.tipo_id)) desc.set(m.tipo_id, { nome: m.nome, badge: m.badge });
-    }
-    return desc;
+  /** Opções do popover: "Nenhuma" (que desmarca) primeiro, depois os tipos do escopo. */
+  opcoes = computed<OpcaoOcorrencia[]>(() => {
+    const doEscopo = this.tiposDoEscopo();
+    if (doEscopo.length === 0) return [];
+    return [{ id: null, rotulo: 'Nenhuma' }, ...doEscopo.map(t => ({ id: t.id, rotulo: t.nome }))];
   });
 
   funcionarios = computed(() => this.grade()?.funcionarios ?? []);
@@ -386,6 +375,7 @@ export class GradeRetificacoesComponent implements OnInit {
 
   ngOnInit(): void {
     this.carregar();
+    this.carregarCatalogo();
   }
 
   /** Célula (funcionário, dia) já resolvida pela precedência no backend; ausente = vazia. */
@@ -435,201 +425,184 @@ export class GradeRetificacoesComponent implements OnInit {
     });
   }
 
-  // ── Ocorrências ──────────────────────────────────────────────
-
-  /**
-   * Estado por-dia do calendário do modal de Ocorrências. Referência estável (arrow) que lê
-   * marcacoesEscopo/anoMes: esses signals são rastreados pelo computed do
-   * MiniCalendario, então (des)marcar um dia re-renderiza sem trocar a função.
-   */
-  readonly estadoDiaConfig = (d: Date): DiaEstado | null => {
-    const am = this.anoMes();
-    if (d.getFullYear() !== am.ano || d.getMonth() !== am.mes - 1) return { desabilitado: true };
-    const dow = d.getDay();
-    if (dow === 0 || dow === 6) return { desabilitado: true };   // fim de semana desabilitado (Alternativa 1)
-    const tipoId = this.marcacoesEscopo().get(d.getDate());
-    if (tipoId) {
-      const desc = this.descricaoTipo().get(tipoId);
-      return { selecionado: true, badge: desc?.badge ?? '', rotulo: desc?.nome ?? '' };
-    }
-    return null;
-  };
-
-  /**
-   * Abre o modal ZERANDO todo o estado antes de carregar (F41). Antes, só o ramo de SUCESSO da
-   * carga repovoava o calendário (via `aplicarEscopo`): abrir em junho, fechar, ir para julho e
-   * reabrir com o GET falhando deixava as marcações de JUNHO na tela — e o Aplicar montava o ISO
-   * com o mês CORRENTE, de modo que um feriado de 05/06 virava `remover: ['2026-07-05']`.
-   */
-  abrirConfigurar(): void {
-    this.seqModal++;                    // nova sessão: respostas (GET e PUT) da anterior morrem aqui
-    this.globaisRaw.set([]);
-    this.pessoaisRaw.set([]);
-    this.marcacoesOriginal.set(new Map());
-    this.marcacoesEscopo.set(new Map());
-    this.escopo.set('todos');
-    this.modo.set('');
-    this.configCarregado.set(false);
-    this.aplicandoConfig.set(false);    // senão o modal reabre com o Aplicar preso em "Aplicando..."
-    this.erroConfig.set('');
-    this.configurarAberto.set(true);
-    this.carregarMarcacoes();
-  }
-
-  fecharConfigurar(): void {
-    this.configurarAberto.set(false);
-  }
-
   abrirConfigurarTipos(): void {
     this.configurarTiposAberto.set(true);
   }
 
   /**
-   * O catálogo mudou: excluir um tipo levou as marcações dele junto, então a
-   * grade exibida precisa ser relida do servidor.
+   * O catálogo mudou: excluir um tipo levou as marcações dele junto, então tanto a
+   * grade exibida quanto a lista de tipos precisam ser relidas do servidor.
    */
   onTiposAlterados(): void {
     this.carregar();
+    this.carregarCatalogo();
   }
 
-  onEscopo(ev: Event): void {
-    const sel = ev.target as HTMLSelectElement;
-    const novo = sel.value;
-    if (novo === this.escopo()) return;
-    if (this.temMudancasPendentes() &&
-        !confirm('Há marcações não aplicadas. Trocar de funcionário vai descartá-las. Continuar?')) {
-      sel.value = this.escopo();
+  // ── Popover de ocorrências ───────────────────────────────────
+
+  /** Fim de semana não recebe ocorrência pela tela (o cinza da linha esconderia a marca). */
+  diaClicavel(d: DiaInfo): boolean {
+    return !d.fim_semana;
+  }
+
+  /**
+   * A célula do funcionário só aceita ocorrência quando não há nada que prevaleça
+   * sobre ela: fim de semana, horários de retificação, folga aprovada ou uma
+   * ocorrência geral no dia — nesses casos a marcação ficaria gravada e invisível.
+   */
+  celulaClicavel(pessoaId: string, d: DiaInfo): boolean {
+    if (d.fim_semana || d.marcacao_global_id) return false;
+    const tipo = this.celula(pessoaId, d.dia)?.tipo;
+    return tipo !== 'horarios' && tipo !== 'banco';
+  }
+
+  chaveDia(dia: number): string { return `dia|${dia}`; }
+  chaveCelula(pessoaId: string, dia: number): string { return `${pessoaId}|${dia}`; }
+
+  /** Nome do funcionário do popover aberto — cabeçalho da lista de opções. */
+  nomeDoAlvo(): string {
+    const id = this.alvo()?.pessoaId;
+    return this.funcionarios().find(f => f.id === id)?.nome ?? '';
+  }
+
+  abrirNoDia(d: DiaInfo, ev: MouseEvent): void {
+    if (!this.diaClicavel(d) || this.salvandoEm()) return;
+    this.abrir({
+      escopo: 'dia', dia: d.dia, data: d.data, pessoaId: null,
+      atual: d.marcacao_global_id, ...ancora(ev),
+    }, ev);
+  }
+
+  abrirNaCelula(f: Funcionario, d: DiaInfo, ev: MouseEvent): void {
+    if (!this.celulaClicavel(f.id, d) || this.salvandoEm()) return;
+    const c = this.celula(f.id, d.dia);
+    this.abrir({
+      escopo: 'pessoa', dia: d.dia, data: d.data, pessoaId: f.id,
+      atual: c?.tipo === 'marcacao_pessoa' ? c.tipo_id ?? null : null, ...ancora(ev),
+    }, ev);
+  }
+
+  private abrir(alvo: AlvoOcorrencia, ev: MouseEvent): void {
+    ev.stopPropagation();   // senão o mesmo clique chega ao document e fecha o que acabou de abrir
+    this.confirmacao.set(null);
+    this.alvo.set(alvo);
+  }
+
+  fecharPopover(): void {
+    this.alvo.set(null);
+    this.confirmacao.set(null);
+  }
+
+  @HostListener('document:click')
+  onCliqueFora(): void {
+    if (this.alvo()) this.fecharPopover();
+  }
+
+  @HostListener('document:keydown.escape')
+  onEscape(): void {
+    if (this.alvo()) this.fecharPopover();
+  }
+
+  /**
+   * Escolher uma opção grava na hora. A do DIA vale para todos os funcionários do mês
+   * (inclusive os das outras páginas), então passa por uma confirmação no próprio
+   * popover — tanto para aplicar quanto para remover, o alcance é o mesmo.
+   */
+  escolher(o: OpcaoOcorrencia): void {
+    const a = this.alvo();
+    if (!a || this.salvandoEm()) return;
+    if (o.id === a.atual) { this.fecharPopover(); return; }   // já é o estado da célula
+
+    if (a.escopo === 'dia') {
+      const nome = o.id ? o.rotulo : this.rotuloAtual(a);
+      this.confirmacao.set({
+        pergunta: o.id
+          ? `Aplicar "${nome}" para todos os funcionários?`
+          : `Remover "${nome}" de todos os funcionários?`,
+        opcao: o,
+      });
       return;
     }
-    this.aplicarEscopo(novo);
+    this.salvar(o);
   }
 
-  /** Aplica/remove o modo ativo no dia clicado (toggle: mesmo tipo → remove). */
-  onDiaConfig(d: Date): void {
-    const modo = this.modo();
-    if (!modo) return;                  // sem tipo no escopo, o clique no dia não tem o que aplicar
-    const dia = d.getDate();
-    const mapa = new Map(this.marcacoesEscopo());
-    if (modo === MODO_LIMPAR) mapa.delete(dia);
-    else if (mapa.get(dia) === modo) mapa.delete(dia);
-    else mapa.set(dia, modo);
-    this.marcacoesEscopo.set(mapa);
+  confirmar(): void {
+    const c = this.confirmacao();
+    if (c) this.salvar(c.opcao);
   }
 
-  /** Envia o diff (aplicar/remover) do escopo atual ao PUT do E6 e recarrega a grade. */
-  aplicarConfig(): void {
-    // F41: sem carga bem-sucedida não há diff possível. O botão já está desabilitado; este guard é a
-    // 2ª camada (lição do C9: o [disabled] do template não garante que o handler não roda).
-    if (!this.configCarregado()) return;
-    const orig = this.marcacoesOriginal();
-    const edit = this.marcacoesEscopo();
-    const { ano, mes } = this.anoMes();
-    const iso = (dia: number) => `${ano}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
-    const aplicar: { data: string; tipo_id: string }[] = [];
-    const remover: string[] = [];
-    for (const [dia, tipo] of edit) if (orig.get(dia) !== tipo) aplicar.push({ data: iso(dia), tipo_id: tipo });
-    for (const [dia] of orig) if (!edit.has(dia)) remover.push(iso(dia));
-    if (aplicar.length === 0 && remover.length === 0) { this.fecharConfigurar(); return; }
+  cancelarConfirmacao(): void {
+    this.confirmacao.set(null);
+  }
 
-    const body = this.escopo() === 'todos'
-      ? { globais: { aplicar, remover } }
-      : { pessoais: { pessoa_id: this.escopo(), pessoa_tipo: CATEGORIA_TIPO[this.categoria()], aplicar, remover } };
+  /** Nome do tipo hoje marcado no alvo — usado na pergunta da remoção coletiva. */
+  private rotuloAtual(a: AlvoOcorrencia): string {
+    return this.tipos().find(t => t.id === a.atual)?.nome ?? 'a ocorrência';
+  }
 
-    const seq = this.seqModal;   // a resposta só vale para ESTA sessão do modal
-    this.aplicandoConfig.set(true);
-    this.erroConfig.set('');
+  private salvar(o: OpcaoOcorrencia): void {
+    const a = this.alvo();
+    // A trava fica aqui, no único ponto que grava: o [disabled] do botão não impede o handler de rodar
+    // (duplo clique impaciente no "Confirmar" mandaria dois lotes).
+    if (!a || this.salvandoEm()) return;
+    const chave = a.escopo === 'dia' ? this.chaveDia(a.dia) : this.chaveCelula(a.pessoaId!, a.dia);
+    const body = a.escopo === 'dia' ? corpoGlobal(a.data, o.id)
+                                    : corpoPessoal(a.data, o.id, a.pessoaId!, CATEGORIA_TIPO[this.categoria()]);
+
+    const seq = this.seqContexto;
+    this.salvandoEm.set(chave);
     this.api.put('/api/admin/ponto/marcacoes', body).subscribe({
       next: () => {
-        if (seq !== this.seqModal) { this.carregar(); return; }   // o PUT gravou: a grade recarrega,
-        this.aplicandoConfig.set(false);                          // mas ele não fecha o modal novo
-        this.fecharConfigurar();
-        this.carregar();
+        if (seq !== this.seqContexto) return;   // outra grade está na tela: esta recarga não é dela
+        this.salvandoEm.set(null);
+        this.fecharPopover();
+        this.carregar(true);                    // mesma lista de funcionários: a página exibida fica
       },
       error: err => {
-        if (seq !== this.seqModal) return;   // nada de erro fantasma numa sessão que não pediu o PUT
-        this.aplicandoConfig.set(false);
-        this.erroConfig.set(httpErrorMsg(err, 'Erro ao aplicar as marcações.'));
+        if (seq !== this.seqContexto) return;
+        this.salvandoEm.set(null);
+        this.fecharPopover();
+        // Canal de AÇÃO: a grade continua na tela; o que falhou foi a gravação.
+        this.toast.error(httpErrorMsg(err, 'Erro ao salvar a ocorrência.'));
       },
     });
   }
 
-  /**
-   * Recarrega o catálogo e as marcações do modal — usada na abertura e no retry
-   * da caixa de erro. O catálogo vem primeiro: são os chips dele que dizem o que
-   * cada dia marcado significa.
-   */
-  carregarMarcacoes(): void {
-    const seq = this.seqModal;
-    this.carregandoConfig.set(true);
-    this.erroConfig.set('');
+  /** Tipos do catálogo, buscados junto da grade — o popover abre sem esperar rede. */
+  private carregarCatalogo(): void {
     this.api.get<any>('/api/admin/ponto/tipos-marcacao').subscribe({
-      next: res => {
-        if (seq !== this.seqModal) return;   // obsoleta: uma reabertura mais nova está em voo
-        this.tipos.set(res.data?.tipos ?? []);
-        this.carregarMarcacoesDoMes(seq);
-      },
-      error: err => {
-        if (seq !== this.seqModal) return;
-        this.carregandoConfig.set(false);
-        // Canal de CARGA: a caixa de erro traz o retry, e o guia da tela vem antes do detalhe do 500.
-        this.erroConfig.set(erroCargaMsg(err, 'Erro ao carregar os tipos de ocorrência.'));
-      },
-    });
-  }
-
-  private carregarMarcacoesDoMes(seq: number): void {
-    const { ano, mes } = this.anoMes();
-    this.api.get<any>('/api/admin/ponto/marcacoes', { ano, mes }).subscribe({
-      next: res => {
-        if (seq !== this.seqModal) return;    // obsoleta: uma reabertura mais nova está em voo
-        const d = res.data ?? {};
-        this.globaisRaw.set(d.globais ?? []);
-        this.pessoaisRaw.set(d.pessoais ?? []);
-        this.carregandoConfig.set(false);
-        this.aplicarEscopo('todos');
-        this.configCarregado.set(true);       // só agora o Aplicar sabe contra o que diferenciar
-      },
-      error: err => {
-        if (seq !== this.seqModal) return;
-        this.carregandoConfig.set(false);
-        this.erroConfig.set(httpErrorMsg(err, 'Erro ao carregar as marcações.'));
-      },
+      next: res => { this.tipos.set(res.data?.tipos ?? []); this.catalogoErro.set(false); },
+      error: () => { this.tipos.set([]); this.catalogoErro.set(true); },
     });
   }
 
   /**
-   * Popula o mapa dia→tipo do escopo (globais ou de uma pessoa) e ativa o
-   * primeiro tipo daquele escopo — sem nenhum cadastrado, o modal fica sem modo
-   * e sem calendário.
+   * Relê a grade do servidor. `preservarPagina` vale para a recarga que vem de uma gravação: a
+   * lista de funcionários é a mesma, e voltar para a primeira página tiraria o admin de onde ele
+   * está marcando. Trocar de categoria/mês, ao contrário, troca a lista inteira.
    */
-  private aplicarEscopo(novo: string): void {
-    this.escopo.set(novo);
-    const mapa = new Map<number, string>();
-    if (novo === 'todos') {
-      for (const g of this.globaisRaw()) mapa.set(diaDeIso(g.data), g.tipo_id);
-    } else {
-      for (const p of this.pessoaisRaw()) if (p.pessoa_id === novo) mapa.set(diaDeIso(p.data), p.tipo_id);
-    }
-    this.modo.set(this.tiposDoEscopo()[0]?.id ?? '');
-    this.marcacoesOriginal.set(new Map(mapa));
-    this.marcacoesEscopo.set(new Map(mapa));
-  }
-
-  private temMudancasPendentes(): boolean {
-    const o = this.marcacoesOriginal(), e = this.marcacoesEscopo();
-    if (o.size !== e.size) return true;
-    for (const [dia, tipo] of e) if (o.get(dia) !== tipo) return true;
-    return false;
-  }
-
-  private carregar(): void {
+  private carregar(preservarPagina = false): void {
     const { ano, mes } = this.anoMes();
+    const seq = ++this.seqContexto;   // daqui em diante, respostas anteriores (carga ou gravação) não valem
+    this.salvandoEm.set(null);
+    this.fecharPopover();
     this.carregando.set(true);
     this.erro.set('');
-    this.pagina.set(0);
+    if (!preservarPagina) this.pagina.set(0);
+    // O catálogo é de sessão, mas se ele falhou o popover fica sem opções: cada recarga tenta de novo.
+    if (this.catalogoErro()) this.carregarCatalogo();
     this.api.get<any>('/api/admin/ponto/retificacoes/grade', { categoria: this.categoria(), ano, mes }).subscribe({
-      next: res => { this.grade.set(res.data ?? null); this.carregando.set(false); },
-      error: err => { this.grade.set(null); this.carregando.set(false); this.erro.set(httpErrorMsg(err, 'Erro ao carregar a grade.')); },
+      next: res => {
+        if (seq !== this.seqContexto) return;   // uma carga mais nova está em voo: esta já é passado
+        this.grade.set(res.data ?? null);
+        this.carregando.set(false);
+      },
+      error: err => {
+        if (seq !== this.seqContexto) return;
+        this.grade.set(null);
+        this.carregando.set(false);
+        this.erro.set(httpErrorMsg(err, 'Erro ao carregar a grade.'));
+      },
     });
   }
 }
@@ -637,10 +610,43 @@ export class GradeRetificacoesComponent implements OnInit {
 /** Colunas de funcionários por página (B-3.9/F#2: 8 exatos = 1 página). */
 const PAGE_SIZE = 8;
 
-/** Chip que desmarca o dia, em vez de aplicar um tipo. */
-const MODO_LIMPAR = '__limpar';
 const CATEGORIA_TIPO: Record<Categoria, string> = {
   operadores: 'OPERADOR', tecnicos: 'TECNICO', administradores: 'ADMINISTRADOR',
 };
-/** Dia do mês (número) a partir de uma data ISO 'YYYY-MM-DD'. */
-function diaDeIso(data: string): number { return parseInt(data.slice(8, 10), 10); }
+
+/** Lote de um item só: aplicar o tipo no dia de todos, ou desmarcá-lo. */
+function corpoGlobal(data: string, tipoId: string | null): unknown {
+  return tipoId ? { globais: { aplicar: [{ data, tipo_id: tipoId }] } }
+                : { globais: { remover: [data] } };
+}
+
+/** Lote de um item só para um funcionário (o par pessoa_id/pessoa_tipo é polimórfico). */
+function corpoPessoal(data: string, tipoId: string | null, pessoaId: string, pessoaTipo: string): unknown {
+  const pessoa = { pessoa_id: pessoaId, pessoa_tipo: pessoaTipo };
+  return tipoId ? { pessoais: { ...pessoa, aplicar: [{ data, tipo_id: tipoId }] } }
+                : { pessoais: { ...pessoa, remover: [data] } };
+}
+
+/** Largura e altura máximas do popover — as mesmas do CSS, e o que permite o encaixe sem medir o DOM. */
+const POPOVER_LARGURA = 260;
+const POPOVER_ALTURA = 280;
+const MARGEM_TELA = 8;
+
+/**
+ * Onde o popover cabe a partir do elemento clicado, em coordenadas de viewport. Os últimos dias
+ * do mês ficam no rodapé da tela e as últimas colunas na borda direita: sem o encaixe, a lista
+ * abriria fora da janela. O cálculo é aritmético (a caixa tem tamanho máximo conhecido) — medir o
+ * elemento renderizado exigiria esperar o frame seguinte, e a lista já nasce no lugar certo.
+ */
+function ancora(ev: MouseEvent): { x: number; y: number; acima: boolean } {
+  const r = (ev.currentTarget as HTMLElement | null)?.getBoundingClientRect();
+  const esquerda = r?.left ?? 0, base = r?.bottom ?? 0, topo = r?.top ?? 0;
+  const limiteX = Math.max(MARGEM_TELA, window.innerWidth - POPOVER_LARGURA - MARGEM_TELA);
+  const espacoAbaixo = window.innerHeight - base;
+  const acima = espacoAbaixo < POPOVER_ALTURA && topo > espacoAbaixo;
+  return {
+    x: Math.round(Math.min(Math.max(esquerda, MARGEM_TELA), limiteX)),
+    y: Math.round(acima ? topo : base),
+    acima,
+  };
+}
