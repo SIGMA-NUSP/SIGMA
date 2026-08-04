@@ -602,13 +602,12 @@ public class AvisoService {
         ResolvedorNomes nomes = new ResolvedorNomes();
         List<AvisoAlvo> alvos = alvoRepo.findByCadastroId(id);
         m.put("alvos", alvos.stream().map(a -> alvoToMap(a, nomes)).toList());
-        // Carrega as ciências/vistos 1× (cadastro com ciência OU AGENDA) — reusadas por cientes/destinatarios/exibido.
+        // Carrega as ciências/vistos 1× — reusados por cientes/destinatarios/exibido. Todo cadastro tem
+        // registro: quem exige ciência guarda a ciência; quem não exige guarda o visto da exibição.
         boolean exigeCiencia = Boolean.TRUE.equals(cad.getExigeCiencia());
-        boolean temRegistro = exigeCiencia || cad.getTipo() == TipoAviso.AGENDA;
-        List<AvisoCiencia> ciencias = temRegistro ? cienciaRepo.findByCadastroIdOrderByCienteEm(id) : List.of();
-        m.put("cientes", exigeCiencia
-                ? ciencias.stream().map(c -> cienciaToMap(c, nomes)).toList()
-                : List.of());
+        List<AvisoCiencia> ciencias = cienciaRepo.findByCadastroIdOrderByCienteEm(id);
+        List<Map<String, Object>> registros = ciencias.stream().map(c -> cienciaToMap(c, nomes)).toList();
+        m.put("cientes", exigeCiencia ? registros : List.of());
         // Escala do aviso carregada 1× — alimenta o bloco 'escala', o status/expira calculados e os destinatários.
         EscalaSemanal esc = (cad.getTipo() == TipoAviso.ESCALA && cad.getEscalaId() != null)
                 ? escalaRepo.findById(cad.getEscalaId()).orElse(null) : null;
@@ -622,9 +621,8 @@ public class AvisoService {
             m.put("destinatarios", destinatariosEscala(cad, alvos, ciencias, nomes));
         else if (cad.getTipo() == TipoAviso.PESSOAL)
             m.put("destinatarios", destinatariosPessoal(alvos, ciencias, nomes));
-        // AGENDA: a lista de "visto" (reusa FRM_AVISO_CIENCIA) aparece como "Exibido para" (§6.3).
-        if (cad.getTipo() == TipoAviso.AGENDA)
-            m.put("exibido_para", ciencias.stream().map(c -> cienciaToMap(c, nomes)).toList());
+        // Sem ciência exigida: a lista de "visto" (reusa FRM_AVISO_CIENCIA) aparece como "Exibido para".
+        if (!exigeCiencia) m.put("exibido_para", registros);
         return m;
     }
 
@@ -822,9 +820,10 @@ public class AvisoService {
      * Avisos pendentes (sem sala) para a pessoa logada, dentre os TIPOS pedidos
      * (ex.: ESCALA/PESSOAL/GERAL em qualquer página; AGENDA nas telas de agenda).
      * Considera os alvos individuais do papel e os coletivos correspondentes.
-     * Cadastros que exigem ciência saem da lista quando a pessoa já deu ciência
-     * (e não é "manter após ciência"); os que não exigem são sempre retornados —
-     * o front os dispensa por sessão. Do mais antigo ao mais novo.
+     * Cadastros que exigem ciência saem da lista quando a pessoa já deu ciência;
+     * os que não exigem saem depois de exibidos uma vez (o visto que o front
+     * registra). Só o "manter após ciência" reaparece a cada login. Do mais antigo
+     * ao mais novo.
      */
     @Transactional
     public List<Map<String, Object>> buscarPendentes(String pessoaId, PapelPessoa papel, List<TipoAviso> tipos) {
@@ -870,12 +869,10 @@ public class AvisoService {
             TipoAviso tipo = TipoAviso.fromString((String) r[2]);
             SubtipoAviso subtipo = SubtipoAviso.fromString((String) r[3]);
             boolean exigeCiencia = ((Number) r[4]).intValue() == 1;
-            // Com ciência: se já ciente e não é "manter", já não está pendente.
-            if (exigeCiencia && !manter && temCiencia(cadastroId, null, pessoaId, papel)) continue;
-            // AGENDA: some depois que a pessoa a VÊ (visto persistente por usuário — reusa a tabela
-            // de ciência). Sem ciência e sem visto, o aviso segue sempre retornando: quem o dispensa
-            // por sessão é o front.
-            if (tipo == TipoAviso.AGENDA && temCiencia(cadastroId, null, pessoaId, papel)) continue;
+            // Um registro na tabela de ciência (a ciência de quem exige, o visto da exibição de quem
+            // não exige) tira o aviso da lista — para sempre, naquele usuário. A única exceção é o
+            // cadastro com ciência E "manter após ciência": esse reaparece a cada login.
+            if (!(exigeCiencia && manter) && temCiencia(cadastroId, null, pessoaId, papel)) continue;
             out.add(montarPayloadPendente(cadastroId, manter, tipo, subtipo, exigeCiencia));
         }
         return out;
@@ -904,17 +901,18 @@ public class AvisoService {
     }
 
     /**
-     * Registra o "visto" da pessoa num aviso de AGENDA (§6.2): grava na MESMA tabela de ciência
-     * ({@code FRM_AVISO_CIENCIA}, sem sala), com semântica de "exibido/visto 1× por usuário". Aceita
-     * SOMENTE tipo AGENDA (decisão 19 — GERAL continua com dispensa por sessão no front). Idempotente
-     * e tolerante a corrida como {@link #registrarCiencia}; aviso não-ATIVO é no-op silencioso.
+     * Registra o "visto" da pessoa numa comunicação SEM ciência exigida: grava na MESMA tabela de
+     * ciência ({@code FRM_AVISO_CIENCIA}, sem sala), com semântica de "exibido 1× por usuário" — é o
+     * que faz a comunicação não voltar nos próximos logins. Quem exige ciência tem o registro próprio
+     * ({@link #registrarCiencia}) e é recusado aqui. Idempotente e tolerante a corrida; aviso
+     * não-ATIVO é no-op silencioso.
      */
     @Transactional
     public void registrarVisto(String cadastroId, String pessoaId, PapelPessoa papel) {
         AvisoCadastro cad = cadastroRepo.findById(cadastroId).orElseThrow(() ->
                 new ServiceValidationException("Comunicação não encontrada.", HttpStatus.NOT_FOUND));
-        if (cad.getTipo() != TipoAviso.AGENDA)
-            throw new ServiceValidationException("Este tipo de aviso não registra visualização.");
+        if (Boolean.TRUE.equals(cad.getExigeCiencia()))
+            throw new ServiceValidationException("Esta comunicação não registra visualização.");
         if (cad.getStatus() != StatusAviso.ATIVO) return;      // desativado entre a exibição e o registro
         if (temCiencia(cadastroId, null, pessoaId, papel)) return;
 

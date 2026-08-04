@@ -361,7 +361,7 @@ class AvisoEscalaIT {
         }
 
         @Test
-        @DisplayName("escala cadastrada SEM ciência: o aviso continua aparecendo mesmo com registro na tabela, e 'manter' é zerado")
+        @DisplayName("escala cadastrada SEM ciência: o aviso some depois de exibido e 'manter' é zerado")
         void escalaSemCiencia() {
             Sala pleno = CenarioFactory.novaSala(emReal(), "Plenario02");
             Operador op = CenarioFactory.novoOperador(emReal());
@@ -375,11 +375,12 @@ class AvisoEscalaIT {
             assertFalse(cad.getManterAposCiencia(), "sem ciência, 'manter' é zerado mesmo pedido no payload");
             assertTrue(vePendente(op.getId(), id));
 
-            darCiencia(id, op.getId());
-            assertTrue(vePendente(op.getId(), id),
-                    "sem ciência exigida, o registro na tabela não tira o aviso da lista");
+            darCiencia(id, op.getId());   // "visto" gravado na exibição
+            assertFalse(vePendente(op.getId(), id), "exibido uma vez, não volta mais");
             assertTrue(((List<?>) service.obterDetalhe(id).get("cientes")).isEmpty(),
                     "sem ciência exigida, ninguém é 'ciente'");
+            assertEquals(1, ((List<?>) service.obterDetalhe(id).get("exibido_para")).size(),
+                    "quem viu aparece na lista de exibição");
         }
     }
 

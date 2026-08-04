@@ -12,8 +12,9 @@ import { AdminAvisoDetalheComponent } from './admin-aviso-detalhe.component';
  * Cobre: card por seção (Identificação/Vigência/Destino/Mensagens) e tabela que varia por tipo
  * (Verificação com Local e sem pendentes; Escala com Plenário, pendentes e "(fora da escala atual)";
  * Agenda com "Função"/"Exibido em"; Pessoal com "Função", pendentes e "(não é destinatário)"; Grupo
- * SEM tabela), a linha de resumo e a ordenação (pendentes → cientes → fora do público), o fallback de
- * subtipo nulo (legado) e a distinção erro ≠ não encontrado.
+ * com a lista de quem deu ciência ou de quem já viu), os rótulos "Ciência" vs "Exibido em" conforme a
+ * exigência do cadastro, a linha de resumo e a ordenação (pendentes → cientes → fora do público), o
+ * fallback de subtipo nulo (legado) e a distinção erro ≠ não encontrado.
  *
  * ApiService mockado por useValue (só o `get`); ActivatedRoute com o query param `id`; Router real
  * via provideRouter([]) porque o template usa RouterLink ("← Voltar").
@@ -192,16 +193,29 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     expect(linhas[2]).toContain('(não é destinatário)');
   });
 
-  // ═══ 5) Grupo (GERAL) — sem tabela ═══
-  it('Grupo (GERAL) sem ciência: mostra o coletivo, termina no card — sem tabela e sem "Manter após ciência"', async () => {
-    resposta = ok(grupo());
+  // ═══ 5) Grupo (GERAL) sem ciência — tabela de exibição ═══
+  it('Grupo (GERAL) sem ciência: mostra o coletivo, lista quem já viu em "Exibido em" e não tem "Manter após ciência"', async () => {
+    resposta = ok(grupo({
+      exibido_para: [
+        { nome: 'Ana', papel: 'Operador', sala_id: null, sala_nome: null, ciente_em: '2026-07-10T10:00:00' },
+        { nome: 'Beto', papel: 'Técnico', sala_id: null, sala_nome: null, ciente_em: '2026-07-10T11:00:00' },
+      ],
+    }));
     const f = await render();
 
     expect(texto(f)).toContain('Todos os operadores');
     expect(texto(f)).toContain('Exige ciência');
     expect(texto(f)).not.toContain('Manter após ciência');
-    expect(tabela(f)).toBeNull();
-    expect(f.debugElement.query(By.css('.tabela-ciencia'))).toBeNull();
+    expect(cabecalhos(f)).toEqual(['Destinatário', 'Função', 'Exibido em (data)', 'Exibido em (hora)']);
+    expect(resumo(f).nativeElement.textContent).toContain('Exibido para 2 pessoas');
+    expect(linhasTexto(f)[0]).toContain('Ana');
+    expect(linhasTexto(f)[0]).toContain('10:00');
+  });
+
+  it('Grupo (GERAL) sem ciência e ainda não exibido: tabela vazia diz "Ainda não exibido para ninguém."', async () => {
+    resposta = ok(grupo({ exibido_para: [] }));
+    const f = await render();
+    expect(linhasTexto(f)[0]).toContain('Ainda não exibido para ninguém.');
   });
 
   // ═══ 6) Ciência escolhida no cadastro ═══
@@ -247,33 +261,34 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
       expect(linhasTexto(f)[0]).toContain('Nenhuma ciência registrada.');
     });
 
-    it('Escala SEM ciência: destinatários continuam listados, mas sem colunas de data/hora, sem "Manter" e com resumo de público', async () => {
+    it('Escala SEM ciência: destinatários listados com "Exibido em", sem "Manter" e com resumo de exibição', async () => {
       const semCiencia = escala();
       semCiencia['exige_ciencia'] = false;
       semCiencia['manter_apos_ciencia'] = false;
       semCiencia['destinatarios'] = [
-        { nome: 'Ana', papel: 'Operador', plenarios: ['Plenário 2'], ciente_em: null },
+        { nome: 'Ana', papel: 'Operador', plenarios: ['Plenário 2'], ciente_em: '2026-07-15T08:00:00' },
         { nome: 'Carlos', papel: 'Operador', plenarios: ['Plenário 2'], ciente_em: null },
       ];
       resposta = ok(semCiencia);
       const f = await render();
 
       expect(texto(f)).not.toContain('Manter após ciência');
-      expect(cabecalhos(f)).toEqual(['Destinatário', 'Plenário']);   // sem Ciência (data)/(hora)
-      expect(resumo(f).nativeElement.textContent).toContain('2 destinatários');
+      expect(cabecalhos(f)).toEqual(['Destinatário', 'Plenário', 'Exibido em (data)', 'Exibido em (hora)']);
+      expect(resumo(f).nativeElement.textContent).toContain('Exibido para 1 de 2 destinatários');
       expect(linhasTexto(f)).toHaveLength(2);
-      expect(linhasTexto(f)[0]).toContain('Ana');
+      expect(linhasTexto(f)[0]).toContain('Carlos');   // ainda não viu → topo
+      expect(linhasTexto(f)[1]).toContain('08:00');    // quem viu traz a hora da exibição
     });
 
-    it('Pessoal SEM ciência: mesma regra — lista de destinatários sem coluna de ciência', async () => {
+    it('Pessoal SEM ciência: mesma regra — destinatários com a coluna "Exibido em"', async () => {
       const semCiencia = pessoal();
       semCiencia['exige_ciencia'] = false;
       semCiencia['destinatarios'] = [{ nome: 'Ana', papel: 'Operador', ciente_em: null }];
       resposta = ok(semCiencia);
       const f = await render();
 
-      expect(cabecalhos(f)).toEqual(['Destinatário', 'Função']);
-      expect(resumo(f).nativeElement.textContent).toContain('1 destinatário');
+      expect(cabecalhos(f)).toEqual(['Destinatário', 'Função', 'Exibido em (data)', 'Exibido em (hora)']);
+      expect(resumo(f).nativeElement.textContent).toContain('Exibido para 0 de 1 destinatário');
     });
   });
 

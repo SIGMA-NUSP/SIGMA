@@ -1075,10 +1075,10 @@ class AvisoServiceTest {
         }
     }
 
-    // ═══ registrarVisto — visto de AGENDA (só AGENDA, idempotente) ═══
+    // ═══ registrarVisto — visto das comunicações sem ciência (idempotente) ═══
 
     @Nested
-    @DisplayName("registrarVisto — visto persistente por usuário, exclusivo do AGENDA")
+    @DisplayName("registrarVisto — visto persistente por usuário nas comunicações sem ciência")
     class RegistrarVisto {
 
         @Test
@@ -1093,24 +1093,41 @@ class AvisoServiceTest {
         }
 
         @Test
-        @DisplayName("registrarVisto — tipo != AGENDA é rejeitado (GERAL, PESSOAL, VERIFICACAO e tipo nulo)")
-        void visto_soAgenda() {
+        @DisplayName("registrarVisto — cadastro que exige ciência é rejeitado, seja qual for o tipo (Escala, Pessoal, Verificação, Geral)")
+        void visto_recusaComCiencia() {
             when(cadastroRepo.findById(CADASTRO_ID))
-                    .thenReturn(Optional.of(cadastro(TipoAviso.GERAL, StatusAviso.ATIVO)))
-                    .thenReturn(Optional.of(cadastro(TipoAviso.PESSOAL, StatusAviso.ATIVO)))
-                    .thenReturn(Optional.of(cadastro(TipoAviso.VERIFICACAO, StatusAviso.ATIVO)))
-                    .thenReturn(Optional.of(cadastro(null, StatusAviso.ATIVO)));
+                    .thenReturn(Optional.of(cadastro(TipoAviso.ESCALA, StatusAviso.ATIVO, true)))
+                    .thenReturn(Optional.of(cadastro(TipoAviso.PESSOAL, StatusAviso.ATIVO, true)))
+                    .thenReturn(Optional.of(cadastro(TipoAviso.VERIFICACAO, StatusAviso.ATIVO, true)))
+                    .thenReturn(Optional.of(cadastro(TipoAviso.GERAL, StatusAviso.ATIVO, true)));
             for (int i = 0; i < 4; i++) {
                 ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                         () -> service.registrarVisto(CADASTRO_ID, OPERADOR_ID, PapelPessoa.OPERADOR));
-                assertEquals("Este tipo de aviso não registra visualização.", ex.getMessage());
+                assertEquals("Esta comunicação não registra visualização.", ex.getMessage());
                 assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             }
             verifyNoInteractions(cienciaRepo, cienciaWriter);
         }
 
         @Test
-        @DisplayName("registrarVisto — AGENDA não-ATIVO (desativado entre exibição e registro) é no-op silencioso")
+        @DisplayName("registrarVisto — o tipo não decide: GERAL, ESCALA e PESSOAL sem ciência gravam o visto como a AGENDA")
+        void visto_aceitaQualquerTipoSemCiencia() {
+            when(cadastroRepo.findById(CADASTRO_ID))
+                    .thenReturn(Optional.of(cadastro(TipoAviso.GERAL, StatusAviso.ATIVO, false)))
+                    .thenReturn(Optional.of(cadastro(TipoAviso.ESCALA, StatusAviso.ATIVO, false)))
+                    .thenReturn(Optional.of(cadastro(TipoAviso.PESSOAL, StatusAviso.ATIVO, false)))
+                    .thenReturn(Optional.of(cadastro(TipoAviso.AGENDA, StatusAviso.ATIVO, false)));
+            when(cienciaRepo.findByCadastroIdAndOperadorId(CADASTRO_ID, OPERADOR_ID)).thenReturn(Optional.empty());
+
+            for (int i = 0; i < 4; i++)
+                assertDoesNotThrow(() -> service.registrarVisto(CADASTRO_ID, OPERADOR_ID, PapelPessoa.OPERADOR));
+
+            verify(cienciaWriter, times(4)).inserir(argThat(c ->
+                    OPERADOR_ID.equals(c.getOperadorId()) && c.getSalaId() == null));
+        }
+
+        @Test
+        @DisplayName("registrarVisto — cadastro não-ATIVO (desativado entre exibição e registro) é no-op silencioso")
         void visto_naoAtivo() {
             when(cadastroRepo.findById(CADASTRO_ID)).thenReturn(Optional.of(cadastro(TipoAviso.AGENDA, StatusAviso.DESATIVADO)));
             assertDoesNotThrow(() -> service.registrarVisto(CADASTRO_ID, OPERADOR_ID, PapelPessoa.OPERADOR));
@@ -1591,9 +1608,10 @@ class AvisoServiceTest {
         }
 
         @Test
-        @DisplayName("buscarPendentes — GERAL não exige ciência: sempre retorna e nunca consulta FRM_AVISO_CIENCIA; o payload traz tipo, exige_ciencia e as mensagens ordenadas")
-        void buscarPendentes_geralSempreRetornaEShapeDoPayload() {
+        @DisplayName("buscarPendentes — GERAL sem ciência aparece enquanto não foi exibido; o payload traz tipo, exige_ciencia e as mensagens ordenadas")
+        void buscarPendentes_geralSemCienciaShapeDoPayload() {
             stubPendentes("al.OPERADOR_ID = ?", List.<Object[]>of(row("cad-geral", 0, TipoAviso.GERAL)));
+            when(cienciaRepo.findByCadastroIdAndOperadorId("cad-geral", OPERADOR_ID)).thenReturn(Optional.empty());
             when(mensagemRepo.findByCadastroIdOrderByOrdem("cad-geral"))
                     .thenReturn(List.of(mensagem(1, "Primeira"), mensagem(2, "Segunda")));
 
@@ -1615,7 +1633,8 @@ class AvisoServiceTest {
             assertEquals("Primeira", mensagens.get(0).get("texto"));
             assertEquals("Segunda", mensagens.get(1).get("texto"));
 
-            verifyNoInteractions(cienciaRepo);
+            // O registro do sem-ciência é o visto, cuja chave não tem sala.
+            verify(cienciaRepo, never()).findByCadastroIdAndSalaIdAndOperadorId(anyString(), anyInt(), anyString());
         }
 
         @Test
@@ -1640,21 +1659,43 @@ class AvisoServiceTest {
         }
 
         @Test
-        @DisplayName("buscarPendentes — Escala/Pessoal cadastrados SEM ciência seguem sempre retornando e nem consultam a tabela de ciência")
+        @DisplayName("buscarPendentes — Escala/Pessoal cadastrados SEM ciência: aparecem até serem exibidos e somem depois do visto")
         void buscarPendentes_escalaEPessoalSemCiencia() {
             stubPendentes("al.OPERADOR_ID = ?", List.of(
                     row("cad-escala", 0, TipoAviso.ESCALA, SubtipoAviso.ESCALA, 0),
                     row("cad-pessoal", 0, TipoAviso.PESSOAL, SubtipoAviso.PESSOAL, 0)));
+            when(cienciaRepo.findByCadastroIdAndOperadorId("cad-escala", OPERADOR_ID)).thenReturn(Optional.empty());
+            when(cienciaRepo.findByCadastroIdAndOperadorId("cad-pessoal", OPERADOR_ID)).thenReturn(Optional.of(new AvisoCiencia()));
             when(mensagemRepo.findByCadastroIdOrderByOrdem("cad-escala")).thenReturn(List.of(mensagem(1, "Escala publicada")));
-            when(mensagemRepo.findByCadastroIdOrderByOrdem("cad-pessoal")).thenReturn(List.of(mensagem(1, "Recado")));
 
             List<Map<String, Object>> out = service.buscarPendentes(OPERADOR_ID, PapelPessoa.OPERADOR,
                     List.of(TipoAviso.ESCALA, TipoAviso.PESSOAL));
 
-            assertEquals(2, out.size());
+            assertEquals(1, out.size(), "o já exibido não volta");
+            assertEquals("cad-escala", out.get(0).get("cadastro_id"));
             assertEquals(false, out.get(0).get("exige_ciencia"));
-            assertEquals(false, out.get(1).get("exige_ciencia"));
-            verifyNoInteractions(cienciaRepo);
+        }
+
+        @Test
+        @DisplayName("buscarPendentes — matriz por cadastro: sem ciência some depois de exibido, com ciência some depois da ciência, e só ciência+manter volta sempre")
+        void buscarPendentes_matrizDeReexibicao() {
+            stubPendentes("al.OPERADOR_ID = ?", List.of(
+                    row("sem-ciencia-exibido", 0, TipoAviso.GERAL, null, 0),
+                    row("sem-ciencia-novo", 0, TipoAviso.GERAL, null, 0),
+                    row("ciencia-ciente", 0, TipoAviso.PESSOAL, null, 1),
+                    row("ciencia-manter", 1, TipoAviso.PESSOAL, null, 1)));
+            when(cienciaRepo.findByCadastroIdAndOperadorId("sem-ciencia-exibido", OPERADOR_ID)).thenReturn(Optional.of(new AvisoCiencia()));
+            when(cienciaRepo.findByCadastroIdAndOperadorId("sem-ciencia-novo", OPERADOR_ID)).thenReturn(Optional.empty());
+            when(cienciaRepo.findByCadastroIdAndOperadorId("ciencia-ciente", OPERADOR_ID)).thenReturn(Optional.of(new AvisoCiencia()));
+            when(mensagemRepo.findByCadastroIdOrderByOrdem(anyString())).thenReturn(List.of(mensagem(1, "x")));
+
+            List<Map<String, Object>> out = service.buscarPendentes(OPERADOR_ID, PapelPessoa.OPERADOR,
+                    List.of(TipoAviso.GERAL, TipoAviso.PESSOAL));
+
+            assertEquals(List.of("sem-ciencia-novo", "ciencia-manter"),
+                    out.stream().map(m -> m.get("cadastro_id")).toList());
+            // "Manter após ciência" reaparece sem sequer consultar o registro.
+            verify(cienciaRepo, never()).findByCadastroIdAndOperadorId("ciencia-manter", OPERADOR_ID);
         }
 
         @Test

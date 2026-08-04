@@ -126,7 +126,7 @@ describe('AvisoPopupComponent', () => {
     expect(fixture.nativeElement.textContent).not.toContain('Aviso nº');
   });
 
-  // ── Visto de AGENDA na exibição (§6.2) ─────────────────────────
+  // ── Visto na exibição das comunicações sem ciência ─────────────
 
   it('AGENDA no topo dispara POST /visto na exibição — e só uma vez, mesmo recarregando', async () => {
     pendentes = [AGENDA];
@@ -156,12 +156,13 @@ describe('AvisoPopupComponent', () => {
     expect(titulo()).toBe('Comunicado — Agenda Legislativa');
   });
 
-  // ── GERAL sem ciência: dispensa por sessão, sem visto ──────────
+  // ── GERAL sem ciência: visto na exibição, como a Agenda ────────
 
-  it('GERAL não dispara visto; "Fechar" dispensa só na sessão e o aviso volta num novo componente', async () => {
+  it('GERAL sem ciência também dispara o visto na exibição; "Fechar" só tira a caixa da tela', async () => {
     pendentes = [GERAL];
     await montar();
-    expect(chamadasVisto().length).toBe(0);
+    expect(apiPost).toHaveBeenCalledWith('/api/avisos/ge1/visto', {});
+    expect(chamadasVisto().length).toBe(1);
     // sem ciência: botão Fechar, sem checkbox
     expect(fixture.nativeElement.querySelector('input[type="checkbox"]')).toBeNull();
 
@@ -170,14 +171,20 @@ describe('AvisoPopupComponent', () => {
     expect(comp.avisos().length).toBe(0);
     expect(fixture.nativeElement.querySelector('.modal-overlay')).toBeNull();
 
-    navegar('/home');                          // mesma sessão: continua dispensado
+    navegar('/home');                          // mesma sessão: continua fora da tela
     expect(comp.avisos().length).toBe(0);
+    expect(chamadasVisto().length).toBe(1);    // o visto não se repete
+  });
 
-    // "nova sessão" = novo componente (novo Set dispensados): o GERAL reaparece
+  it('quem segura o aviso sem ciência é o servidor: registrada a exibição, nem um novo login o traz de volta', async () => {
+    pendentes = [GERAL];
+    await montar();
+    expect(chamadasVisto().length).toBe(1);
+
+    pendentes = [];   // o backend passa a filtrar o cadastro já exibido para esta pessoa
     const fixture2 = TestBed.createComponent(AvisoPopupComponent);
     fixture2.detectChanges();
-    expect(fixture2.componentInstance.avisos()[0]?.cadastro_id).toBe('ge1');
-    expect(chamadasVisto().length).toBe(0);    // GERAL nunca registra visto
+    expect(fixture2.componentInstance.avisos().length).toBe(0);
     fixture2.destroy();
   });
 
@@ -210,16 +217,17 @@ describe('AvisoPopupComponent', () => {
     comp.confirmarCiencia(comp.avisos()[0]);
 
     expect(apiPost).toHaveBeenCalledWith('/api/avisos/ge1/ciencia', {});
-    expect(chamadasVisto().length).toBe(0);   // só AGENDA registra visto
+    expect(chamadasVisto().length).toBe(0);   // com ciência exigida não há visto a registrar
   });
 
-  it('o tipo não decide o botão: PESSOAL sem ciência no payload só oferece "Fechar"', async () => {
+  it('o tipo não decide o botão nem o visto: PESSOAL sem ciência oferece "Fechar" e registra a exibição', async () => {
     pendentes = [{ ...PESSOAL_LEGADO, exige_ciencia: false }];
     await montar();
 
     expect(fixture.nativeElement.querySelector('input[type="checkbox"]')).toBeNull();
     expect(fixture.nativeElement.querySelector('.btn-primary-custom').textContent).toContain('Fechar');
-    expect(chamadasVisto().length).toBe(0);
+    expect(apiPost).toHaveBeenCalledWith('/api/avisos/pe1/visto', {});
+    expect(chamadasVisto().length).toBe(1);
   });
 
   // ── "Manter após ciência": 1× por sessão de login (sessionStorage) ──

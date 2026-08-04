@@ -157,7 +157,7 @@ public class AvisoController {
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
-    /** "Visto" de um aviso de AGENDA (sem sala) pelo usuário logado — registrado na exibição (§6.2). */
+    /** "Visto" (sem sala) de uma comunicação sem ciência exigida — registrado na exibição para o usuário logado. */
     @PostMapping("/api/avisos/{cadastroId}/visto")
     public ResponseEntity<?> registrarVisto(
             @PathVariable("cadastroId") String cadastroId,

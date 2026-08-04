@@ -36,10 +36,9 @@ const POLL_MS = 60_000;
  *    ciência", o servidor continua devolvendo o aviso — a exibição é segurada por
  *    sessão de LOGIN (sessionStorage, sobrevive a F5; o AuthService limpa a chave no
  *    login) → o aviso confirmado só volta no próximo login;
- *  - sem ciência: botão "Fechar" → dispensa só nesta sessão. AGENDA, além disso,
- *    registra o "visto" no servidor NA EXIBIÇÃO (1× por aviso, fire-and-forget) — o
- *    backend passa a filtrá-lo para o usuário em qualquer sessão; os demais sem
- *    ciência ficam só com a dispensa em memória e voltam no próximo login.
+ *  - sem ciência: o "visto" é registrado no servidor NA EXIBIÇÃO (1× por aviso,
+ *    fire-and-forget) — o backend deixa de devolvê-lo para o usuário em qualquer
+ *    sessão; o botão "Fechar" só tira a caixa da tela.
  * AGENDA só é consultado nas rotas de Agenda Legislativa.
  */
 @Component({
@@ -97,9 +96,12 @@ export class AvisoPopupComponent implements OnInit, OnDestroy {
   enviando = signal(false);
 
   private subs = new Subscription();
-  /** Avisos sem ciência dispensados nesta sessão (memória; reaparecem no próximo login). */
+  /**
+   * Avisos sem ciência fechados nesta sessão. Quem os tira de vez é o "visto" gravado no servidor;
+   * esta memória cobre a janela até a próxima consulta — e o caso em que o POST falhou.
+   */
   private dispensados = new Set<string>();
-  /** Avisos de AGENDA cujo "visto" já foi disparado nesta sessão (evita repetir o POST no polling/navegação). */
+  /** Avisos cujo "visto" já foi disparado nesta sessão (evita repetir o POST no polling/navegação). */
   private vistoDisparado = new Set<string>();
   /**
    * Avisos "manter após ciência" confirmados nesta sessão de LOGIN. O servidor
@@ -165,7 +167,7 @@ export class AvisoPopupComponent implements OnInit, OnDestroy {
   }
 
   fechar(a: AvisoPendente): void {
-    // Sem ciência a registrar: dispensa só nesta sessão (reaparece no próximo login).
+    // Sem ciência a registrar: o servidor já recebeu o "visto" na exibição — aqui só some da tela.
     this.dispensados.add(a.cadastro_id);
     this.remover(a.cadastro_id);
   }
@@ -177,14 +179,14 @@ export class AvisoPopupComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * AGENDA é "exibido no máximo 1× por usuário": no momento em que um aviso de AGENDA passa a ser
-   * exibido (vira o topo da fila), registra o "visto" no servidor — fire-and-forget, falha
+   * Comunicação sem ciência é "exibida no máximo 1× por usuário": no momento em que passa a ser
+   * exibida (vira o topo da fila), registra o "visto" no servidor — fire-and-forget, falha
    * silenciosa (o aviso é acessório; se o registro falhar, ele só reaparece noutra sessão). O Set
    * evita repetir o POST a cada polling/navegação enquanto o aviso segue na tela.
    */
   private marcarVistoTopo(): void {
     const topo = this.avisos()[0];
-    if (!topo || topo.tipo !== 'AGENDA' || this.vistoDisparado.has(topo.cadastro_id)) return;
+    if (!topo || topo.exige_ciencia || this.vistoDisparado.has(topo.cadastro_id)) return;
     this.vistoDisparado.add(topo.cadastro_id);
     this.api.post(`/api/avisos/${topo.cadastro_id}/visto`, {}).subscribe({
       next: () => { /* nada a fazer: o servidor já filtra este aviso nas próximas consultas */ },

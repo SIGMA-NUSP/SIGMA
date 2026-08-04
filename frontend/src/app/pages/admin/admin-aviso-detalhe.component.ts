@@ -11,7 +11,7 @@ type Detalhe = Record<string, any>;
 interface LinhaCiencia {
   nome: string;
   col2: string;               // Local (Verificação) / Plenário (Escala) / Função (Agenda, Pessoal, Grupo)
-  cienteEm: string | null;    // null = pendente (ainda não deu ciência)
+  cienteEm: string | null;    // null = pendente (ainda não deu ciência / ainda não viu)
   marcador: string;           // "(fora da escala atual)" / "(não é destinatário)" — vazio quando no público
 }
 
@@ -20,8 +20,8 @@ interface LinhaCiencia {
  * tabela "Comunicações Cadastradas" (query param `id`), consome GET /api/admin/avisos/{id}/detalhe.
  * O card de conteúdo (Identificação / Vigência / Destino / Mensagens) e a tabela de ciência/exibição
  * se adaptam ao TIPO; a categoria e o subtipo só mudam rótulos. A EXIGÊNCIA DE CIÊNCIA do cadastro
- * comanda o resto: sem ela, some o "manter após ciência" e as colunas de data/hora; o Grupo (GERAL)
- * só ganha tabela quando exige ciência, e nela cabem apenas os que já registraram.
+ * comanda o resto: com ela, a tabela registra quem deu ciência; sem ela, some o "manter após
+ * ciência" e a tabela passa a registrar para quem a comunicação já foi exibida.
  */
 @Component({
   selector: 'app-admin-aviso-detalhe',
@@ -184,7 +184,7 @@ interface LinhaCiencia {
         }
       </div>
 
-      <!-- Tabela de ciência/exibição — varia por tipo; Grupo (GERAL) não tem (termina no card) -->
+      <!-- Tabela de ciência/exibição — varia por tipo; todo cadastro tem data a registrar -->
       @if (temTabela()) {
         <section class="tabela-ciencia">
           @if (resumo()) { <p class="resumo">{{ resumo() }}</p> }
@@ -193,24 +193,19 @@ interface LinhaCiencia {
               <thead><tr>
                 <th>Destinatário</th>
                 <th>{{ colDois() }}</th>
-                <!-- Sem ciência não há data para registrar: a tabela vira só a lista de destinatários. -->
-                @if (colunasDeRegistro()) {
-                  <th>{{ colData() }}</th>
-                  <th>{{ colHora() }}</th>
-                }
+                <th>{{ colData() }}</th>
+                <th>{{ colHora() }}</th>
               </tr></thead>
               <tbody>
                 @for (l of linhas(); track $index) {
                   <tr [class.fora]="l.marcador">
                     <td>{{ l.nome }}@if (l.marcador) { <span class="marca">{{ l.marcador }}</span> }</td>
                     <td>{{ l.col2 }}</td>
-                    @if (colunasDeRegistro()) {
-                      <td>{{ l.cienteEm ? (l.cienteEm | fmtDate) : '—' }}</td>
-                      <td>{{ l.cienteEm ? hora(l.cienteEm) : '—' }}</td>
-                    }
+                    <td>{{ l.cienteEm ? (l.cienteEm | fmtDate) : '—' }}</td>
+                    <td>{{ l.cienteEm ? hora(l.cienteEm) : '—' }}</td>
                   </tr>
                 } @empty {
-                  <tr><td [attr.colspan]="colunasDeRegistro() ? 4 : 2" class="empty-state">{{ vazioMsg() }}</td></tr>
+                  <tr><td colspan="4" class="empty-state">{{ vazioMsg() }}</td></tr>
                 }
               </tbody>
             </table>
@@ -254,15 +249,17 @@ export class AdminAvisoDetalheComponent implements OnInit {
   d = signal<Detalhe | null>(null);
 
   tipo = computed<string | undefined>(() => this.d()?.['tipo']);
-  /** Escolha do cadastro (não do tipo) — comanda o "manter", as colunas de ciência e a tabela do Grupo. */
+  /** Escolha do cadastro (não do tipo) — comanda o "manter" e o que a tabela registra: ciência ou exibição. */
   exigeCiencia = computed<boolean>(() => !!this.d()?.['exige_ciencia']);
+  /** Carregado o cadastro, sempre há o que listar: destinatários, cientes ou quem já viu. */
+  temTabela = computed<boolean>(() => !!this.tipo());
   /**
-   * Grupo (GERAL) só ganha tabela quando exige ciência, e nela cabem apenas os que já registraram —
-   * o público é coletivo, não uma lista de pessoas. Os demais tipos sempre têm o que listar.
+   * Registros do cadastro: as ciências quando exigidas, os "vistos" da exibição quando não. É a
+   * tabela dos tipos de público coletivo/aberto (Verificação, Grupo, Agenda) — Escala e Pessoal
+   * listam os destinatários, que já trazem a data em cada linha.
    */
-  temTabela = computed<boolean>(() => !!this.tipo() && (this.tipo() !== 'GERAL' || this.exigeCiencia()));
-  /** Colunas de data/hora: só onde existe registro — ciência exigida ou o "visto" da Agenda. */
-  colunasDeRegistro = computed<boolean>(() => this.exigeCiencia() || this.tipo() === 'AGENDA');
+  private registros = computed<any[]>(() =>
+    (this.exigeCiencia() ? this.d()?.['cientes'] : this.d()?.['exibido_para']) ?? []);
 
   mensagens = computed<Detalhe[]>(() => this.d()?.['mensagens'] ?? []);
 
@@ -286,14 +283,14 @@ export class AdminAvisoDetalheComponent implements OnInit {
       default: return 'Função';   // AGENDA / PESSOAL
     }
   });
-  colData = computed<string>(() => this.tipo() === 'AGENDA' ? 'Exibido em (data)' : 'Ciência (data)');
-  colHora = computed<string>(() => this.tipo() === 'AGENDA' ? 'Exibido em (hora)' : 'Ciência (hora)');
+  // Sem ciência exigida, a data registrada é a da exibição — não a de uma confirmação.
+  colData = computed<string>(() => this.exigeCiencia() ? 'Ciência (data)' : 'Exibido em (data)');
+  colHora = computed<string>(() => this.exigeCiencia() ? 'Ciência (hora)' : 'Exibido em (hora)');
   vazioMsg = computed<string>(() => {
+    // Escala e Pessoal listam o público nominal: vazio é falta de destinatário, não de registro.
     switch (this.tipo()) {
-      case 'AGENDA': return 'Ainda não exibido para ninguém.';
-      // Público sem lista de pessoas: o vazio é "ninguém deu ciência", não "sem destinatários".
-      case 'VERIFICACAO': case 'GERAL': return 'Nenhuma ciência registrada.';
-      default: return 'Nenhum destinatário.';
+      case 'ESCALA': case 'PESSOAL': return 'Nenhum destinatário.';
+      default: return this.exigeCiencia() ? 'Nenhuma ciência registrada.' : 'Ainda não exibido para ninguém.';
     }
   });
 
@@ -304,18 +301,13 @@ export class AdminAvisoDetalheComponent implements OnInit {
     let raw: LinhaCiencia[];
     switch (this.tipo()) {
       case 'VERIFICACAO':
-        raw = (dd['cientes'] ?? []).map((c: any) => ({
+        raw = this.registros().map((c: any) => ({
           nome: c['nome'], col2: c['sala_nome'] ?? '—', cienteEm: c['ciente_em'], marcador: '',
         }));
         break;
-      // Grupo com ciência: só quem registrou — o público coletivo não é enumerável.
-      case 'GERAL':
-        raw = (dd['cientes'] ?? []).map((c: any) => ({
-          nome: c['nome'], col2: c['papel'], cienteEm: c['ciente_em'], marcador: '',
-        }));
-        break;
-      case 'AGENDA':
-        raw = (dd['exibido_para'] ?? []).map((c: any) => ({
+      // Público coletivo, não enumerável: a tabela é a lista de quem registrou (ciência ou exibição).
+      case 'GERAL': case 'AGENDA':
+        raw = this.registros().map((c: any) => ({
           nome: c['nome'], col2: c['papel'], cienteEm: c['ciente_em'], marcador: '',
         }));
         break;
@@ -351,22 +343,19 @@ export class AdminAvisoDetalheComponent implements OnInit {
   resumo = computed<string>(() => {
     const dd = this.d();
     if (!dd) return '';
-    if (this.tipo() === 'AGENDA') {
-      const n = (dd['exibido_para'] ?? []).length;
-      return `Exibido para ${n} ${n === 1 ? 'pessoa' : 'pessoas'}`;
-    }
     if (this.tipo() === 'ESCALA' || this.tipo() === 'PESSOAL') {
       const publico = (dd['destinatarios'] ?? []).filter((r: any) => !r['fora_do_publico']);
-      // Sem ciência não há o que contar: o resumo vira o tamanho do público.
-      if (!this.exigeCiencia())
-        return `${publico.length} ${publico.length === 1 ? 'destinatário' : 'destinatários'}`;
-      const cientes = publico.filter((r: any) => r['ciente_em']).length;
-      return `${cientes} de ${publico.length} deram ciência`;
+      const registrados = publico.filter((r: any) => r['ciente_em']).length;
+      return this.exigeCiencia()
+        ? `${registrados} de ${publico.length} deram ciência`
+        : `Exibido para ${registrados} de ${publico.length} ${publico.length === 1 ? 'destinatário' : 'destinatários'}`;
     }
-    // Grupo com ciência: quem deu, sem denominador (o público coletivo não tem tamanho conhecido).
-    if (this.tipo() === 'GERAL' && this.exigeCiencia()) {
-      const n = (dd['cientes'] ?? []).length;
-      return `${n} ${n === 1 ? 'pessoa deu' : 'pessoas deram'} ciência`;
+    // Público coletivo: conta quem registrou, sem denominador (o tamanho não é conhecido).
+    if (this.tipo() === 'GERAL' || this.tipo() === 'AGENDA') {
+      const n = this.registros().length;
+      return this.exigeCiencia()
+        ? `${n} ${n === 1 ? 'pessoa deu' : 'pessoas deram'} ciência`
+        : `Exibido para ${n} ${n === 1 ? 'pessoa' : 'pessoas'}`;
     }
     return '';   // Verificação: público aberto, sem denominador → sem resumo
   });

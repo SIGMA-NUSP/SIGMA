@@ -252,14 +252,19 @@ class AvisoAgendaPessoalIT {
         }
 
         @Test
-        @DisplayName("registrarVisto rejeita tipo que não é AGENDA (ex.: um grupo GERAL)")
-        void vistoSoAgenda() {
-            String idGeral = criarGrupo("TODOS_OPERADORES", "x");
+        @DisplayName("registrarVisto rejeita quem exige ciência (o registro dela é a ciência), e aceita o grupo sem ciência")
+        void vistoSoSemCiencia() {
+            String comCiencia = criarGrupo("TODOS_OPERADORES", true, "Leia e confirme");
+            String semCiencia = criarGrupo("TODOS_OPERADORES", false, "Só informativo");
             Operador op = CenarioFactory.novoOperador(emReal());
 
             var ex = assertThrows(ServiceValidationException.class,
-                    () -> service.registrarVisto(idGeral, op.getId(), PapelPessoa.OPERADOR));
-            assertEquals("Este tipo de aviso não registra visualização.", ex.getMessage());
+                    () -> service.registrarVisto(comCiencia, op.getId(), PapelPessoa.OPERADOR));
+            assertEquals("Esta comunicação não registra visualização.", ex.getMessage());
+
+            service.registrarVisto(semCiencia, op.getId(), PapelPessoa.OPERADOR);
+            assertFalse(vePendente(op.getId(), PapelPessoa.OPERADOR, TipoAviso.GERAL, semCiencia),
+                    "exibido uma vez, não volta mais");
         }
     }
 
@@ -284,14 +289,17 @@ class AvisoAgendaPessoalIT {
         }
 
         @Test
-        @DisplayName("GERAL não exige ciência: sempre retorna para o operador enquanto ativo (dispensa por sessão no front)")
-        void semCienciaSempreRetorna() {
+        @DisplayName("GERAL sem ciência: aparece 1× para o operador e some depois de exibido; outro operador segue vendo")
+        void semCienciaSomeAposExibicao() {
             Operador op = CenarioFactory.novoOperador(emReal());
+            Operador outro = CenarioFactory.novoOperador(emReal());
             String id = criarGrupo("TODOS_OPERADORES", "x");
             assertTrue(vePendente(op.getId(), PapelPessoa.OPERADOR, TipoAviso.GERAL, id));
-            // Mesmo com um registro na tabela de ciência, GERAL continua retornando (não filtra por visto).
-            darCiencia(id, PapelPessoa.OPERADOR, op.getId());
-            assertTrue(vePendente(op.getId(), PapelPessoa.OPERADOR, TipoAviso.GERAL, id));
+
+            darCiencia(id, PapelPessoa.OPERADOR, op.getId());   // "visto" gravado na exibição
+
+            assertFalse(vePendente(op.getId(), PapelPessoa.OPERADOR, TipoAviso.GERAL, id), "já foi exibido para ele");
+            assertTrue(vePendente(outro.getId(), PapelPessoa.OPERADOR, TipoAviso.GERAL, id), "para o outro, ainda não");
         }
 
         @Test
@@ -326,15 +334,24 @@ class AvisoAgendaPessoalIT {
         }
 
         @Test
-        @DisplayName("detalhe: GERAL não tem tabela — sem 'destinatarios' e 'cientes' vazio; subtipo/tipo_tabela do grupo")
-        void detalheGrupoSemTabela() {
+        @DisplayName("detalhe: GERAL sem ciência lista quem já viu em 'exibido_para' — sem 'destinatarios' e com 'cientes' vazio")
+        void detalheGrupoExibidoPara() {
+            Operador op = CenarioFactory.novoOperador(emReal());
             String id = criarGrupo("TODOS_OPERADORES", "Comunicado geral");
+            darCiencia(id, PapelPessoa.OPERADOR, op.getId());
+
             Map<String, Object> det = service.obterDetalhe(id);
             assertEquals("GRUPO_OPERADORES", det.get("subtipo"));
             assertEquals("COMUNICADO", det.get("categoria"));
             assertEquals("Operadores", det.get("tipo_tabela"));
             assertNull(det.get("destinatarios"), "GERAL não tem bloco de destinatários");
-            assertTrue(((List<?>) det.get("cientes")).isEmpty(), "GERAL não exige ciência");
+            assertTrue(((List<?>) det.get("cientes")).isEmpty(), "sem ciência exigida, ninguém é 'ciente'");
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> exibido = (List<Map<String, Object>>) det.get("exibido_para");
+            assertEquals(1, exibido.size());
+            assertEquals(op.getNomeCompleto(), exibido.get(0).get("nome"));
+            assertEquals("Operador", exibido.get(0).get("papel"));
         }
     }
 
@@ -412,7 +429,7 @@ class AvisoAgendaPessoalIT {
         }
 
         @Test
-        @DisplayName("cadastro SEM ciência: continua aparecendo mesmo com registro na tabela, o detalhe não lista cientes e os destinatários seguem visíveis")
+        @DisplayName("cadastro SEM ciência: some depois de exibido, o detalhe não lista cientes e os destinatários trazem a data da exibição")
         void pessoasSemCiencia() {
             Operador op = CenarioFactory.novoOperador(emReal());
             String id = criarPessoas(List.of(op.getId()), List.of(), List.of(), true, Boolean.FALSE,
@@ -422,9 +439,9 @@ class AvisoAgendaPessoalIT {
             assertFalse(cad.getManterAposCiencia(), "sem ciência, 'manter' é zerado mesmo pedido no payload");
             assertTrue(vePendente(op.getId(), PapelPessoa.OPERADOR, TipoAviso.PESSOAL, id));
 
-            darCiencia(id, PapelPessoa.OPERADOR, op.getId());
-            assertTrue(vePendente(op.getId(), PapelPessoa.OPERADOR, TipoAviso.PESSOAL, id),
-                    "sem ciência exigida, o registro na tabela não tira o aviso da lista");
+            darCiencia(id, PapelPessoa.OPERADOR, op.getId());   // "visto" gravado na exibição
+            assertFalse(vePendente(op.getId(), PapelPessoa.OPERADOR, TipoAviso.PESSOAL, id),
+                    "exibido uma vez, não volta mais");
 
             Map<String, Object> det = service.obterDetalhe(id);
             assertEquals(false, det.get("exige_ciencia"));
@@ -433,6 +450,10 @@ class AvisoAgendaPessoalIT {
             List<Map<String, Object>> dest = (List<Map<String, Object>>) det.get("destinatarios");
             assertEquals(1, dest.size(), "os destinatários continuam listados");
             assertEquals(op.getNomeCompleto(), dest.get(0).get("nome"));
+            assertNotNull(dest.get(0).get("ciente_em"), "a data de exibição alimenta o 'Exibido em' do destinatário");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> exibido = (List<Map<String, Object>>) det.get("exibido_para");
+            assertEquals(1, exibido.size(), "os vistos também vêm na lista de exibição");
         }
 
         @Test
