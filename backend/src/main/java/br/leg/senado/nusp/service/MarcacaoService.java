@@ -126,6 +126,7 @@ public class MarcacaoService {
             for (Object it : asList(pessoais.get("aplicar"), "pessoais.aplicar")) {
                 Map<String, Object> item = asItem(it, "pessoais.aplicar");
                 LocalDate data = parseData(item.get("data"));
+                exigirDiaSemMarcacaoGlobal(data);
                 PontoTipoMarcacao tipo = tipoDoEscopo(item.get("tipo_id"),
                         PontoTipoMarcacao.ESCOPO_INDIVIDUAL, "pessoal");
                 PontoPessoaMarcacao m = pessoaRepo
@@ -160,6 +161,23 @@ public class MarcacaoService {
             return LocalDate.parse(s);   // ISO YYYY-MM-DD (gotcha 4)
         } catch (Exception e) {
             throw new ServiceValidationException("Data inválida (use AAAA-MM-DD): " + s);
+        }
+    }
+
+    /**
+     * A marcação geral do dia vale para todos e prevalece sobre a individual: com ela no dia, marcar
+     * (ou trocar o tipo de) um funcionário gravaria uma ocorrência que a grade não mostraria de
+     * volta. A remoção segue livre — é o que limpa o que ficou escondido sob a geral.
+     *
+     * <p>A tela não oferece o clique nesses dias; a recusa aqui é para quando as duas pontas
+     * discordam — a geral entrou depois que o admin carregou a grade —, e por isso a mensagem manda
+     * recarregar.
+     */
+    private void exigirDiaSemMarcacaoGlobal(LocalDate data) {
+        if (diaRepo.findByData(data).isPresent()) {
+            throw new ServiceValidationException("O dia " + ReportConfig.fmtDate(data)
+                    + " tem uma ocorrência geral, que vale para todos os funcionários."
+                    + " Recarregue a tela e tente novamente.");
         }
     }
 

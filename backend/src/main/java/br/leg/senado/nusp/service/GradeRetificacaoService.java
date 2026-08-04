@@ -33,19 +33,19 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Grade mensal de retificações (E10, card admin "Retificações"): matriz
+ * Grade mensal de retificações (card admin "Retificações"): matriz
  * funcionários da categoria × dias do mês, com o conteúdo de cada célula já
- * resolvido pela precedência do §1 do plano — horários da retificação →
- * "Banco de horas" (folga APROVADA — Q13) → marcação pessoa-dia → marcação
- * global → vazia. Administradores lista só SERVIDOR_PUBLICO=0 (com folha —
- * Q26/Q38). Tudo em 4 consultas agregadas por range de mês (retificações,
+ * resolvido pela precedência de exibição — horários da retificação →
+ * "Banco de horas" (folga APROVADA) → ocorrência geral do dia → ocorrência do
+ * funcionário → vazia. Administradores lista só SERVIDOR_PUBLICO=0 (quem tem
+ * folha). Tudo em 4 consultas agregadas por range de mês (retificações,
  * folgas, marcações globais, marcações pessoais) + a lista de funcionários;
  * a precedência e a contagem "Folgas" são resolvidas em memória. Qualquer
  * admin acessa (a rota /api/admin/** já cobre o papel). Somente leitura.
  *
  * {@link #montarGrade} devolve a estrutura tipada (fonte única) consumida por
- * {@link #montar} (payload JSON da grade, E10) e pela exportação XLSX (E11) —
- * a precedência do §1 vive num só lugar.
+ * {@link #montar} (payload JSON da grade) e pela exportação XLSX — a
+ * precedência vive num só lugar.
  */
 @Service
 @RequiredArgsConstructor
@@ -71,10 +71,15 @@ public class GradeRetificacaoService {
 
     // ── estrutura tipada (fonte única grade + XLSX) ──
 
-    /** Conteúdo de uma célula, já resolvido pela precedência do §1. */
-    public record Celula(String tipo, String texto, boolean temObs, String obs) {}
-    /** Um dia do mês (rótulo/fim de semana + marcação global do dia). */
-    public record Dia(int dia, LocalDate data, int dow, boolean fimDeSemana, String marcacaoGlobal) {}
+    /**
+     * Conteúdo de uma célula, já resolvido pela precedência. {@code tipoId} é o tipo
+     * do catálogo por trás da ocorrência exibida — nulo quando a célula vem de uma
+     * retificação ou de uma folga aprovada.
+     */
+    public record Celula(String tipo, String texto, boolean temObs, String obs, String tipoId) {}
+    /** Um dia do mês (rótulo/fim de semana + a ocorrência geral do dia: nome e tipo do catálogo). */
+    public record Dia(int dia, LocalDate data, int dow, boolean fimDeSemana,
+                      String marcacaoGlobal, String marcacaoGlobalId) {}
     /** Um funcionário da categoria + a contagem de folgas APROVADAS do mês. */
     public record Funcionario(String id, String nome, int folgas) {}
     /** Grade completa do mês para uma categoria. `celulas` = pessoaId → dia → célula (só as preenchidas). */
@@ -129,20 +134,29 @@ public class GradeRetificacaoService {
         Map<String, String> nomeDoTipo = new HashMap<>();
         for (PontoTipoMarcacao t : tipoRepo.findAll()) nomeDoTipo.put(t.getId(), t.getNome());
 
-        Map<String, String> pessoaIdx = new HashMap<>();
+        // Marcação cujo tipo não está mais no catálogo não vira célula: sem nome, não há o que
+        // exibir — a célula segue para o próximo nível da precedência, como se a marcação não existisse.
+        Map<String, Marcacao> pessoaIdx = new HashMap<>();
         for (PontoPessoaMarcacao m : pessoais) {
-            pessoaIdx.put(chave(m.getPessoaId(), m.getData().getDayOfMonth()), nomeDoTipo.get(m.getTipoId()));
+            Marcacao ocorrencia = ocorrencia(m.getTipoId(), nomeDoTipo);
+            if (ocorrencia != null) pessoaIdx.put(chave(m.getPessoaId(), m.getData().getDayOfMonth()), ocorrencia);
         }
 
-        Map<Integer, String> globalIdx = new HashMap<>();
-        for (PontoDiaMarcacao g : globais) globalIdx.put(g.getData().getDayOfMonth(), nomeDoTipo.get(g.getTipoId()));
+        Map<Integer, Marcacao> globalIdx = new HashMap<>();
+        for (PontoDiaMarcacao g : globais) {
+            Marcacao ocorrencia = ocorrencia(g.getTipoId(), nomeDoTipo);
+            if (ocorrencia != null) globalIdx.put(g.getData().getDayOfMonth(), ocorrencia);
+        }
 
         // ── dias do mês (rótulo/fim de semana + marcação global do dia) ──
         List<Dia> dias = new ArrayList<>();
         for (int d = 1; d <= diasNoMes; d++) {
             LocalDate data = ini.withDayOfMonth(d);
             int dow = data.getDayOfWeek().getValue();   // 1=segunda … 7=domingo (ISO)
-            dias.add(new Dia(d, data, dow, dow >= 6, globalIdx.get(d)));
+            Marcacao geral = globalIdx.get(d);
+            dias.add(new Dia(d, data, dow, dow >= 6,
+                    geral == null ? null : geral.nome(),
+                    geral == null ? null : geral.tipoId()));
         }
 
         // ── funcionários (com contagem de folgas) + células resolvidas por precedência ──
@@ -162,12 +176,19 @@ public class GradeRetificacaoService {
         return new Grade(cat, ano, mes, diasNoMes, funcionarios, dias, celulas);
     }
 
-    /** Precedência do §1: retificação → banco → marcação pessoa → marcação global → vazia (null). */
+    /**
+     * Precedência de exibição: retificação → banco → ocorrência geral do dia →
+     * ocorrência do funcionário → vazia (null).
+     *
+     * <p>A ocorrência geral vale para todos, então esconde a individual do mesmo dia —
+     * que continua gravada e reaparece se a geral for removida. Retificação e folga
+     * aprovada vencem as duas: são fatos do ponto, não uma marcação de calendário.
+     */
     private Celula resolverCelula(String pessoaId, int dia,
                                   Map<String, PontoRetificacao> retifIdx,
                                   Set<String> folgaIdx,
-                                  Map<String, String> pessoaIdx,
-                                  Map<Integer, String> globalIdx) {
+                                  Map<String, Marcacao> pessoaIdx,
+                                  Map<Integer, Marcacao> globalIdx) {
         String k = chave(pessoaId, dia);
 
         PontoRetificacao r = retifIdx.get(k);
@@ -177,17 +198,17 @@ public class GradeRetificacaoService {
                     .map(String::strip)
                     .collect(Collectors.joining(" "));   // horários separados por espaço simples (7.2.6)
             boolean temObs = r.getObservacoes() != null && !r.getObservacoes().isBlank();
-            return new Celula("horarios", texto, temObs, temObs ? r.getObservacoes().strip() : null);
+            return new Celula("horarios", texto, temObs, temObs ? r.getObservacoes().strip() : null, null);
         }
-        if (folgaIdx.contains(k)) return new Celula("banco", TEXTO_BANCO_DE_HORAS, false, null);
-        String mp = pessoaIdx.get(k);
-        if (mp != null) return new Celula("marcacao_pessoa", mp, false, null);
-        String mg = globalIdx.get(dia);
-        if (mg != null) return new Celula("marcacao_global", mg, false, null);
+        if (folgaIdx.contains(k)) return new Celula("banco", TEXTO_BANCO_DE_HORAS, false, null, null);
+        Marcacao mg = globalIdx.get(dia);
+        if (mg != null) return new Celula("marcacao_global", mg.nome(), false, null, mg.tipoId());
+        Marcacao mp = pessoaIdx.get(k);
+        if (mp != null) return new Celula("marcacao_pessoa", mp.nome(), false, null, mp.tipoId());
         return null;
     }
 
-    /** Estrutura tipada → payload JSON (contrato do E10; ordem de chaves estável — gotcha 2). */
+    /** Estrutura tipada → payload JSON da grade (ordem de chaves estável). */
     private Map<String, Object> serializar(Grade g) {
         List<Map<String, Object>> funcionarios = new ArrayList<>();
         for (Funcionario f : g.funcionarios()) {
@@ -206,6 +227,7 @@ public class GradeRetificacaoService {
             dm.put("dow", d.dow());
             dm.put("fim_semana", d.fimDeSemana());
             dm.put("marcacao_global", d.marcacaoGlobal());
+            dm.put("marcacao_global_id", d.marcacaoGlobalId());
             dias.add(dm);
         }
 
@@ -218,6 +240,8 @@ public class GradeRetificacaoService {
                 cm.put("tipo", c.tipo());
                 cm.put("texto", c.texto());
                 cm.put("tem_obs", c.temObs());
+                // só as células de ocorrência têm tipo do catálogo — a tela abre a lista já no valor atual
+                if (c.tipoId() != null) cm.put("tipo_id", c.tipoId());
                 if (c.temObs()) cm.put("obs", c.obs());
                 linha.put(String.valueOf(ce.getKey()), cm);
             }
@@ -236,6 +260,12 @@ public class GradeRetificacaoService {
 
     private static String chave(String pessoaId, int dia) {
         return pessoaId + "|" + dia;
+    }
+
+    /** A ocorrência exibível de um tipo do catálogo — nula quando o tipo não está mais lá. */
+    private static Marcacao ocorrencia(String tipoId, Map<String, String> nomeDoTipo) {
+        String nome = nomeDoTipo.get(tipoId);
+        return nome == null ? null : new Marcacao(tipoId, nome);
     }
 
     /**
@@ -264,4 +294,7 @@ public class GradeRetificacaoService {
     }
 
     private record Func(String id, String nome) {}
+
+    /** Ocorrência já pronta para exibição: o tipo do catálogo e o nome que vai à tela. */
+    private record Marcacao(String tipoId, String nome) {}
 }

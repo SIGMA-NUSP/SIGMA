@@ -658,4 +658,71 @@ class MarcacaoServiceTest {
             verifyNoInteractions(pessoaCadastro, pessoaRepo);
         }
     }
+
+    // ══════════════════════════════════════════════════════════════
+    // A ocorrência geral do dia prevalece sobre a individual
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * A marcação geral vale para todos os funcionários daquela data e é a que a grade mostra;
+     * a individual do mesmo dia fica escondida sob ela. Marcar um funcionário num dia que já tem
+     * geral gravaria, portanto, uma ocorrência invisível — o servidor recusa, e não é a tela que
+     * garante isso (o bloqueio do clique é conveniência, não regra).
+     *
+     * <p>A REMOÇÃO continua valendo: é o caminho para limpar o que ficou escondido sob a geral.
+     * E aplicar a geral não toca nas individuais — elas reaparecem quando a geral sai.
+     */
+    @Nested
+    @DisplayName("dia com ocorrência geral não aceita marcação individual")
+    class GeralPrevalece {
+
+        @Test
+        @DisplayName("aplicar pessoal em dia com geral → 400 orientando a recarregar, sem gravar e sem consultar o catálogo")
+        void pessoalEmDiaComGeral() {
+            pessoaExiste("op-1", "OPERADOR");
+            when(diaRepo.findByData(LocalDate.of(2026, 7, 9)))
+                    .thenReturn(Optional.of(global(LocalDate.of(2026, 7, 9), FERIADO.getId())));
+            Map<String, Object> body = Map.of("pessoais", Map.of(
+                    "pessoa_id", "op-1", "pessoa_tipo", "OPERADOR",
+                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "tipo-atestado"))));
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.aplicarLote(body, ADMIN));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertTrue(ex.getMessage().contains("09/07/2026"), ex.getMessage());   // data como o admin lê
+            assertTrue(ex.getMessage().contains("Recarregue"), ex.getMessage());
+            verify(pessoaRepo, never()).saveAndFlush(any());
+            verify(pessoaRepo, never()).findByPessoaIdAndPessoaTipoAndData(any(), any(), any());
+            verify(tipoRepo, never()).findById(any());
+        }
+
+        @Test
+        @DisplayName("remover pessoal em dia com geral segue permitido — é como se limpa o que está escondido")
+        void remocaoPessoalContinuaValida() {
+            pessoaExiste("op-1", "OPERADOR");
+            Map<String, Object> body = Map.of("pessoais", Map.of(
+                    "pessoa_id", "op-1", "pessoa_tipo", "OPERADOR",
+                    "remover", List.of("2026-07-09")));
+
+            service.aplicarLote(body, ADMIN);
+
+            verify(pessoaRepo).deleteByPessoaIdAndPessoaTipoAndData("op-1", "OPERADOR", LocalDate.of(2026, 7, 9));
+            verify(diaRepo, never()).findByData(any());   // a guarda é só do aplicar
+        }
+
+        @Test
+        @DisplayName("aplicar a geral não apaga as individuais do dia: elas só ficam escondidas")
+        void geralNaoApagaIndividuais() {
+            when(diaRepo.findByData(LocalDate.of(2026, 7, 9))).thenReturn(Optional.empty());
+            when(tipoRepo.findById(FERIADO.getId())).thenReturn(Optional.of(FERIADO));
+            Map<String, Object> body = Map.of("globais", Map.of(
+                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "tipo-feriado"))));
+
+            service.aplicarLote(body, ADMIN);
+
+            verify(diaRepo).saveAndFlush(any());
+            verifyNoInteractions(pessoaRepo);
+        }
+    }
 }
