@@ -3,6 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ApiService } from '../../core/services/api.service';
 import { AuthService } from '../../core/services/auth.service';
+import { FeatureFlagService } from '../../core/services/feature-flags.service';
 import { httpErrorMsg } from '../../core/helpers/http.helpers';
 import { aceitarFoto, FOTO_ACCEPT, FOTO_ANONIMA, fotoErrorFallback, resolverFotoUrl }
   from '../../core/helpers/foto.helpers';
@@ -191,6 +192,7 @@ export class AdminPessoaPerfilComponent implements OnInit {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private auth = inject(AuthService);
+  private flags = inject(FeatureFlagService);
 
   tipo: TipoPessoa = 'operador';
   private id = '';
@@ -373,6 +375,10 @@ export class AdminPessoaPerfilComponent implements OnInit {
   }
 
   voltar(): void {
-    this.router.navigate(['/admin/gestao-pessoas']);
+    // O Perfil é aberto a partir das listagens de pessoal, que ficam no Quadro de Pessoal
+    // quando os indicadores estão ligados e na Gestão de pessoas quando não estão.
+    this.router.navigate([
+      this.flags.isEnabled('dashboardPessoas') ? '/admin/quadro-pessoal' : '/admin/gestao-pessoas',
+    ]);
   }
 }

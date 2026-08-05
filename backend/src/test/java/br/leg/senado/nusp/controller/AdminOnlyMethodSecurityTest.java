@@ -174,7 +174,7 @@ class AdminOnlyMethodSecurityTest {
     @Test
     @DisplayName("controller 100% admin: o administrador passa (a anotação de classe não barra quem deve entrar)")
     void controllerAdminPuro_admin_200() throws Exception {
-        when(metabaseEmbedService.listarAtivos()).thenReturn(List.of());
+        when(metabaseEmbedService.listarAtivos(any())).thenReturn(List.of());
         autenticarComo(TokenFactory.ADMIN);
         mockMvc.perform(Requests.get("/api/admin/metabase/dashboards"))
                 .andExpect(status().isOk());

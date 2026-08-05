@@ -37,6 +37,7 @@ export const routes: Routes = [
         { path: 'operacao-audio', title: 'Operação de Áudio | Admin', loadComponent: () => import('./pages/admin/admin-operacao-audio.component').then(m => m.AdminOperacaoAudioComponent) },
         { path: 'area-tecnica', title: 'Área Técnica | Admin', loadComponent: () => import('./pages/admin/admin-area-tecnica.component').then(m => m.AdminAreaTecnicaComponent) },
         { path: 'gestao-pessoas', title: 'Gestão de Pessoas | Admin', loadComponent: () => import('./pages/admin/admin-gestao-pessoas.component').then(m => m.AdminGestaoPessoasComponent) },
+        { path: 'quadro-pessoal', canActivate: [featureFlagGuard('dashboardPessoas')], title: 'Quadro de Pessoal | Admin', loadComponent: () => import('./pages/admin/admin-quadro-pessoal.component').then(m => m.AdminQuadroPessoalComponent) },
         { path: 'operador/perfil', title: 'Perfil | Admin', data: { tipo: 'operador' }, loadComponent: () => import('./pages/admin/admin-pessoa-perfil.component').then(m => m.AdminPessoaPerfilComponent) },
         { path: 'tecnico/perfil', title: 'Perfil | Admin', data: { tipo: 'tecnico' }, loadComponent: () => import('./pages/admin/admin-pessoa-perfil.component').then(m => m.AdminPessoaPerfilComponent) },
         { path: 'administrador/perfil', canActivate: [masterGuard], title: 'Perfil | Admin', data: { tipo: 'administrador' }, loadComponent: () => import('./pages/admin/admin-pessoa-perfil.component').then(m => m.AdminPessoaPerfilComponent) },

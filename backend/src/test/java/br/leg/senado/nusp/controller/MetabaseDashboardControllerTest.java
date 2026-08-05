@@ -3,6 +3,7 @@ package br.leg.senado.nusp.controller;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -17,11 +18,16 @@ import br.leg.senado.nusp.repository.AuthSessionRepository;
 import br.leg.senado.nusp.security.JwtTokenProvider;
 import br.leg.senado.nusp.service.MetabaseEmbedService;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -62,7 +68,7 @@ class MetabaseDashboardControllerTest {
         when(d.getDescricao()).thenReturn("Visão geral");
         when(d.getIcone()).thenReturn("chart");
         when(d.getOrdem()).thenReturn(3);
-        when(embedService.listarAtivos()).thenReturn(java.util.List.of(d));
+        when(embedService.listarAtivos(any())).thenReturn(java.util.List.of(d));
 
         mockMvc.perform(Requests.get("/api/admin/metabase/dashboards").header("Authorization", admin))
                 .andExpect(status().isOk())
@@ -71,6 +77,23 @@ class MetabaseDashboardControllerTest {
                 .andExpect(jsonPath("$[0].descricao").value("Visão geral"))
                 .andExpect(jsonPath("$[0].icone").value("chart"))
                 .andExpect(jsonPath("$[0].ordem").value(3));
+    }
+
+    @Test
+    @DisplayName("GET /dashboards — repassa o contexto da query ao service; sem a query, repassa nulo "
+            + "(quem resolve a página padrão é o service)")
+    void dashboards_repassaContexto() throws Exception {
+        when(embedService.listarAtivos(any())).thenReturn(java.util.List.of());
+        ArgumentCaptor<String> contexto = ArgumentCaptor.forClass(String.class);
+
+        mockMvc.perform(Requests.get("/api/admin/metabase/dashboards?contexto=GESTAO_PESSOAS")
+                        .header("Authorization", admin))
+                .andExpect(status().isOk());
+        mockMvc.perform(Requests.get("/api/admin/metabase/dashboards").header("Authorization", admin))
+                .andExpect(status().isOk());
+
+        verify(embedService, times(2)).listarAtivos(contexto.capture());
+        assertEquals(java.util.Arrays.asList("GESTAO_PESSOAS", null), contexto.getAllValues());
     }
 
     @Test

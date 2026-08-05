@@ -32,6 +32,7 @@ import br.leg.senado.nusp.service.ReportDocxService;
 import br.leg.senado.nusp.service.ReportPdfService;
 import br.leg.senado.nusp.service.ReportService;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -79,7 +80,7 @@ class RbacMatrixAdminTest {
         // Sessão viva por padrão; o default do Mockito (0) significaria sessão inválida.
         when(authSessionRepository.touchSession(anyLong(), anyString(), anyInt())).thenReturn(1);
         // Stubs mínimos p/ 2xx (retorno null viraria NPE→500 no handler).
-        when(metabaseEmbedService.listarAtivos()).thenReturn(List.of());
+        when(metabaseEmbedService.listarAtivos(any())).thenReturn(List.of());
         when(adminCrudService.getOperadorPerfil("1")).thenReturn(Map.of());
         when(adminDashboardService.listOperadores(1, 25, "", "nome", "asc", null))
                 .thenReturn(new DashboardQueryHelper.PagedResult(List.of(), 0, Map.of()));

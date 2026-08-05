@@ -1,0 +1,53 @@
+databaseChangeLog:
+  # ============================================================
+  # 048 — Metabase: contexto do catálogo, fixos do Plenário na view pública
+  #       e leitura do BI sobre as tabelas de operação
+  #
+  # O catálogo de dashboards ganha a página a que cada linha pertence, para que
+  # o Painel Administrativo e a Gestão de Pessoas embutam dashboards distintos
+  # lendo a mesma tabela. As linhas existentes são todas do Painel e o valor
+  # padrão as mantém no lugar.
+  #
+  # A view pública de operadores passa a expor quem é fixo do Plenário
+  # Principal, recorte que os rankings por operador precisam fazer, e as
+  # tabelas consultadas pelo dashboard têm a leitura do BI reafirmada.
+  # ============================================================
+  - changeSet:
+      id: 048-metabase-dashboard-contexto
+      author: douglas.antunes
+      comment: "Metabase: CONTEXTO em INT_METABASE_DASHBOARD com domínio PAINEL/GESTAO_PESSOAS (linhas existentes ficam em PAINEL pelo default)"
+      changes:
+        - sqlFile:
+            path: db/changelog/048-metabase-dashboard-contexto.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "ALTER TABLE INT_METABASE_DASHBOARD DROP CONSTRAINT CK_INT_MB_DASH_CONTEXTO"
+        - sql:
+            sql: "ALTER TABLE INT_METABASE_DASHBOARD DROP COLUMN CONTEXTO"
+
+  - changeSet:
+      id: 048-vw-operador-plenario-fixo
+      author: douglas.antunes
+      comment: "Views públicas: VW_OPERADOR_PUBLICO passa a expor PLENARIO_PRINCIPAL_FIXO para o recorte dos rankings por operador"
+      changes:
+        - sqlFile:
+            path: db/changelog/048-vw-operador-plenario-fixo.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: >-
+              CREATE OR REPLACE VIEW VW_OPERADOR_PUBLICO AS
+              SELECT ID, NOME_COMPLETO, NOME_EXIBICAO, EMAIL FROM PES_OPERADOR
+
+  - changeSet:
+      id: 048-grants-bi-operadores
+      author: douglas.antunes
+      comment: "BI: leitura reafirmada sobre as tabelas de operação, checklist, escala e cadastros consultadas pelo dashboard de operadores"
+      changes:
+        - sqlFile:
+            path: db/changelog/048-grants-bi-operadores.sql
+            splitStatements: true
+            stripComments: true

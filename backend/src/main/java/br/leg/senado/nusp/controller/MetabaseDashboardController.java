@@ -9,6 +9,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.LinkedHashMap;
@@ -30,8 +31,9 @@ public class MetabaseDashboardController {
     private final MetabaseEmbedService embedService;
 
     @GetMapping("/dashboards")
-    public ResponseEntity<List<Map<String, Object>>> listar() {
-        List<Map<String, Object>> body = embedService.listarAtivos().stream()
+    public ResponseEntity<List<Map<String, Object>>> listar(
+            @RequestParam(name = "contexto", required = false) String contexto) {
+        List<Map<String, Object>> body = embedService.listarAtivos(contexto).stream()
                 .map(MetabaseDashboardController::toCard)
                 .toList();
         return ResponseEntity.ok(body);

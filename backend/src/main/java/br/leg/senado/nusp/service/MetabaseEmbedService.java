@@ -51,8 +51,26 @@ public class MetabaseEmbedService {
     @Value("${app.metabase.embed-ttl-sec:600}")
     private long embedTtlSeconds;
 
-    public List<MetabaseDashboard> listarAtivos() {
-        return repository.findByAtivoTrueOrderByOrdemAscTituloAsc();
+    /** Pedido que dispensa o recorte por página e devolve o catálogo ativo inteiro. */
+    public static final String CONTEXTO_TODOS = "TODOS";
+
+    /**
+     * Catálogo ativo da página pedida, na ordem de exibição.
+     *
+     * Contexto ausente ou em branco responde pelo Painel Administrativo, a página
+     * que já lia este catálogo antes de ele distinguir páginas. Página sem nenhum
+     * dashboard cadastrado devolve lista vazia — quem chama trata como "nada
+     * configurado", não como erro.
+     */
+    public List<MetabaseDashboard> listarAtivos(String contexto) {
+        String alvo = (contexto == null || contexto.isBlank())
+                ? MetabaseDashboard.CONTEXTO_PAINEL
+                : contexto.trim().toUpperCase();
+
+        if (CONTEXTO_TODOS.equals(alvo)) {
+            return repository.findByAtivoTrueOrderByOrdemAscTituloAsc();
+        }
+        return repository.findByAtivoTrueAndContextoOrderByOrdemAscTituloAsc(alvo);
     }
 
     /**

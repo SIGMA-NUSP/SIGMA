@@ -8,4 +8,6 @@ import java.util.List;
 public interface MetabaseDashboardRepository extends JpaRepository<MetabaseDashboard, String> {
 
     List<MetabaseDashboard> findByAtivoTrueOrderByOrdemAscTituloAsc();
+
+    List<MetabaseDashboard> findByAtivoTrueAndContextoOrderByOrdemAscTituloAsc(String contexto);
 }

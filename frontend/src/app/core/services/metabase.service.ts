@@ -24,9 +24,15 @@ export class MetabaseService {
   private api = inject(ApiService);
   private sanitizer = inject(DomSanitizer);
 
-  /** Lista os dashboards de indicadores cadastrados. */
-  listarDashboards(): Observable<DashboardCard[]> {
-    return this.api.get<DashboardCard[]>('/api/admin/metabase/dashboards');
+  /**
+   * Lista os dashboards de indicadores cadastrados para uma página.
+   * Sem contexto, responde pelo Painel Administrativo — a página que já lia
+   * este catálogo antes de ele distinguir páginas.
+   */
+  listarDashboards(contexto?: string): Observable<DashboardCard[]> {
+    return contexto
+      ? this.api.get<DashboardCard[]>('/api/admin/metabase/dashboards', { contexto })
+      : this.api.get<DashboardCard[]>('/api/admin/metabase/dashboards');
   }
 
   /** URL de embed já sanitizada para uso direto em `[src]` de um iframe. */

@@ -93,3 +93,5 @@ databaseChangeLog:
       file: db/changelog/046-ponto-tipo-marcacao.yaml
   - include:
       file: db/changelog/047-aviso-exige-ciencia.yaml
+  - include:
+      file: db/changelog/048-metabase-dashboard-contexto.yaml

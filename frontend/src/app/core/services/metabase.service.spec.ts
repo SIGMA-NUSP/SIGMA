@@ -42,4 +42,17 @@ describe('MetabaseService', () => {
     svc.listarDashboards().subscribe();
     expect(get).toHaveBeenCalledWith('/api/admin/metabase/dashboards');
   });
+
+  it('listarDashboards com página pedida manda o contexto como parâmetro', () => {
+    get.mockReturnValue(of([]));
+    svc.listarDashboards('GESTAO_PESSOAS').subscribe();
+    expect(get).toHaveBeenCalledWith('/api/admin/metabase/dashboards', { contexto: 'GESTAO_PESSOAS' });
+  });
+
+  it('sem página pedida NÃO manda parâmetro nenhum — o backend é quem resolve o padrão', () => {
+    get.mockReturnValue(of([]));
+    svc.listarDashboards(undefined).subscribe();
+    expect(get).toHaveBeenCalledWith('/api/admin/metabase/dashboards');
+    expect(get.mock.calls[0]).toHaveLength(1);
+  });
 });
