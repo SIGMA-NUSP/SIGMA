@@ -26,7 +26,7 @@ function ordinalMes(ano: number, mes: number): number { return ano * 12 + mes; }
 
       <!-- [selected] por option (e não [value] no <select>): no 1º render o binding do
            <select> roda antes de o @for criar as <option>s → cairia sempre na 1ª ("Janeiro"). -->
-      <select class="sel sel-mes" (change)="onSelectMes($event)" aria-label="Mês">
+      <select class="sel-mes" (change)="onSelectMes($event)" aria-label="Mês">
         @for (m of meses; track $index) {
           <option [value]="$index + 1"
                   [selected]="mes() === $index + 1"
@@ -34,7 +34,7 @@ function ordinalMes(ano: number, mes: number): number { return ano * 12 + mes; }
         }
       </select>
 
-      <select class="sel sel-ano" (change)="onSelectAno($event)" aria-label="Ano">
+      <select class="sel-ano" (change)="onSelectAno($event)" aria-label="Ano">
         @for (a of anos(); track a) {
           <option [value]="a" [selected]="ano() === a">{{ a }}</option>
         }
@@ -58,12 +58,6 @@ function ordinalMes(ano: number, mes: number): number { return ano * 12 + mes; }
     }
     .nav-btn:hover:not(:disabled) { background: var(--row-hover); }
     .nav-btn:disabled { opacity: .35; cursor: default; }
-    .sel {
-      height: 40px; border: 1px solid var(--border); border-radius: 8px;
-      background: #fff; color: var(--text); font-size: .95rem; padding: 0 8px;
-    }
-    .sel-mes { min-width: 120px; }
-    .sel-ano { min-width: 84px; }
   `],
 })
 export class MesAnoSelectorComponent {

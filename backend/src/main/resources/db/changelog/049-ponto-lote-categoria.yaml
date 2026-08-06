@@ -1,0 +1,25 @@
+databaseChangeLog:
+  # ============================================================
+  # 049 — Ponto: CATEGORIA da folha mensal em PNT_LOTE
+  #
+  # A folha mensal passa a ser prévia (abre o mês, retificável, substituível)
+  # ou definitiva (fecha o mês, não retificável). A semanal não tem categoria:
+  # o CHECK amarra os dois domínios ao tipo do lote.
+  #
+  # Aditivo: a coluna nasce vazia, os lotes mensais já enviados recebem PREVIA
+  # (o comportamento que tinham antes da escolha existir) e o CHECK entra depois.
+  # ============================================================
+  - changeSet:
+      id: 049-ponto-lote-categoria
+      author: douglas.antunes
+      comment: "Ponto: CATEGORIA (prévia/definitiva) em PNT_LOTE, com backfill dos mensais e CHECK de coerência com o tipo"
+      changes:
+        - sqlFile:
+            path: db/changelog/049-ponto-lote-categoria.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "ALTER TABLE PNT_LOTE DROP CONSTRAINT CK_PNT_LOTE_CATEGORIA"
+        - sql:
+            sql: "ALTER TABLE PNT_LOTE DROP COLUMN CATEGORIA"

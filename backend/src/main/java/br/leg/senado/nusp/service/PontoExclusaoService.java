@@ -18,6 +18,7 @@ import br.leg.senado.nusp.repository.AvisoCienciaRepository;
 import br.leg.senado.nusp.repository.OperadorRepository;
 import br.leg.senado.nusp.repository.PontoBancoSaldoRepository;
 import br.leg.senado.nusp.repository.PontoExclusaoLogRepository;
+import br.leg.senado.nusp.repository.PontoFolhaLinhaRepository;
 import br.leg.senado.nusp.repository.PontoLotePaginaRepository;
 import br.leg.senado.nusp.repository.PontoLoteRepository;
 import br.leg.senado.nusp.repository.PontoRetificacaoRepository;
@@ -110,6 +111,7 @@ public class PontoExclusaoService {
 
     private final PontoLoteRepository loteRepo;
     private final PontoLotePaginaRepository paginaRepo;
+    private final PontoFolhaLinhaRepository folhaLinhaRepo;
     private final PontoRetificacaoRepository retificacaoRepo;
     private final PontoBancoSaldoRepository saldoRepo;
     private final PontoExclusaoLogRepository exclusaoLogRepo;
@@ -260,6 +262,8 @@ public class PontoExclusaoService {
      *   <li>retificações PRIMEIRO, e com flush: a {@code FK_PNT_RETIF_PAGINA} não tem cascade, então
      *       apagar a página antes morre em ORA-02292;</li>
      *   <li>avisos, pela proveniência — nunca por autor/tipo/texto;</li>
+     *   <li>as linhas da folha, contadas antes de morrer: elas cairiam pelo cascade da página, mas
+     *       a trilha registra quantas eram;</li>
      *   <li>páginas (e o lote, se o escopo for o lote);</li>
      *   <li><b>flush</b> e SÓ ENTÃO a re-âncora — o recompute NÃO pode enxergar a página que acabou de
      *       morrer, ou o saldo volta a ancorar exatamente nela;</li>
@@ -275,10 +279,12 @@ public class PontoExclusaoService {
 
         AvisosRemovidos avisos = removerAvisos(alvo, fatos);                   // 4
 
-        paginaRepo.deleteAll(alvo.paginas());                                  // 5
+        long linhasDaFolha = apagarLinhasDaFolha(fatos);                       // 5
+
+        paginaRepo.deleteAll(alvo.paginas());                                  // 6
         if (alvo.escopoLote()) loteRepo.delete(alvo.lote());
 
-        // 6 — as deleções TÊM de estar no banco antes da re-âncora: o recompute procura a folha
+        // 7 — as deleções TÊM de estar no banco antes da re-âncora: o recompute procura a folha
         // publicada mais recente da pessoa, e uma página morta ainda visível seria escolhida de novo.
         //
         // ⚠️ Honestidade sobre este flush (medido por mutação): removê-lo NÃO reproduz o defeito hoje —
@@ -289,10 +295,10 @@ public class PontoExclusaoService {
         paginaRepo.flush();
         reancorarEmOrdem(fatos.pessoas());
 
-        Map<String, Object> resumo = resumo(alvo, fatos, avisos);              // 7
+        Map<String, Object> resumo = resumo(alvo, fatos, avisos, linhasDaFolha);   // 8
         gravarTrilha(alvo, callerId, resumo);
 
-        apagarArquivosAposCommit(fatos.arquivos());                            // 8
+        apagarArquivosAposCommit(fatos.arquivos());                            // 9
         log.info("Exclusão de ponto [{}] lote={} por {}: {} página(s), {} retificação(ões), {} aviso(s)",
                 alvo.escopo(), alvo.lote().getId(), callerId, alvo.paginas().size(),
                 fatos.retificacoes().size(), avisos.alvos());
@@ -311,6 +317,20 @@ public class PontoExclusaoService {
     private void reancorarEmOrdem(Collection<ChavePessoa> pessoas) {
         pessoas.stream().sorted(SaldoAberturaService.ORDEM_DO_LOCK)
                 .forEach(p -> saldoAberturaService.reancorar(p.pessoaId(), p.pessoaTipo()));
+    }
+
+    /**
+     * Apaga a tabela gravada das folhas alvo e devolve quantas linhas eram — o cascade da página
+     * daria conta de apagar, mas a trilha precisa do número, e depois da deleção ele não existe mais.
+     */
+    private long apagarLinhasDaFolha(Fatos fatos) {
+        if (fatos.paginaIds().isEmpty()) return 0;
+        long linhas = folhaLinhaRepo.countByPaginaIdIn(fatos.paginaIds());
+        if (linhas > 0) {
+            folhaLinhaRepo.deleteByPaginaIdIn(fatos.paginaIds());
+            folhaLinhaRepo.flush();
+        }
+        return linhas;
     }
 
     /**
@@ -360,7 +380,7 @@ public class PontoExclusaoService {
      * quem for ler a trilha depois. Traz as contagens REAIS da transação (não as do preview) e a
      * âncora RESULTANTE de cada pessoa, já recalculada.
      */
-    private Map<String, Object> resumo(Alvo alvo, Fatos fatos, AvisosRemovidos avisos) {
+    private Map<String, Object> resumo(Alvo alvo, Fatos fatos, AvisosRemovidos avisos, long linhasDaFolha) {
         List<Map<String, Object>> pessoas = new ArrayList<>();
         for (ChavePessoa p : fatos.pessoas()) {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -381,6 +401,7 @@ public class PontoExclusaoService {
         out.put("avisos_cadastros_removidos", avisos.cadastros());
         out.put("reabre_competencia", reabreCompetencia(alvo));
         out.put("arquivos", fatos.arquivos().size());
+        out.put("linhas_folha_excluidas", linhasDaFolha);
         return out;
     }
 
@@ -607,6 +628,7 @@ public class PontoExclusaoService {
         Map<String, Object> lote = new LinkedHashMap<>();
         lote.put("id", l.getId());
         lote.put("tipo", l.getTipo());
+        lote.put("categoria", l.getCategoria());
         lote.put("data_inicio", l.getDataInicio().toString());
         lote.put("data_fim", l.getDataFim().toString());
         lote.put("status", l.getStatus());

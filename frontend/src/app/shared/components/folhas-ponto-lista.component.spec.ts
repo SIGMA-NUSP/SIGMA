@@ -1,4 +1,5 @@
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
 import { Router } from '@angular/router';
 import { of, throwError } from 'rxjs';
 import { ApiService } from '../../core/services/api.service';
@@ -9,7 +10,8 @@ import { FolhasPontoListaComponent, MinhaFolha } from './folhas-ponto-lista.comp
  * usada em /ponto e embutida em /admin/ponto). O componente NÃO carrega as folhas da API —
  * recebe-as por `input<MinhaFolha[]>()` (quem busca é o pai, `ponto-banco`); o `ApiService`
  * aqui só serve aos downloads (`getBlob` + `abrirBlobInline`/`baixarBlob`).
- * TestBed sem `detectChanges()`; lógica exercitada por chamada direta; `ApiService`/`Router`
+ * Lógica exercitada por chamada direta, sem `detectChanges()` — a exceção é o rótulo de natureza
+ * ao lado do período, que só existe no template e por isso é conferido no DOM; `ApiService`/`Router`
  * mockados via `useValue`; o input é semeado com `componentRef.setInput` — o `ClientPager` é
  * construído sobre o Signal do input e reage sem render. `pager` é `protected` → lido via
  * `(comp as any)`; o ClientPager em si tem spec próprio (`core/helpers/client-pager.spec.ts`),
@@ -120,6 +122,86 @@ describe('FolhasPontoListaComponent', () => {
       const { comp } = criar([]);
       expect(comp.periodo({ ...FOLHA, tipo: 'SEMANAL', data_inicio: '2026-06-08', data_fim: '2026-06-14' }))
         .toBe('08/06/2026 — 14/06/2026');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // natureza() — "(prévia)"/"(definitiva)" da folha mensal
+  // ═══════════════════════════════════════════════════════════════════
+  describe('natureza', () => {
+    it('mensal prévia: rótulo "(prévia)"', () => {
+      const { comp } = criar([]);
+      expect(comp.natureza({ ...FOLHA, categoria: 'PREVIA' })).toBe('(prévia)');
+    });
+
+    it('mensal definitiva: rótulo "(definitiva)"', () => {
+      const { comp } = criar([]);
+      expect(comp.natureza({ ...FOLHA, categoria: 'DEFINITIVA' })).toBe('(definitiva)');
+    });
+
+    it('mensal sem categoria (ausente ou nula): sem rótulo', () => {
+      const { comp } = criar([]);
+      expect(comp.natureza(FOLHA)).toBe('');
+      expect(comp.natureza({ ...FOLHA, categoria: null })).toBe('');
+    });
+
+    it('semanal não tem essa distinção: sem rótulo, mesmo se vier categoria', () => {
+      const { comp } = criar([]);
+      const semanal = { ...FOLHA, tipo: 'SEMANAL', data_inicio: '2026-06-08', data_fim: '2026-06-14' };
+      expect(comp.natureza(semanal)).toBe('');
+      expect(comp.natureza({ ...semanal, categoria: 'PREVIA' })).toBe('');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // RENDER — o rótulo discreto vive ao lado do período (a coluna "Tipo"
+  // continua dizendo só "Mensal"): é ele que distingue, na lista, a
+  // folha que ainda pode ser retificada daquela que fechou o mês
+  // ═══════════════════════════════════════════════════════════════════
+  describe('render do rótulo de natureza na coluna Período', () => {
+    async function renderizar(lista: MinhaFolha[]): Promise<ComponentFixture<FolhasPontoListaComponent>> {
+      const fixture = TestBed.createComponent(FolhasPontoListaComponent);
+      fixture.componentRef.setInput('folhas', lista);
+      fixture.detectChanges();
+      await fixture.whenStable();   // bindings do template (o select do paginador usa NgModel)
+      fixture.detectChanges();
+      return fixture;
+    }
+
+    /** A célula "Período" da 1ª linha da tabela. */
+    const celulaPeriodo = (fixture: ComponentFixture<FolhasPontoListaComponent>) =>
+      fixture.debugElement.query(By.css('tbody tr td'));
+
+    it('mensal definitiva: o período vem em destaque e o rótulo ao lado, em .tag-inline', async () => {
+      const fixture = await renderizar([{ ...FOLHA, categoria: 'DEFINITIVA' }]);
+      const celula = celulaPeriodo(fixture);
+
+      expect((celula.query(By.css('strong')).nativeElement as HTMLElement).textContent).toContain('Junho/2026');
+      const tag = celula.query(By.css('.tag-inline'));
+      expect(tag).not.toBeNull();
+      expect((tag!.nativeElement as HTMLElement).textContent!.trim()).toBe('(definitiva)');
+    });
+
+    it('mensal prévia: o mesmo rótulo, com a outra natureza', async () => {
+      const fixture = await renderizar([{ ...FOLHA, categoria: 'PREVIA' }]);
+      expect((celulaPeriodo(fixture).query(By.css('.tag-inline'))!.nativeElement as HTMLElement).textContent!.trim())
+        .toBe('(prévia)');
+    });
+
+    it('semanal: só o intervalo de datas — nenhum rótulo é renderizado', async () => {
+      const fixture = await renderizar([
+        { ...FOLHA, tipo: 'SEMANAL', data_inicio: '2026-06-08', data_fim: '2026-06-14' },
+      ]);
+      const celula = celulaPeriodo(fixture);
+
+      expect((celula.query(By.css('strong')).nativeElement as HTMLElement).textContent)
+        .toContain('08/06/2026 — 14/06/2026');
+      expect(celula.query(By.css('.tag-inline'))).toBeNull();
+    });
+
+    it('mensal sem categoria: nada de rótulo vazio na tela', async () => {
+      const fixture = await renderizar([FOLHA]);
+      expect(celulaPeriodo(fixture).query(By.css('.tag-inline'))).toBeNull();
     });
   });
 

@@ -5,21 +5,25 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
 import java.util.List;
 
 import static br.leg.senado.nusp.service.SecullumFolhaParser.bancoFinalMin;
+import static br.leg.senado.nusp.service.SecullumFolhaParser.dataDe;
+import static br.leg.senado.nusp.service.SecullumFolhaParser.ocorrenciaDe;
 import static br.leg.senado.nusp.service.SecullumFolhaParser.parse;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Testes do parser numérico do BANCO. As amostras são trechos VERBATIM de
- * folhas reais, reduzidos às linhas relevantes — o formato completo
- * (cabeçalho/rodapé) já é exercitado pelos casos, pois a linha TOTAIS e a
- * assinatura não casam com a gramática de linha-dia.
+ * Testes do parser da folha: o saldo numérico do BANCO e as duas colunas
+ * derivadas de cada linha (data-calendário e ocorrência do dia). As amostras
+ * são trechos VERBATIM de folhas reais, reduzidos às linhas relevantes — o
+ * formato completo (cabeçalho/rodapé) já é exercitado pelos casos, pois a
+ * linha TOTAIS e a assinatura não casam com a gramática de linha-dia.
  *
- * A regra sob teste: último banco não-vazio de QUALQUER linha, inclusive de
- * status — Falta no fim do mês reduz o acumulado e só a linha de status
- * carrega o valor certo.
+ * A regra do banco sob teste: último banco não-vazio de QUALQUER linha,
+ * inclusive de status — Falta no fim do mês reduz o acumulado e só a linha de
+ * status carrega o valor certo.
  */
 class SecullumFolhaParserTest {
 
@@ -160,6 +164,153 @@ class SecullumFolhaParserTest {
                     new LinhaPonto("01/02/25 - seg", "", "", "", "", "", "+02:00"),
                     new LinhaPonto("02/02/25 - ter", "", "", "", "", "", "xx:yy"));
             assertEquals(120, bancoFinalMin(linhas));
+        }
+    }
+
+    @Nested
+    @DisplayName("dataDe — data-calendário da coluna DIA")
+    class DataDaLinha {
+
+        @Test
+        @DisplayName("dia comum: a data sai do início da coluna, sem o dia da semana")
+        void diaComum() {
+            String texto = """
+                     25/02/25 - ter06:2713:09+01:24+28:40
+                     26/02/25 - qua06:2512:48+00:46+29:26
+                    """;
+            List<LinhaPonto> linhas = parse(texto);
+            assertEquals(2, linhas.size());
+            assertEquals(LocalDate.of(2025, 2, 25), dataDe(linhas.get(0)));
+            assertEquals(LocalDate.of(2025, 2, 26), dataDe(linhas.get(1)));
+        }
+
+        @Test
+        @DisplayName("virada de ano e feriado: dia/mês/ano de 2 dígitos com o dia da semana recalculado")
+        void viradaDeAnoEFeriado() {
+            // Folha semanal a cavalo de dois anos; o feriado do dia 1º chega como "feri".
+            String texto = """
+                     30/12/25 - ter06:2512:48+00:46+21:35
+                     31/12/25 - qua06:3312:30+21:35
+                     01/01/26 - feriFeriadoFeriadoFeriadoFeriado+21:35
+                     02/01/26 - sex06:2812:31+21:40
+                    """;
+            List<LinhaPonto> linhas = parse(texto);
+            assertEquals(4, linhas.size());
+            assertEquals(LocalDate.of(2025, 12, 30), dataDe(linhas.get(0)));
+            assertEquals(LocalDate.of(2025, 12, 31), dataDe(linhas.get(1)));
+            // No feriado a coluna DIA é reescrita com o dia real da semana; a data não muda.
+            assertEquals("01/01/26 - qui", linhas.get(2).dia());
+            assertEquals(LocalDate.of(2026, 1, 1), dataDe(linhas.get(2)));
+            assertEquals(LocalDate.of(2026, 1, 2), dataDe(linhas.get(3)));
+        }
+
+        @Test
+        @DisplayName("o ano de 2 dígitos é sempre deste século")
+        void anoSempreNesteSeculo() {
+            // O cartão não imprime o século: "99" é 2099, nunca 1999.
+            assertEquals(LocalDate.of(2099, 2, 1),
+                    dataDe(new LinhaPonto("01/02/99 - seg", "", "", "", "", "", "")));
+            assertEquals(LocalDate.of(2000, 1, 3),
+                    dataDe(new LinhaPonto("03/01/00 - seg", "", "", "", "", "", "")));
+        }
+
+        @Test
+        @DisplayName("data impossível, coluna vazia ou linha nula → sem data")
+        void semDataLegivel() {
+            // A gramática de linha-dia só cobra o formato dd/mm/aa: um dia/mês impossível
+            // atravessa o parse e continua valendo pelo texto verbatim, sem data derivada.
+            List<LinhaPonto> ilegivel = parse(" 32/13/25 - seg");
+            assertEquals(1, ilegivel.size());
+            assertEquals("32/13/25 - seg", ilegivel.get(0).dia());
+            assertNull(dataDe(ilegivel.get(0)));
+
+            assertNull(dataDe(new LinhaPonto("", "", "", "", "", "", "")));
+            assertNull(dataDe(new LinhaPonto("TOTAIS", "", "", "", "", "", "")));
+            assertNull(dataDe(new LinhaPonto(null, null, null, null, null, null, null)));
+            assertNull(dataDe(null));
+        }
+    }
+
+    @Nested
+    @DisplayName("ocorrenciaDe — status do dia")
+    class OcorrenciaDaLinha {
+
+        @Test
+        @DisplayName("status repetido nas quatro células devolve o texto do cartão")
+        void statusEmQuatroCelulas() {
+            String ferias = """
+                     03/07/26 - sexFERNCFERNCFERNCFERNC+10:50
+                     04/07/26 - sábFERNCFERNCFERNCFERNC+10:50
+                    """;
+            List<LinhaPonto> linhasFerias = parse(ferias);
+            assertEquals(2, linhasFerias.size());
+            assertEquals("FERNC", ocorrenciaDe(linhasFerias.get(0)));
+            assertEquals("FERNC", ocorrenciaDe(linhasFerias.get(1)));
+
+            String disposicao = """
+                     30/07/25 - quaDISPOSIDISPOSIDISPOSIDISPOSI-18:28
+                     31/07/25 - quiDISPOSIDISPOSIDISPOSIDISPOSI-18:28
+                    """;
+            List<LinhaPonto> linhasDisposicao = parse(disposicao);
+            assertEquals(2, linhasDisposicao.size());
+            assertEquals("DISPOSI", ocorrenciaDe(linhasDisposicao.get(0)));
+            assertEquals("DISPOSI", ocorrenciaDe(linhasDisposicao.get(1)));
+        }
+
+        @Test
+        @DisplayName("status só nas duas primeiras células também é ocorrência do dia")
+        void statusEmDuasCelulas() {
+            // Falta ×2: o status ocupa ENT. 1/SAÍ. 1 e as duas últimas células ficam vazias.
+            List<LinhaPonto> linhas = parse(" 28/02/25 - sexFaltaFalta-06:00+23:26");
+            assertEquals(1, linhas.size());
+            LinhaPonto falta = linhas.get(0);
+            assertEquals("Falta", falta.sai1());
+            assertEquals("", falta.ent2());
+            assertEquals("Falta", ocorrenciaDe(falta));
+        }
+
+        @Test
+        @DisplayName("o texto do status volta íntegro, com pontuação e maiúsculas")
+        void textoDoStatusIntegro() {
+            // Nada é traduzido nem normalizado: o ponto de "P.facul" e o "N" final de "BancN"
+            // fazem parte do texto que o funcionário já conhece da folha.
+            LinhaPonto facultativo = parse(" 03/03/25 - segP.faculP.faculP.faculP.facul+21:20").get(0);
+            assertEquals("P.facul", ocorrenciaDe(facultativo));
+
+            LinhaPonto banco = parse(" 12/06/25 - quiBancNBancN-08:00+02:30").get(0);
+            assertEquals("BancN", ocorrenciaDe(banco));
+        }
+
+        @Test
+        @DisplayName("dia de batidas e linha sem células não têm ocorrência")
+        void semOcorrencia() {
+            LinhaPonto batidas = parse(" 25/02/25 - ter06:2713:09+01:24+28:40").get(0);
+            assertEquals("06:27", batidas.ent1());
+            assertNull(ocorrenciaDe(batidas));
+
+            LinhaPonto semCelulas = parse(" 24/02/25 - seg").get(0);
+            assertNull(ocorrenciaDe(semCelulas));
+
+            assertNull(ocorrenciaDe(new LinhaPonto("", "", "", "", "", "", "")));
+            assertNull(ocorrenciaDe(new LinhaPonto(null, null, null, null, null, null, null)));
+            assertNull(ocorrenciaDe(null));
+        }
+
+        @Test
+        @DisplayName("feriado sem texto nas células vira a ocorrência \"Feriado\"")
+        void feriadoSemTextoNasCelulas() {
+            // Quando o cartão só marca o feriado no lugar do dia da semana, as quatro células
+            // recebem "Feriado" — e é esse o status que a linha passa a carregar.
+            LinhaPonto semTexto = parse(" 07/09/25 - feri+18:20").get(0);
+            assertEquals("07/09/25 - dom", semTexto.dia());
+            assertEquals("Feriado", semTexto.ent1());
+            assertEquals("Feriado", ocorrenciaDe(semTexto));
+            assertEquals(LocalDate.of(2025, 9, 7), dataDe(semTexto));
+
+            // Com o texto impresso na folha, ele é copiado como está.
+            LinhaPonto comTexto = parse(" 21/04/25 - feriFeriadoFeriadoFeriadoFeriado+22:10").get(0);
+            assertEquals("21/04/25 - seg", comTexto.dia());
+            assertEquals("Feriado", ocorrenciaDe(comTexto));
         }
     }
 }

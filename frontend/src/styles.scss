@@ -353,6 +353,18 @@ tr.row-editado:hover > td:first-child { background: #fef3c7; }
   td { padding: 6px 10px; border-bottom: 1px solid var(--table-border); }
 }
 .text-muted-sm { color: var(--muted); font-size: .85rem; }
+/* Rótulo discreto colado a um texto: turno na escala, natureza da folha de ponto. */
+.tag-inline { color: var(--muted); font-size: .72rem; white-space: nowrap; }
+/* Opção de rádio dos formulários (o input não herda a largura total dos campos). */
+.radio-opt { display: flex; align-items: center; gap: 6px; font-weight: 500; margin: 0; cursor: pointer; }
+.radio-opt input { width: auto; }
+/* Caixas de seleção das barras de período do Ponto: mesma altura dos botões redondos de navegação. */
+.sel-mes, .sel-ano {
+  height: 40px; border: 1px solid var(--border); border-radius: 8px;
+  background: #fff; color: var(--text); font-size: .95rem; padding: 0 8px;
+}
+.sel-mes { min-width: 120px; }
+.sel-ano { min-width: 84px; }
 .back-link { color: var(--primary); font-size: .9rem; display: inline-block; margin-bottom: 16px; }
 .ctrl-select { padding: 5px 8px; font-size: 1rem; border: 1px solid var(--border); border-radius: 4px; }
 .pag-report-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }

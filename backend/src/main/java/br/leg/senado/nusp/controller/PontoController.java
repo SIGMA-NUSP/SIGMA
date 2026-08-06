@@ -13,6 +13,7 @@ import br.leg.senado.nusp.service.ReportDocxService;
 import br.leg.senado.nusp.service.ReportPdfService;
 import br.leg.senado.nusp.service.ReportService;
 import br.leg.senado.nusp.service.RetificacaoService;
+import br.leg.senado.nusp.service.SumarioOcorrenciasService;
 import br.leg.senado.nusp.service.TipoMarcacaoService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -54,6 +55,7 @@ public class PontoController {
     private final MarcacaoService marcacaoService;
     private final TipoMarcacaoService tipoMarcacaoService;
     private final GradeRetificacaoService gradeRetificacaoService;
+    private final SumarioOcorrenciasService sumarioOcorrenciasService;
     private final PontoXlsxService pontoXlsxService;
     private final BancoHorasService bancoHorasService;
     private final ReportService reportService;
@@ -68,10 +70,12 @@ public class PontoController {
     public ResponseEntity<?> upload(
             @RequestParam("arquivo") MultipartFile arquivo,
             @RequestParam("tipo") String tipo,
+            // Só a folha mensal é prévia ou definitiva; a semanal envia o campo vazio ou nem o envia.
+            @RequestParam(value = "categoria", required = false) String categoria,
             @RequestParam("data_inicio") String dataInicio,
             @RequestParam("data_fim") String dataFim,
             @AuthenticationPrincipal UserPrincipal principal) {
-        Map<String, Object> data = pontoService.upload(arquivo, tipo, dataInicio, dataFim, principal.getId());
+        Map<String, Object> data = pontoService.upload(arquivo, tipo, categoria, dataInicio, dataFim, principal.getId());
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("ok", true, "data", data));
     }
 
@@ -276,6 +280,20 @@ public class PontoController {
         byte[] xlsx = pontoXlsxService.gerar(categoria, ano, mes);
         String nome = "ponto_" + categoria.strip().toLowerCase() + "_" + String.format("%02d%02d", ano % 100, mes);
         return reportService.respondXlsx(xlsx, nome);
+    }
+
+    // ══ Sumário de ocorrências das folhas ═══════════════════════
+
+    /**
+     * "Ocorrências Secullum" do período: funcionários × os status impressos nas folhas (FERNC,
+     * Atecc, DISPOSI, Falta…), contando dias. O intervalo vai de uma competência a outra, ambas
+     * {@code AAAA-MM} e inclusive; a validação (formato e ordem) é do service. Qualquer admin.
+     */
+    @AdminOnly
+    @GetMapping("/api/admin/ponto/ocorrencias/sumario")
+    public ResponseEntity<?> sumarioOcorrencias(@RequestParam(required = false) String de,
+                                                @RequestParam(required = false) String ate) {
+        return ResponseEntity.ok(Map.of("ok", true, "data", sumarioOcorrenciasService.sumario(de, ate)));
     }
 
     // ══ Operador / Técnico ══════════════════════════════════════

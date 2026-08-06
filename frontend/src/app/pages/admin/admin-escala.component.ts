@@ -67,7 +67,7 @@ import { asArray } from '../../core/helpers/format.helpers';
                                 <td>
                                   @if (asArray(item['operadores_detalhe']).length > 0) {
                                     @for (op of asArray(item['operadores_detalhe']); track op['id']; let last = $last) {
-                                      <span>{{ op['nome'] }} <span class="turno-tag">({{ op['turno'] === 'M' ? 'Manhã' : 'Tarde' }})</span></span>{{ last ? '' : ', ' }}
+                                      <span>{{ op['nome'] }} <span class="tag-inline">({{ op['turno'] === 'M' ? 'Manhã' : 'Tarde' }})</span></span>{{ last ? '' : ', ' }}
                                     }
                                   } @else {
                                     {{ item['operadores'] }}
@@ -152,7 +152,7 @@ import { asArray } from '../../core/helpers/format.helpers';
                     (change)="toggleOperador(sala.id, op.id)">
                   <span>{{ op.nome_completo || op.nome }}</span>
                   @if (turnoDe(sala.id, op.id); as t) {
-                    <span class="turno-tag">{{ t === 'M' ? 'Manhã' : 'Tarde' }}</span>
+                    <span class="tag-inline">{{ t === 'M' ? 'Manhã' : 'Tarde' }}</span>
                   }
                   @if (getOutrosPlenarios(sala.id, op.id).length > 0) {
                     <span class="badge-outros">{{ getOutrosPlenarios(sala.id, op.id).join(', ') }}</span>
@@ -257,7 +257,6 @@ import { asArray } from '../../core/helpers/format.helpers';
     .funcoes-editor { margin-top:16px; }
 
     .escalas-section { margin-top:8px; }
-    .turno-tag { color:var(--muted); font-size:.72rem; white-space:nowrap; }
     .plenario-title { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
     .btn-inverter {
       background:var(--card); color:var(--text); border:1px solid var(--border);

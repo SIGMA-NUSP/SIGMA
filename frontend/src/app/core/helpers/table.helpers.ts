@@ -78,3 +78,25 @@ export function periodoFolha(tipo: string, dataInicio: string, dataFim: string, 
   if (tipo === 'MENSAL') return competenciaMensal(dataInicio);
   return `${formatarDataBr(dataInicio)}${sep}${formatarDataBr(dataFim)}`;
 }
+
+/**
+ * Tipo da folha/lote por extenso: a mensal carrega a natureza escolhida no envio
+ * ("Mensal — prévia"), a semanal não tem essa distinção.
+ */
+export function tipoFolhaLabel(tipo: string, categoria?: string | null): string {
+  if (tipo !== 'MENSAL') return 'Semanal';
+  const natureza = categoriaFolhaNome(categoria);
+  return natureza ? `Mensal — ${natureza}` : 'Mensal';
+}
+
+/** Natureza da folha mensal como rótulo discreto ("(prévia)"); vazio quando não há distinção. */
+export function categoriaFolhaTag(tipo: string, categoria?: string | null): string {
+  const natureza = tipo === 'MENSAL' ? categoriaFolhaNome(categoria) : '';
+  return natureza ? `(${natureza})` : '';
+}
+
+function categoriaFolhaNome(categoria?: string | null): string {
+  if (categoria === 'PREVIA') return 'prévia';
+  if (categoria === 'DEFINITIVA') return 'definitiva';
+  return '';
+}

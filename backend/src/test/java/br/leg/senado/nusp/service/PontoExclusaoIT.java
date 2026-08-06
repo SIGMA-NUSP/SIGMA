@@ -519,7 +519,7 @@ class PontoExclusaoIT {
             // A guarda fecha o mês: a mensal CERTA não entra mais.
             ServiceValidationException recusa = assertThrows(ServiceValidationException.class,
                     () -> pontoService.publicar(correta.getId(), true));
-            assertTrue(recusa.getMessage().contains("já existe folha mensal publicada"),
+            assertTrue(recusa.getMessage().contains("já existe folha mensal prévia publicada"),
                     () -> "a recusa da guarda: " + recusa.getMessage());
 
             service.excluirLote(errada.getId(), MASTER, admin.getId());

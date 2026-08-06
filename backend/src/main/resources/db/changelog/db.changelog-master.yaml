@@ -95,3 +95,7 @@ databaseChangeLog:
       file: db/changelog/047-aviso-exige-ciencia.yaml
   - include:
       file: db/changelog/048-metabase-dashboard-contexto.yaml
+  - include:
+      file: db/changelog/049-ponto-lote-categoria.yaml
+  - include:
+      file: db/changelog/050-ponto-folha-linha.yaml

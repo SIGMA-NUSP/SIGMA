@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -41,6 +42,7 @@ import br.leg.senado.nusp.service.ReportDocxService;
 import br.leg.senado.nusp.service.ReportPdfService;
 import br.leg.senado.nusp.service.ReportService;
 import br.leg.senado.nusp.service.RetificacaoService;
+import br.leg.senado.nusp.service.SumarioOcorrenciasService;
 import br.leg.senado.nusp.service.TipoMarcacaoService;
 
 import static org.hamcrest.Matchers.containsString;
@@ -108,6 +110,7 @@ class PontoControllerTest {
     @MockitoBean private MarcacaoService marcacaoService;
     @MockitoBean private TipoMarcacaoService tipoMarcacaoService;
     @MockitoBean private GradeRetificacaoService gradeRetificacaoService;
+    @MockitoBean private SumarioOcorrenciasService sumarioOcorrenciasService;
     @MockitoBean private PontoXlsxService pontoXlsxService;
     @MockitoBean private BancoHorasService bancoHorasService;
     @MockitoBean private ReportService reportService;
@@ -545,7 +548,7 @@ class PontoControllerTest {
         @Test
         @DisplayName("POST /api/admin/ponto/upload — 201 com o arquivo, os params e o id do admin do token")
         void upload_multipart_201() throws Exception {
-            when(pontoService.upload(any(), eq("MENSAL"), eq("2026-07-01"), eq("2026-07-31"),
+            when(pontoService.upload(any(), eq("MENSAL"), eq("PREVIA"), eq("2026-07-01"), eq("2026-07-31"),
                     eq(TokenFactory.USER_ID)))
                     .thenReturn(Map.of("lote_id", LOTE_ID, "paginas", 3));
 
@@ -553,6 +556,7 @@ class PontoControllerTest {
                             .file(new MockMultipartFile("arquivo", "cartao-ponto.pdf",
                                     MediaType.APPLICATION_PDF_VALUE, PDF))
                             .param("tipo", "MENSAL")
+                            .param("categoria", "PREVIA")
                             .param("data_inicio", "2026-07-01")
                             .param("data_fim", "2026-07-31")
                             .header("Authorization", admin))
@@ -566,7 +570,67 @@ class PontoControllerTest {
                     argThat(f -> "cartao-ponto.pdf".equals(f.getOriginalFilename())
                             && "arquivo".equals(f.getName())
                             && f.getSize() == PDF.length),
-                    eq("MENSAL"), eq("2026-07-01"), eq("2026-07-31"), eq(TokenFactory.USER_ID));
+                    eq("MENSAL"), eq("PREVIA"), eq("2026-07-01"), eq("2026-07-31"),
+                    eq(TokenFactory.USER_ID));
+        }
+
+        /**
+         * A folha mensal viaja com a NATUREZA escolhida no envio (prévia abre o mês, definitiva o
+         * fecha), num campo próprio do multipart posicionado entre o tipo e as datas. É a posição
+         * que este teste trava: categoria e data_inicio são ambos texto, então trocá-las de lugar
+         * compila — e o lote nasceria com a data no lugar da natureza, sem erro nenhum.
+         */
+        @ParameterizedTest(name = "[{index}] folha mensal {0}")
+        @ValueSource(strings = {"PREVIA", "DEFINITIVA"})
+        @DisplayName("upload mensal — a natureza escolhida chega ao service entre o tipo e as datas")
+        void upload_mensal_naturezaChegaAoService(String categoria) throws Exception {
+            when(pontoService.upload(any(), eq("MENSAL"), eq(categoria), eq("2026-07-01"),
+                    eq("2026-07-31"), eq(TokenFactory.USER_ID)))
+                    .thenReturn(Map.of("lote_id", LOTE_ID, "paginas", 3));
+
+            mockMvc.perform(Requests.multipart("/api/admin/ponto/upload")
+                            .file(new MockMultipartFile("arquivo", "cartao-ponto.pdf",
+                                    MediaType.APPLICATION_PDF_VALUE, PDF))
+                            .param("tipo", "MENSAL")
+                            .param("categoria", categoria)
+                            .param("data_inicio", "2026-07-01")
+                            .param("data_fim", "2026-07-31")
+                            .header("Authorization", admin))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.ok").value(true))
+                    .andExpect(jsonPath("$.data.lote_id").value(LOTE_ID));
+
+            verify(pontoService).upload(any(), eq("MENSAL"), eq(categoria), eq("2026-07-01"),
+                    eq("2026-07-31"), eq(TokenFactory.USER_ID));
+        }
+
+        /**
+         * A folha semanal não é prévia nem definitiva e por isso o front nem envia o campo — o
+         * multipart chega SEM a parte {@code categoria}. Ela é opcional no controller de propósito:
+         * exigi-la mataria o envio semanal com um 400 de parâmetro ausente, antes de o service
+         * poder decidir qualquer coisa. O que chega lá é {@code null}, e o 201 sai igual.
+         */
+        @Test
+        @DisplayName("upload semanal sem o campo categoria — o service recebe null e o envio continua 201")
+        void upload_semanalSemCategoria_recebeNull() throws Exception {
+            when(pontoService.upload(any(), eq("SEMANAL"), isNull(), eq("2026-07-06"), eq("2026-07-12"),
+                    eq(TokenFactory.USER_ID)))
+                    .thenReturn(Map.of("lote_id", LOTE_ID, "paginas", 5));
+
+            mockMvc.perform(Requests.multipart("/api/admin/ponto/upload")
+                            .file(new MockMultipartFile("arquivo", "cartao-ponto.pdf",
+                                    MediaType.APPLICATION_PDF_VALUE, PDF))
+                            .param("tipo", "SEMANAL")
+                            .param("data_inicio", "2026-07-06")
+                            .param("data_fim", "2026-07-12")
+                            .header("Authorization", admin))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.ok").value(true))
+                    .andExpect(jsonPath("$.data.lote_id").value(LOTE_ID))
+                    .andExpect(jsonPath("$.data.paginas").value(5));
+
+            verify(pontoService).upload(any(), eq("SEMANAL"), isNull(), eq("2026-07-06"),
+                    eq("2026-07-12"), eq(TokenFactory.USER_ID));
         }
 
         /**
@@ -598,13 +662,14 @@ class PontoControllerTest {
         @Test
         @DisplayName("POST /api/admin/ponto/upload — PDF recusado pelo service vira 400 {ok:false, error}")
         void upload_arquivoInvalido_400() throws Exception {
-            when(pontoService.upload(any(), anyString(), anyString(), anyString(), anyString()))
+            when(pontoService.upload(any(), anyString(), anyString(), anyString(), anyString(), anyString()))
                     .thenThrow(new ServiceValidationException("O arquivo enviado não é um PDF válido."));
 
             mockMvc.perform(Requests.multipart("/api/admin/ponto/upload")
                             .file(new MockMultipartFile("arquivo", "nao-e-pdf.txt",
                                     MediaType.TEXT_PLAIN_VALUE, "isto não é um PDF".getBytes(StandardCharsets.UTF_8)))
                             .param("tipo", "MENSAL")
+                            .param("categoria", "PREVIA")
                             .param("data_inicio", "2026-07-01")
                             .param("data_fim", "2026-07-31")
                             .header("Authorization", admin))
@@ -883,6 +948,59 @@ class PontoControllerTest {
 
             // " Operadores " + 2026/07 → ponto_operadores_2607 (strip + toLowerCase + AAMM no controller).
             verify(reportService).respondXlsx(same(xlsx), eq("ponto_operadores_2607"));
+        }
+    }
+
+    // ══ 4b) Sumário de ocorrências das folhas ══════════════════════════════
+
+    @Nested
+    @DisplayName("sumário de ocorrências — repasse do intervalo de competências")
+    class SumarioDeOcorrencias {
+
+        @Test
+        @DisplayName("GET /api/admin/ponto/ocorrencias/sumario — repassa de/ate e envelopa o retorno em {ok,data}")
+        void sumario_repassaIntervalo() throws Exception {
+            when(sumarioOcorrenciasService.sumario("2026-01", "2026-12"))
+                    .thenReturn(Map.of("de", "2026-01", "ocorrencias", List.of(Map.of("codigo", "FERNC"))));
+
+            mockMvc.perform(Requests.get("/api/admin/ponto/ocorrencias/sumario")
+                            .param("de", "2026-01").param("ate", "2026-12")
+                            .header("Authorization", admin))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.ok").value(true))
+                    .andExpect(jsonPath("$.data.ocorrencias[0].codigo").value("FERNC"));
+
+            verify(sumarioOcorrenciasService).sumario("2026-01", "2026-12");
+        }
+
+        /**
+         * Os parâmetros são opcionais no controller de propósito: a ausência tem de chegar ao service,
+         * que responde com a frase em pt-BR que nomeia o campo. Exigi-los aqui devolveria o 400 genérico
+         * do Spring, sem dizer qual campo falta nem em que formato.
+         */
+        @Test
+        @DisplayName("sem os parâmetros — a validação é do service, que recebe nulo")
+        void sumario_semParametros_chegaNuloAoService() throws Exception {
+            when(sumarioOcorrenciasService.sumario(null, null))
+                    .thenThrow(new ServiceValidationException("Competência inválida em de (use AAAA-MM)."));
+
+            mockMvc.perform(Requests.get("/api/admin/ponto/ocorrencias/sumario").header("Authorization", admin))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.ok").value(false))
+                    .andExpect(jsonPath("$.error").value("Competência inválida em de (use AAAA-MM)."));
+
+            verify(sumarioOcorrenciasService).sumario(null, null);
+        }
+
+        @Test
+        @DisplayName("rota admin: operador leva 403 e o service nem é tocado")
+        void sumario_operadorBarrado() throws Exception {
+            mockMvc.perform(Requests.get("/api/admin/ponto/ocorrencias/sumario")
+                            .param("de", "2026-01").param("ate", "2026-12")
+                            .header("Authorization", operador))
+                    .andExpect(status().isForbidden());
+
+            verifyNoInteractions(sumarioOcorrenciasService);
         }
     }
 

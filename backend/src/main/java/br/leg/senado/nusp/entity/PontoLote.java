@@ -16,6 +16,11 @@ import java.time.LocalDateTime;
 @Getter @Setter
 public class PontoLote extends AuditableEntity {
 
+    /** Folha mensal que abre o mês: retificável e substituível pela definitiva. */
+    public static final String CATEGORIA_PREVIA = "PREVIA";
+    /** Folha mensal que fecha o mês: entra por cima da prévia e não se retifica. */
+    public static final String CATEGORIA_DEFINITIVA = "DEFINITIVA";
+
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private String id;
@@ -23,6 +28,10 @@ public class PontoLote extends AuditableEntity {
     /** SEMANAL | MENSAL */
     @Column(name = "TIPO", nullable = false)
     private String tipo;
+
+    /** PREVIA | DEFINITIVA na folha mensal; sempre nulo na semanal, que não tem essa distinção. */
+    @Column(name = "CATEGORIA")
+    private String categoria;
 
     @Column(name = "DATA_INICIO", nullable = false)
     private LocalDate dataInicio;

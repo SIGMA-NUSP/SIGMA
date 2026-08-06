@@ -57,6 +57,9 @@ public final class CenarioFactory {
     /** PASSWORD_HASH é NOT NULL nas 3 tabelas de pessoa; nenhum teste faz login de verdade. */
     private static final String HASH_SINTETICO = "$2b$12$hash.sintetico.nunca.usado.em.login.0123456789012345678";
 
+    /** Único tipo de lote com natureza (prévia/definitiva); a semanal é cumulativa e não tem. */
+    private static final String TIPO_LOTE_MENSAL = "MENSAL";
+
     /** Tetos de PNT_TIPO_MARCACAO.NOME e .BADGE — o sufixo de unicidade tem de caber neles. */
     private static final int TETO_NOME_TIPO = 20;
     private static final int TETO_BADGE_TIPO = 3;
@@ -482,11 +485,26 @@ public final class CenarioFactory {
      * TOTAL_PAGINAS são NOT NULL, e CRIADO_POR_ID tem FK para PES_ADMINISTRADOR — daí o admin real.
      * O arquivo NÃO precisa existir em disco: a extração do BANCO engole a falha de leitura com um
      * WARN e deixa BANCO_FINAL_MIN nulo (a publicação nunca aborta por causa do PDF).
+     *
+     * <p>A folha mensal nasce PRÉVIA — a natureza retificável e substituível, que é o que uma folha
+     * mensal sempre foi antes de a escolha existir; a semanal fica sem categoria. Quem precisa da
+     * DEFINITIVA usa a sobrecarga que recebe a natureza.
      */
     public static PontoLote novoLotePonto(EntityManager em, String tipo, LocalDate dataInicio, LocalDate dataFim,
             Administrador criadoPor) {
+        return novoLotePonto(em, tipo, categoriaPadrao(tipo), dataInicio, dataFim, criadoPor);
+    }
+
+    /**
+     * Lote em revisão com a natureza escolhida: PREVIA ou DEFINITIVA na folha mensal, {@code null}
+     * na semanal (que não tem essa distinção).
+     */
+    public static PontoLote novoLotePonto(EntityManager em, String tipo, String categoria, LocalDate dataInicio,
+            LocalDate dataFim, Administrador criadoPor) {
+        exigirCategoriaCoerente(tipo, categoria);
         PontoLote lote = new PontoLote();
         lote.setTipo(tipo);
+        lote.setCategoria(categoria);
         lote.setDataInicio(dataInicio);
         lote.setDataFim(dataFim);
         lote.setArquivoOriginal("ponto/originais/" + UUID.randomUUID() + ".pdf");
@@ -500,12 +518,38 @@ public final class CenarioFactory {
     /** Lote de cartão-ponto JÁ PUBLICADO — a folha oficial que ancora o banco de horas da pessoa. */
     public static PontoLote novoLotePontoPublicado(EntityManager em, String tipo, LocalDate dataInicio,
             LocalDate dataFim, Administrador criadoPor) {
-        PontoLote lote = novoLotePonto(em, tipo, dataInicio, dataFim, criadoPor);
+        return novoLotePontoPublicado(em, tipo, categoriaPadrao(tipo), dataInicio, dataFim, criadoPor);
+    }
+
+    /** Folha publicada com a natureza escolhida — a DEFINITIVA é a que fecha o mês da pessoa. */
+    public static PontoLote novoLotePontoPublicado(EntityManager em, String tipo, String categoria,
+            LocalDate dataInicio, LocalDate dataFim, Administrador criadoPor) {
+        PontoLote lote = novoLotePonto(em, tipo, categoria, dataInicio, dataFim, criadoPor);
         lote.setStatus("PUBLICADO");
         lote.setPublicadoEm(LocalDateTime.now());
         em.merge(lote);
         em.flush();
         return lote;
+    }
+
+    /** Natureza que o lote assume quando o teste não escolhe: mensal prévia, semanal nenhuma. */
+    private static String categoriaPadrao(String tipo) {
+        return TIPO_LOTE_MENSAL.equals(tipo) ? PontoLote.CATEGORIA_PREVIA : null;
+    }
+
+    /**
+     * Falha ruidosa ANTES do flush: o CK_PNT_LOTE_CATEGORIA devolveria só um ORA-02290 opaco.
+     * Mensal sem natureza (ou com natureza fora do domínio) e semanal com natureza não existem.
+     */
+    private static void exigirCategoriaCoerente(String tipo, String categoria) {
+        boolean mensal = TIPO_LOTE_MENSAL.equals(tipo);
+        boolean coerente = mensal
+                ? PontoLote.CATEGORIA_PREVIA.equals(categoria) || PontoLote.CATEGORIA_DEFINITIVA.equals(categoria)
+                : categoria == null;
+        if (!coerente) {
+            throw new IllegalArgumentException("CK_PNT_LOTE_CATEGORIA: lote " + tipo + " não aceita categoria "
+                    + categoria + (mensal ? " (use PREVIA ou DEFINITIVA)" : " (só a folha mensal tem natureza)"));
+        }
     }
 
     /**

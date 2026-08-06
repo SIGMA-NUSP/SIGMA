@@ -228,8 +228,6 @@ interface AvisoRow {
     .req { color:#dc2626; }
     .msg-actions { display:flex; gap:8px; margin-bottom:4px; }
     .radio-row { display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
-    .radio-opt { display:flex; align-items:center; gap:6px; font-weight:500; margin:0; cursor:pointer; }
-    .radio-opt input { width:auto; }
     .duracao-inline { display:flex; align-items:center; gap:8px; }
     .duracao-inline label { margin:0; white-space:nowrap; }
     .duracao-inline input { width:90px; }

@@ -2,13 +2,15 @@ import { Component, inject, input } from '@angular/core';
 import { Router } from '@angular/router';
 import { ApiService } from '../../core/services/api.service';
 import { ClientPager } from '../../core/helpers/client-pager';
-import { competenciaMensalSlug, periodoFolha } from '../../core/helpers/table.helpers';
+import { categoriaFolhaTag, competenciaMensalSlug, periodoFolha } from '../../core/helpers/table.helpers';
 import { FmtDatePipe } from '../pipes/fmt-date.pipe';
 import { PaginationComponent } from './pagination.component';
 
 export interface MinhaFolha {
   id: string;
   tipo: string;
+  /** PREVIA | DEFINITIVA na folha mensal; ausente na semanal. */
+  categoria?: string | null;
   data_inicio: string;
   data_fim: string;
   publicado_em?: string;
@@ -35,7 +37,10 @@ export interface MinhaFolha {
         <tbody>
           @for (f of pager.rows(); track f.id) {
             <tr>
-              <td><strong>{{ periodo(f) }}</strong></td>
+              <td>
+                <strong>{{ periodo(f) }}</strong>
+                @if (natureza(f)) { <span class="tag-inline">{{ natureza(f) }}</span> }
+              </td>
               <td>{{ f.tipo === 'MENSAL' ? 'Mensal' : 'Semanal' }}</td>
               <td>{{ f.publicado_em | fmtDate }}</td>
               <td class="acoes-cell">
@@ -87,6 +92,11 @@ export class FolhasPontoListaComponent {
   /** Período da folha: mensal = "Junho/2026"; semanal = intervalo de datas. */
   periodo(f: MinhaFolha): string {
     return periodoFolha(f.tipo, f.data_inicio, f.data_fim);
+  }
+
+  /** "(prévia)"/"(definitiva)" ao lado do mês; vazio na semanal. */
+  natureza(f: MinhaFolha): string {
+    return categoriaFolhaTag(f.tipo, f.categoria);
   }
 
   retificar(f: MinhaFolha): void {

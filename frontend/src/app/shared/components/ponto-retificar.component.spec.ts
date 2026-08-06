@@ -8,8 +8,9 @@ import { ToastService } from './toast.component';
 
 /**
  * PontoRetificarComponent: carga da folha e dos dias já retificados (fail-closed com retry),
- * prazo calculado no BACKEND (o front só lê `limite_fmt`/`prazo_expirado` de
- * `GET /api/ponto/folha/{id}/retificacoes`), validação de pares Ent./Saí., teto de 300
+ * prazo calculado no BACKEND (o front só lê `limite_fmt`/`prazo_expirado`/`mes_fechado` de
+ * `GET /api/ponto/folha/{id}/retificacoes`; o mês encerrado pela folha definitiva bloqueia a
+ * folha inteira e prevalece sobre o prazo), validação de pares Ent./Saí., teto de 300
  * caracteres na observação e gravação em UM POST de LOTE (`{dias:[…]}`, transacional), com
  * trava de duplo clique e timer de navegação cancelado no destroy. Dia JÁ retificado chega da
  * listagem com o conteúdo gravado (`retif`, com id), a linha expande em LEITURA no clique e,
@@ -437,6 +438,168 @@ describe('PontoRetificarComponent', () => {
       expect(comp.erro()).toBe('Prazo de retificação encerrado.');
       expect(apiPost).not.toHaveBeenCalled();
       expect(comp.enviado()).toBe(false);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Mês encerrado pela folha de ponto definitiva — bloqueio permanente,
+  // independente do prazo (o backend anuncia por `mes_fechado`)
+  // ═══════════════════════════════════════════════════════════════════
+  describe('mês encerrado pela folha definitiva', () => {
+    const TEXTO_MES_FECHADO =
+      'Esta folha não pode mais ser retificada: a folha de ponto definitiva do mês já foi publicada.';
+
+    /** Folha carregada com o mês encerrado; o prazo, por padrão, ainda está correndo. */
+    function criarComMesFechado(extra: Record<string, unknown> = {}): PontoRetificarComponent {
+      respostaRetificacoes({ limite_fmt: '17/07/2026', prazo_expirado: false, mes_fechado: true, retificacoes: [], ...extra });
+      return criarCarregado();
+    }
+
+    it('a folha chega bloqueada mesmo com o prazo correndo', () => {
+      const comp = criarComMesFechado();
+      expect(comp.mesFechado()).toBe(true);
+      expect(comp.prazoExpirado()).toBe(false);
+      expect(comp.bloqueado()).toBe(true);
+    });
+
+    it('sem a chave (ou com ela em false) nada muda: o bloqueio segue sendo só o do prazo', () => {
+      expect(criarCarregado().mesFechado()).toBe(false);            // o mock padrão nem manda a chave
+      expect(criarCarregado().bloqueado()).toBe(false);
+
+      respostaRetificacoes({ limite_fmt: '17/07/2026', prazo_expirado: false, mes_fechado: false, retificacoes: [] });
+      expect(criarCarregado().bloqueado()).toBe(false);
+
+      respostaRetificacoes({ limite_fmt: '17/07/2026', prazo_expirado: true, retificacoes: [] });
+      const vencida = criarCarregado();
+      expect(vencida.mesFechado()).toBe(false);
+      expect(vencida.bloqueado()).toBe(true);                       // o prazo sozinho ainda bloqueia
+    });
+
+    it('salvar() recusa com o motivo do mês, sem tocar a API — o prazo em dia não vale de nada', () => {
+      const comp = criarComMesFechado();
+      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
+
+      comp.salvar();
+
+      expect(comp.erro()).toBe('Mês encerrado pela folha de ponto definitiva.');
+      expect(apiPost).not.toHaveBeenCalled();
+      expect(comp.enviado()).toBe(false);
+    });
+
+    it('com o mês encerrado E o prazo vencido, o motivo anunciado é o do mês', () => {
+      const comp = criarComMesFechado({ prazo_expirado: true });
+      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
+
+      comp.salvar();
+
+      expect(comp.erro()).toBe('Mês encerrado pela folha de ponto definitiva.');
+      expect(apiPost).not.toHaveBeenCalled();
+    });
+
+    it('salvarEdicao() da retificação gravada também recusa, sem PUT', () => {
+      respostaRetificacoes({
+        limite_fmt: '17/07/2026', prazo_expirado: false, mes_fechado: true,
+        retificacoes: [structuredClone(RETIF_QUA)],
+      });
+      const comp = criarCarregado();
+      const l = linhaEmEdicao(comp);
+      Object.assign(l, { r_ent1: '07:30', r_sai1: '11:30' });
+
+      comp.salvarEdicao(l);
+
+      expect(comp.erro()).toBe('Mês encerrado pela folha de ponto definitiva.');
+      expect(apiPut).not.toHaveBeenCalled();
+      expect(l.editando).toBe(true);          // o usuário não perde o que digitou
+    });
+
+    // ─── RENDER: o bloqueio é o que o usuário VÊ (guards são a 2ª camada) ───
+    async function renderizar(
+      data: Record<string, unknown>,
+      opcoes: { abrirDia?: boolean } = {},
+    ): Promise<ComponentFixture<PontoRetificarComponent>> {
+      respostaRetificacoes(data);
+      const fixture = TestBed.createComponent(PontoRetificarComponent);
+      fixture.detectChanges();                     // ngOnInit + render (as respostas do mock são síncronas)
+      if (opcoes.abrirDia) preencher(fixture.componentInstance, 0, { r_ent1: '08:00', r_sai1: '12:00' });
+      fixture.detectChanges();
+      await fixture.whenStable();                  // bindings do template (NgModel do textarea)
+      fixture.detectChanges();
+      return fixture;
+    }
+
+    const textoDe = (el: HTMLElement) => el.textContent!.replace(/\s+/g, ' ').trim();
+
+    const botoesMais = (fixture: ComponentFixture<PontoRetificarComponent>, vista: string) =>
+      fixture.debugElement.queryAll(By.css(`${vista} button.btn-pm`))
+        .map(b => b.nativeElement as HTMLButtonElement);
+
+    it('a caixa do mês encerrado entra NO LUGAR do aviso de prazo, e o Salvar some com o dia preenchido', async () => {
+      const fixture = await renderizar(
+        { limite_fmt: '17/07/2026', prazo_expirado: false, mes_fechado: true, retificacoes: [] },
+        { abrirDia: true },
+      );
+
+      const caixas = fixture.debugElement.queryAll(By.css('.error-box'));
+      expect(caixas).toHaveLength(1);
+      expect(textoDe(caixas[0].nativeElement)).toBe(TEXTO_MES_FECHADO);
+      expect(fixture.debugElement.query(By.css('p.prazo-aviso'))).toBeNull();      // o prazo não é mais a notícia
+      expect(fixture.nativeElement.textContent).not.toContain('Retificações permitidas até');
+
+      expect(fixture.componentInstance.selecionadas()).toHaveLength(1);            // há dia preenchido…
+      expect(fixture.debugElement.query(By.css('button.salvar-top'))).toBeNull();  // …e mesmo assim não há Salvar
+    });
+
+    it('os "+" ficam desabilitados nas duas vistas — nem se abre um dia novo', async () => {
+      const fixture = await renderizar(
+        { limite_fmt: '17/07/2026', prazo_expirado: false, mes_fechado: true, retificacoes: [] },
+      );
+
+      const desktop = botoesMais(fixture, '.vista-desktop');
+      const mobile = botoesMais(fixture, '.vista-mobile');
+      expect(desktop).toHaveLength(3);
+      expect(mobile).toHaveLength(3);
+      expect(desktop.every(b => b.disabled)).toBe(true);
+      expect(mobile.every(b => b.disabled)).toBe(true);
+    });
+
+    it('a retificação já gravada continua legível, mas perde o botão "Editar"', async () => {
+      const fixture = await renderizar({
+        limite_fmt: '17/07/2026', prazo_expirado: false, mes_fechado: true,
+        retificacoes: [structuredClone(RETIF_QUA)],
+      });
+
+      (fixture.debugElement.queryAll(By.css('.vista-desktop tbody tr'))[2].nativeElement as HTMLTableRowElement).click();
+      fixture.detectChanges();
+      await fixture.whenStable();     // bindings do template (o disabled do NgModel é assíncrono)
+      fixture.detectChanges();
+
+      const inputs = fixture.debugElement.queryAll(By.css('.vista-desktop .retif-area input'))
+        .map(i => i.nativeElement as HTMLInputElement);
+      expect(inputs).toHaveLength(4);                       // a consulta ao que foi gravado permanece
+      expect(inputs.every(i => i.disabled)).toBe(true);
+      expect(fixture.debugElement.queryAll(By.css('.vista-desktop .retif-acoes button'))).toEqual([]);
+    });
+
+    it('contraprova: com o mês aberto e o prazo correndo, volta o aviso de prazo, o Salvar e os "+"', async () => {
+      const fixture = await renderizar(
+        { limite_fmt: '17/07/2026', prazo_expirado: false, retificacoes: [] },
+        { abrirDia: true },
+      );
+
+      expect(fixture.debugElement.queryAll(By.css('.error-box'))).toEqual([]);
+      expect(textoDe(fixture.debugElement.query(By.css('p.prazo-aviso')).nativeElement))
+        .toBe('Retificações permitidas até 17/07/2026.');
+      expect(fixture.debugElement.query(By.css('button.salvar-top'))).not.toBeNull();
+      expect(botoesMais(fixture, '.vista-desktop').some(b => b.disabled)).toBe(false);
+    });
+
+    it('contraprova: com o prazo vencido e o mês aberto, a caixa exibida é a do PRAZO', async () => {
+      const fixture = await renderizar({ limite_fmt: '17/07/2026', prazo_expirado: true, retificacoes: [] });
+
+      const caixas = fixture.debugElement.queryAll(By.css('.error-box'));
+      expect(caixas).toHaveLength(1);
+      expect(textoDe(caixas[0].nativeElement)).toBe('Prazo de retificação encerrado em 17/07/2026.');
+      expect(fixture.nativeElement.textContent).not.toContain('folha de ponto definitiva do mês já foi publicada');
     });
   });
 

@@ -74,7 +74,7 @@ interface DadosFolha {
       <!-- F63: sem a listagem das retificações não há Salvar. A tela não saberia quais dias já
            foram retificados (nem se o prazo corre), e o lote é tudo-ou-nada — um dia repetido
            derruba o envio inteiro, inclusive os dias novos. Mesmo idioma do prazo: o botão some. -->
-      @if (selecionadas().length > 0 && !enviado() && !prazoExpirado() && retificacoesCarregadas()) {
+      @if (selecionadas().length > 0 && !enviado() && !bloqueado() && retificacoesCarregadas()) {
         <button class="btn-primary-custom salvar-top" (click)="salvar()" [disabled]="salvando()">
           {{ salvando() ? 'Salvando...' : 'Salvar' }}
         </button>
@@ -93,7 +93,13 @@ interface DadosFolha {
       <p class="text-muted-sm periodo">
         Folha {{ tipoLabel() }} — {{ periodoFolhaLabel() }}
       </p>
-      @if (limiteFmt()) {
+      <!-- O mês encerrado pela folha definitiva prevalece sobre o prazo: com ele não há mais o que
+           retificar naquela competência, ainda que os 5 dias desta folha estejam correndo. -->
+      @if (mesFechado()) {
+        <div class="error-box">
+          Esta folha não pode mais ser retificada: a folha de ponto definitiva do mês já foi publicada.
+        </div>
+      } @else if (limiteFmt()) {
         @if (prazoExpirado()) {
           <div class="error-box">Prazo de retificação encerrado em {{ limiteFmt() }}.</div>
         } @else {
@@ -136,7 +142,7 @@ interface DadosFolha {
                     <span class="badge-retif" title="Dia já retificado">✓ Retificado</span>
                   } @else {
                     <button class="btn-pm" [class.on]="l.aberto" (click)="toggle(l)"
-                            [disabled]="prazoExpirado()"
+                            [disabled]="bloqueado()"
                             [attr.aria-label]="l.aberto ? 'Remover retificação' : 'Retificar este dia'">
                       {{ l.aberto ? '−' : '+' }}
                     </button>
@@ -167,7 +173,7 @@ interface DadosFolha {
                       @if (l.ja_retificado) {
                         <div class="retif-acoes">
                           @if (!l.editando) {
-                            @if (!prazoExpirado()) {
+                            @if (!bloqueado()) {
                               <button class="btn-outline" (click)="iniciarEdicao(l)">Editar</button>
                             }
                           } @else {
@@ -199,7 +205,7 @@ interface DadosFolha {
                 <span class="badge-retif" title="Dia já retificado">✓</span>
               } @else {
                 <button class="btn-pm" [class.on]="l.aberto" (click)="toggle(l)"
-                        [disabled]="prazoExpirado()"
+                        [disabled]="bloqueado()"
                         [attr.aria-label]="l.aberto ? 'Remover retificação' : 'Retificar este dia'">
                   {{ l.aberto ? '−' : '+' }}
                 </button>
@@ -240,7 +246,7 @@ interface DadosFolha {
               @if (l.ja_retificado) {
                 <div class="retif-acoes">
                   @if (!l.editando) {
-                    @if (!prazoExpirado()) {
+                    @if (!bloqueado()) {
                       <button class="btn-outline" (click)="iniciarEdicao(l)">Editar</button>
                     }
                   } @else {
@@ -372,6 +378,10 @@ export class PontoRetificarComponent implements OnInit, OnDestroy {
   salvando = signal(false);
   limiteFmt = signal<string | null>(null);
   prazoExpirado = signal(false);
+  /** Competência da folha encerrada por folha mensal definitiva — bloqueio permanente, sem prazo. */
+  mesFechado = signal(false);
+  /** Nada de retificar nesta folha: ou o prazo venceu, ou o mês foi encerrado pela definitiva. */
+  bloqueado = computed(() => this.prazoExpirado() || this.mesFechado());
 
   /** Canal de erro da carga das retificações (F63) — próprio, com retry; não é o `erro` do formulário. */
   erroRetificacoes = signal('');
@@ -435,6 +445,7 @@ export class PontoRetificarComponent implements OnInit, OnDestroy {
         const d = res.data || {};
         this.limiteFmt.set(d.limite_fmt ?? null);
         this.prazoExpirado.set(!!d.prazo_expirado);
+        this.mesFechado.set(!!d.mes_fechado);
         const porDia = new Map<string, RetifSalva>((d.retificacoes || []).map((r: RetifSalva) => [r.data, r]));
         this.linhas.update(ls => ls.map(l => {
           const retif = porDia.get(this.diaParaISO(l.dia));
@@ -534,6 +545,7 @@ export class PontoRetificarComponent implements OnInit, OnDestroy {
   salvarEdicao(l: LinhaPonto): void {
     if (l.salvandoEdicao || !l.retif) return;
     this.erro.set('');
+    if (this.mesFechado()) { this.erro.set('Mês encerrado pela folha de ponto definitiva.'); return; }
     if (this.prazoExpirado()) { this.erro.set('Prazo de retificação encerrado.'); return; }
     const msg = this.erroHoras(l);
     if (msg) { this.erro.set(msg); return; }
@@ -570,6 +582,7 @@ export class PontoRetificarComponent implements OnInit, OnDestroy {
   salvar(): void {
     if (this.salvando()) return;
     this.erro.set('');
+    if (this.mesFechado()) { this.erro.set('Mês encerrado pela folha de ponto definitiva.'); return; }
     if (this.prazoExpirado()) { this.erro.set('Prazo de retificação encerrado.'); return; }
     // F63: o botão já some sem a listagem carregada — este guard é a segunda camada (lição do C9:
     // esconder/desabilitar no template não é garantia de que o handler não roda).

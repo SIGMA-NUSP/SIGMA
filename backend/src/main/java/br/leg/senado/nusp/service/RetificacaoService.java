@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -43,6 +44,7 @@ public class RetificacaoService {
     /** Prazo de retificação em dias corridos a partir da publicação (Q37). */
     private static final int PRAZO_DIAS = 5;
     private static final String STATUS_PUBLICADO = "PUBLICADO";
+    private static final String TIPO_MENSAL = "MENSAL";
     /** Hora HH:MM 00:00–23:59 (regex canônico do projeto, cf. AdminCrudService). */
     private static final Pattern HORA = Pattern.compile("^([01]\\d|2[0-3]):[0-5]\\d$");
     /** Teto da observação livre do dia (F33) — o mesmo do motivo de rejeição (BancoHorasService). */
@@ -128,6 +130,9 @@ public class RetificacaoService {
                             + (limite != null ? " em " + ReportConfig.fmtDate(limite) : "") + "."));
         }
 
+        // (c2) mês encerrado pela folha mensal definitiva da pessoa
+        exigirMesAberto(solicitanteId, pg.getPessoaTipo(), data);
+
         // (d) formato HH:MM + ao menos um par completo, pares fechados — 2 ou 4 horários (Q32 + F31)
         String ent1 = horaOuNull(clean(item, "ent1"), data);
         String sai1 = horaOuNull(clean(item, "sai1"), data);
@@ -210,8 +215,41 @@ public class RetificacaoService {
         out.put("limite", limite != null ? limite.toString() : null);
         out.put("limite_fmt", limite != null ? ReportConfig.fmtDate(limite) : null);
         out.put("prazo_expirado", limite == null || LocalDate.now().isAfter(limite));
+        out.put("mes_fechado", periodoTodoFechado(fa, solicitanteId));
         out.put("retificacoes", retificacoes);
         return out;
+    }
+
+    /**
+     * Todos os meses cobertos pela folha já foram encerrados por folha mensal definitiva da pessoa?
+     * A tela usa a resposta para bloquear a folha inteira de uma vez, em vez de deixar o usuário
+     * digitar e só descobrir a recusa no envio. Cobertura parcial (a folha toca um mês fechado e
+     * outro aberto) não bloqueia a tela — nesse caso a recusa é por dia, na gravação.
+     */
+    private boolean periodoTodoFechado(FolhaAlvo fa, String solicitanteId) {
+        PontoLote lote = fa.lote();
+        YearMonth ultimo = YearMonth.from(lote.getDataFim());
+        for (YearMonth mes = YearMonth.from(lote.getDataInicio()); !mes.isAfter(ultimo); mes = mes.plusMonths(1)) {
+            if (!mesFechadoPorDefinitiva(solicitanteId, fa.pagina().getPessoaTipo(), mes)) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Recusa o dia cujo mês a folha mensal definitiva da pessoa já encerrou. A definitiva fecha o
+     * mês de vez: nem ela mesma se retifica, nem a prévia que ela substituiu, nem uma semanal do
+     * mesmo mês que ainda esteja dentro dos 5 dias.
+     */
+    private void exigirMesAberto(String pessoaId, String pessoaTipo, LocalDate dia) {
+        if (!mesFechadoPorDefinitiva(pessoaId, pessoaTipo, YearMonth.from(dia))) return;
+        throw new ServiceValidationException("O dia " + ReportConfig.fmtDate(dia)
+                + " não pode ser retificado: a folha de ponto definitiva de "
+                + ReportConfig.fmtCompetencia(dia) + " já foi publicada.");
+    }
+
+    private boolean mesFechadoPorDefinitiva(String pessoaId, String pessoaTipo, YearMonth mes) {
+        return paginaRepo.contarDefinitivasPublicadas(
+                pessoaId, pessoaTipo, mes.atDay(1), mes.atEndOfMonth()) > 0;
     }
 
     /**
@@ -249,6 +287,9 @@ public class RetificacaoService {
                     Map.of("message", "Prazo de retificação encerrado"
                             + (limite != null ? " em " + ReportConfig.fmtDate(limite) : "") + "."));
         }
+
+        // (c2) mês encerrado pela folha mensal definitiva da pessoa
+        exigirMesAberto(solicitanteId, fa.pagina().getPessoaTipo(), r.getData());
 
         // (d) formato/pares e (f) observação — as mesmas regras de conteúdo da criação
         Map<String, Object> item = body == null ? Map.of() : body;
@@ -301,10 +342,22 @@ public class RetificacaoService {
         }
         PontoLote lote = loteRepo.findById(pg.getLoteId())
                 .orElseThrow(() -> new ServiceValidationException("Lote não encontrado.", HttpStatus.NOT_FOUND));
-        if (!STATUS_PUBLICADO.equals(lote.getStatus())) {
+        // A prévia substituída pela definitiva do mês deixou de ser a folha do dono: some da lista
+        // dele e não abre mais para download — a retificação responde a mesma coisa.
+        if (!STATUS_PUBLICADO.equals(lote.getStatus()) || previaSubstituida(pg, lote)) {
             throw new ServiceValidationException("Folha indisponível.", HttpStatus.NOT_FOUND);
         }
         return new FolhaAlvo(pg, lote);
+    }
+
+    /** Folha prévia cuja competência já foi encerrada pela definitiva da mesma pessoa. */
+    private boolean previaSubstituida(PontoLotePagina pagina, PontoLote lote) {
+        if (!TIPO_MENSAL.equals(lote.getTipo()) || !PontoLote.CATEGORIA_PREVIA.equals(lote.getCategoria())) {
+            return false;
+        }
+        return paginaRepo.contarDefinitivasPublicadas(pagina.getPessoaId(), pagina.getPessoaTipo(),
+                YearMonth.from(lote.getDataInicio()).atDay(1),
+                YearMonth.from(lote.getDataFim()).atEndOfMonth()) > 0;
     }
 
     private LocalDate parseData(String s) {

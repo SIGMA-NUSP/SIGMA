@@ -77,19 +77,23 @@ public interface PontoLotePaginaRepository extends JpaRepository<PontoLotePagina
     List<Object[]> findPessoasComFolhaPublicada();
 
     /**
-     * Guarda da folha mensal (F32): trios distintos [pessoaId, pessoaTipo, dataInicio da mensal] do
-     * conjunto informado que JÁ TÊM folha MENSAL publicada tocando a janela de competência — em OUTRO
-     * lote. É a mesma pergunta para os dois lados da regra: uma segunda MENSAL da pessoa no mês é
-     * proibida, e uma MENSAL publicada FECHA o mês para SEMANAIS atrasadas da mesma pessoa.
+     * Guarda da folha mensal (F32): quádruplas distintas [pessoaId, pessoaTipo, dataInicio da mensal,
+     * categoria da mensal] do conjunto informado que JÁ TÊM folha MENSAL publicada tocando a janela de
+     * competência — em OUTRO lote. É a mesma pergunta para os dois lados da regra: uma segunda MENSAL
+     * da pessoa no mês é proibida, e uma MENSAL publicada FECHA o mês para SEMANAIS atrasadas da mesma
+     * pessoa.
      *
      * <p>A {@code dataInicio} volta junto porque é dela que sai a competência REALMENTE fechada, que
      * a recusa cita ao admin — a janela consultada pode abranger dois meses (lote que cruza a virada),
      * e nomear a janela em vez do mês da mensal conflitante seria mentir sobre o mês que está aberto.
+     * A {@code categoria} volta porque só ela distingue o conflito que barra (prévia contra prévia,
+     * qualquer coisa contra definitiva) daquele que é a própria substituição pretendida (definitiva
+     * entrando por cima da prévia) — a decisão é do serviço, que conhece o lote sendo publicado.
      *
      * <p>O filtro é só de tipo MENSAL: a sobreposição entre SEMANAIS é o funcionamento normal (elas
      * são cumulativas — 01–05, 01–12, 01–19…) e não pode ser barrada aqui.
      */
-    @Query("SELECT DISTINCT p.pessoaId, p.pessoaTipo, l.dataInicio FROM PontoLotePagina p, PontoLote l " +
+    @Query("SELECT DISTINCT p.pessoaId, p.pessoaTipo, l.dataInicio, l.categoria FROM PontoLotePagina p, PontoLote l " +
            "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' AND l.tipo = 'MENSAL' " +
            "AND l.id <> :loteId AND p.pessoaId IN :pessoaIds " +
            "AND l.dataInicio <= :fim AND l.dataFim >= :inicio")
@@ -97,4 +101,37 @@ public interface PontoLotePaginaRepository extends JpaRepository<PontoLotePagina
                                                           @Param("pessoaIds") Collection<String> pessoaIds,
                                                           @Param("inicio") LocalDate inicio,
                                                           @Param("fim") LocalDate fim);
+
+    /**
+     * Páginas vinculadas de lotes PUBLICADOS cujo período toca a janela informada, com o lote junto
+     * (pares [PontoLotePagina, PontoLote]).
+     *
+     * <p>É o conjunto de candidatas do sumário de ocorrências: uma pessoa pode ter, no mesmo mês,
+     * semanais e as duas mensais, e só UMA representa o mês. Qual delas é decisão do serviço — a
+     * consulta entrega todas as que tocam a janela, sem escolher.
+     */
+    @Query("SELECT p, l FROM PontoLotePagina p, PontoLote l " +
+           "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' AND p.pessoaId IS NOT NULL " +
+           "AND l.dataInicio <= :fim AND l.dataFim >= :inicio")
+    List<Object[]> findPublicadasNoPeriodo(@Param("inicio") LocalDate inicio,
+                                           @Param("fim") LocalDate fim);
+
+    /**
+     * Quantas folhas mensais DEFINITIVAS publicadas da pessoa tocam a janela informada. É a pergunta
+     * do mês fechado, feita de três lugares: a folha prévia some da lista do dono quando a definitiva
+     * do mesmo mês chega, o acesso direto a essa prévia deixa de existir, e nenhum dia da competência
+     * fechada aceita retificação — nem pela folha mensal, nem por uma semanal que o cubra.
+     *
+     * <p>Diferente da guarda da publicação, aqui o par polimórfico (id, tipo) já é filtrado na própria
+     * consulta: o chamador tem os dois em mãos.
+     */
+    @Query("SELECT COUNT(p) FROM PontoLotePagina p, PontoLote l " +
+           "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' AND l.tipo = 'MENSAL' " +
+           "AND l.categoria = 'DEFINITIVA' " +
+           "AND p.pessoaId = :pessoaId AND p.pessoaTipo = :pessoaTipo " +
+           "AND l.dataInicio <= :fim AND l.dataFim >= :inicio")
+    long contarDefinitivasPublicadas(@Param("pessoaId") String pessoaId,
+                                     @Param("pessoaTipo") String pessoaTipo,
+                                     @Param("inicio") LocalDate inicio,
+                                     @Param("fim") LocalDate fim);
 }

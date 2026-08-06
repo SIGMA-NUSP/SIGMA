@@ -5,12 +5,14 @@ import { ApiService } from '../../core/services/api.service';
 import { AuthService } from '../../core/services/auth.service';
 import { erroCargaMsg, httpErrorMsg } from '../../core/helpers/http.helpers';
 import { ClientPager } from '../../core/helpers/client-pager';
-import { ANO_MINIMO_PONTO, mesNome, periodoFolha } from '../../core/helpers/table.helpers';
+import { ANO_MINIMO_PONTO, mesNome, periodoFolha, tipoFolhaLabel } from '../../core/helpers/table.helpers';
 import { FmtDatePipe } from '../../shared/pipes/fmt-date.pipe';
 import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
 import { PaginationComponent } from '../../shared/components/pagination.component';
 import { SolicitacoesAdminComponent } from '../../shared/components/solicitacoes-admin.component';
 import { GradeRetificacoesComponent } from '../../shared/components/grade-retificacoes.component';
+import { SumarioOcorrenciasComponent } from '../../shared/components/sumario-ocorrencias.component';
+import { FeatureToggleDirective } from '../../shared/directives/feature-toggle.directive';
 import { AjudaChatComponent } from '../../shared/components/ajuda-chat.component';
 import { ToastService } from '../../shared/components/toast.component';
 
@@ -31,6 +33,8 @@ interface Pagina {
 interface Lote {
   id: string;
   tipo: string;
+  /** PREVIA | DEFINITIVA na folha mensal; ausente na semanal. */
+  categoria?: string | null;
   data_inicio: string;
   data_fim: string;
   status: 'REVISAO' | 'PUBLICADO';
@@ -61,7 +65,7 @@ interface PessoaAfetada {
  */
 interface PreviewExclusao {
   escopo: 'LOTE' | 'PAGINA';
-  lote: { id: string; tipo: string; data_inicio: string; data_fim: string; status: string; publicado: boolean };
+  lote: { id: string; tipo: string; categoria?: string | null; data_inicio: string; data_fim: string; status: string; publicado: boolean };
   pagina: { id: string; numero_pagina: number; pessoa_nome?: string } | null;
   pessoas: PessoaAfetada[];
   paginas_excluidas: number;
@@ -79,7 +83,8 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
   selector: 'app-admin-ponto',
   standalone: true,
   imports: [FormsModule, RouterLink, FmtDatePipe, ErroCargaComponent, PaginationComponent,
-    SolicitacoesAdminComponent, GradeRetificacoesComponent, AjudaChatComponent],
+    SolicitacoesAdminComponent, GradeRetificacoesComponent, SumarioOcorrenciasComponent,
+    FeatureToggleDirective, AjudaChatComponent],
   template: `
     <h1>Ponto e Banco de Horas</h1>
     <a routerLink="/admin/gestao-pessoas" class="back-link">&larr; Voltar</a>
@@ -94,6 +99,13 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
       </button>
       <button class="card-custom card-pick" [class.active]="activeCard() === 'banco'" (click)="selectCard('banco')">
         <strong>Banco de Horas</strong><span class="text-muted-sm">Solicitações</span>
+      </button>
+      <!-- Card visível porém inerte enquanto a flag estiver desligada (a diretiva o esmaece) -->
+      <button class="card-custom card-pick" [featureToggle]="'sumarioOcorrencias'" #fSumario="featureToggle"
+              [class.active]="activeCard() === 'sumario'" [disabled]="!fSumario.enabled()"
+              (click)="selectCard('sumario')">
+        <strong>Sumário</strong>
+        <span class="text-muted-sm">{{ fSumario.enabled() ? 'Sumário de ocorrências das folhas' : 'Indisponível' }}</span>
       </button>
       <!-- Área pessoal do admin com folha (SERVIDOR_PUBLICO=0 — Q35/E9): navega p/ a página compartilhada /ponto -->
       @if (auth.temFolhaPonto()) {
@@ -141,6 +153,20 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
           </div>
         }
       </div>
+      @if (tipo === 'MENSAL') {
+        <!-- A prévia abre o mês para conferência; a definitiva o fecha e substitui a prévia. -->
+        <div class="form-row">
+          <label>Folha mensal *</label>
+          <div class="radio-linha">
+            <label class="radio-opt">
+              <input type="radio" [(ngModel)]="categoria" name="categoria" value="PREVIA"> Prévia
+            </label>
+            <label class="radio-opt">
+              <input type="radio" [(ngModel)]="categoria" name="categoria" value="DEFINITIVA"> Definitiva
+            </label>
+          </div>
+        </div>
+      }
       <div class="form-row">
         <label>Arquivo PDF *</label>
         <input #fileInput type="file" accept="application/pdf" (change)="onFileSelect($event)">
@@ -171,7 +197,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
         <table class="data-table">
           <thead><tr>
             <th style="width:34px"></th>
-            <th>Período</th><th style="width:110px">Tipo</th>
+            <th>Período</th><th style="width:150px">Tipo</th>
             <th style="width:90px; text-align:center">Páginas</th>
             <th style="width:110px; text-align:center">Pendentes</th>
             <th style="width:130px">Status</th>
@@ -192,7 +218,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
                 <tr class="row-clickable" (click)="toggleLote(l)">
                   <td><span class="btn-toggle">{{ l._exp ? '▼' : '▶' }}</span></td>
                   <td><strong>{{ periodoLote(l) }}</strong></td>
-                  <td>{{ l.tipo === 'MENSAL' ? 'Mensal' : 'Semanal' }}</td>
+                  <td>{{ tipoLote(l) }}</td>
                   <td style="text-align:center">{{ l.total_paginas }}</td>
                   <td style="text-align:center" [style.color]="l.pendentes > 0 ? 'var(--color-red)' : 'var(--color-green)'">
                     <strong>{{ l.pendentes }}</strong>
@@ -342,6 +368,10 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
       <app-solicitacoes-admin />
     }
 
+    @if (activeCard() === 'sumario' && fSumario.enabled()) {
+      <app-sumario-ocorrencias />
+    }
+
     <!-- ═══ Confirmação da exclusão (F59) — as consequências REAIS daquele item, vindas do preview ═══
          Nada de texto genérico: o que morre num lote em revisão e o que morre numa mensal publicada
          não têm nada em comum, e é o segundo caso (retificações, avisos, âncora, mês reaberto) que o
@@ -354,7 +384,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
           </h2>
 
           <p class="alvo">
-            <strong>{{ pv.lote.tipo === 'MENSAL' ? 'Mensal' : 'Semanal' }}
+            <strong>{{ tipoLote(pv.lote) }}
               {{ periodoLote(pv.lote) }}</strong>
             <span class="text-muted-sm">({{ pv.lote.publicado ? 'publicado' : 'em revisão' }})</span>
             @if (pv.pagina) {
@@ -413,6 +443,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
   styles: [`
     .grid-cards { margin-bottom:24px; }
     .form-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+    .radio-linha { display:flex; gap:20px; flex-wrap:wrap; }
     .pessoa-select { width:100%; max-width:360px; }
     .badge-rev { color:#b45309; font-weight:600; }
     .badge-manual { color:var(--primary); font-weight:600; }
@@ -444,10 +475,12 @@ export class AdminPontoComponent implements OnInit {
   @ViewChild('fileInput') fileInput!: ElementRef<HTMLInputElement>;
 
   // Navegação por cards (mesmo padrão de /admin/form-edit)
-  activeCard = signal<'folhas' | 'retificacoes' | 'banco' | null>(null);
+  activeCard = signal<'folhas' | 'retificacoes' | 'banco' | 'sumario' | null>(null);
 
   // Upload
   tipo = 'MENSAL';
+  /** Natureza da folha mensal enviada: PREVIA (abre o mês) ou DEFINITIVA (fecha o mês). */
+  categoria = 'PREVIA';
   dataInicio = '';
   dataFim = '';
   mesUpload = 0;
@@ -606,6 +639,7 @@ export class AdminPontoComponent implements OnInit {
   /** Alternar Mensal↔Semanal descarta o período preenchido (os campos não são equivalentes). */
   onTipoChange(): void {
     this.resetPeriodoUpload();
+    this.categoria = 'PREVIA';
     this.errorMsg.set('');
   }
 
@@ -614,8 +648,13 @@ export class AdminPontoComponent implements OnInit {
     return periodoFolha(l.tipo, l.data_inicio, l.data_fim);
   }
 
-  /** Alterna o card ativo; troca o conteúdo exibido (Folhas de Ponto / Retificações / Banco de Horas). */
-  selectCard(card: 'folhas' | 'retificacoes' | 'banco'): void {
+  /** Tipo exibido de um lote: a mensal mostra a natureza ("Mensal — prévia"). */
+  tipoLote(l: { tipo: string; categoria?: string | null }): string {
+    return tipoFolhaLabel(l.tipo, l.categoria);
+  }
+
+  /** Alterna o card ativo; troca o conteúdo exibido (Folhas de Ponto / Retificações / Banco / Sumário). */
+  selectCard(card: 'folhas' | 'retificacoes' | 'banco' | 'sumario'): void {
     this.activeCard.set(card);
   }
 
@@ -726,6 +765,7 @@ export class AdminPontoComponent implements OnInit {
     let dataFim = this.dataFim;
     if (this.tipo === 'MENSAL') {
       if (!this.mesUpload || !this.anoUpload) { this.errorMsg.set('Informe o mês e o ano.'); return; }
+      if (!this.categoria) { this.errorMsg.set('Informe se a folha mensal é prévia ou definitiva.'); return; }
       const mm = String(this.mesUpload).padStart(2, '0');
       // Datas montadas à mão: toISOString desloca o fuso e mudaria o dia.
       dataInicio = `${this.anoUpload}-${mm}-01`;
@@ -739,6 +779,8 @@ export class AdminPontoComponent implements OnInit {
     const fd = new FormData();
     fd.append('arquivo', this.arquivo);
     fd.append('tipo', this.tipo);
+    // A natureza só existe na mensal: mandá-la na semanal é recusado pelo backend.
+    if (this.tipo === 'MENSAL') fd.append('categoria', this.categoria);
     fd.append('data_inicio', dataInicio);
     fd.append('data_fim', dataFim);
 

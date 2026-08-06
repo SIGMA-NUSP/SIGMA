@@ -17,6 +17,7 @@ import br.leg.senado.nusp.it.support.OracleIT;
 import br.leg.senado.nusp.repository.AdministradorRepository;
 import br.leg.senado.nusp.repository.OperadorRepository;
 import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
+import br.leg.senado.nusp.repository.PontoFolhaLinhaRepository;
 import br.leg.senado.nusp.repository.PontoLotePaginaRepository;
 import br.leg.senado.nusp.repository.PontoLoteRepository;
 import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
@@ -104,7 +105,8 @@ class ColacaoDasListasEmMemoriaIT {
     @DisplayName("o seletor de pessoas do Ponto ordena em pt-BR, como as listagens")
     void seletorDePessoas_ordenaEmPtBr() {
         semearNomesDoEspelhoDeProducao();
-        PontoService ponto = new PontoService(loteRepo, paginaRepo, operadorRepo, tecnicoRepo,
+        PontoService ponto = new PontoService(loteRepo, paginaRepo, mock(PontoFolhaLinhaRepository.class),
+                operadorRepo, tecnicoRepo,
                 administradorRepo, mock(AvisoService.class), mock(SaldoAberturaService.class),
                 mock(RetificacaoService.class),
                 new PessoaCadastroLookup(operadorRepo, tecnicoRepo, administradorRepo));

@@ -1,0 +1,22 @@
+databaseChangeLog:
+  # ============================================================
+  # 050 — Ponto: PNT_FOLHA_LINHA
+  #
+  # A publicação passa a gravar a tabela da folha linha a linha, verbatim do PDF,
+  # com DATA e OCORRENCIA derivadas para as consultas. A linha é identificada pela
+  # ORDEM em que aparece na página; excluída a folha, as linhas caem com ela.
+  # ============================================================
+  - changeSet:
+      id: 050-ponto-folha-linha
+      author: douglas.antunes
+      comment: "Cria PNT_FOLHA_LINHA (linhas-dia da folha publicada, verbatim + data e ocorrência derivadas)"
+      changes:
+        - sqlFile:
+            path: db/changelog/050-ponto-folha-linha.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "DROP INDEX IDX_PNT_FOLHALIN_DATA"
+        - sql:
+            sql: "DROP TABLE PNT_FOLHA_LINHA"

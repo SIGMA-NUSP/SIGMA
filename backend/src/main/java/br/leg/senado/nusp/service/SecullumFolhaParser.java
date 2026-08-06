@@ -95,6 +95,40 @@ public final class SecullumFolhaParser {
         return null;
     }
 
+    /**
+     * Data-calendário da linha, lida da coluna DIA ({@code "dd/mm/aa - seg"}). O cartão imprime o
+     * ano com 2 dígitos e o sistema só existe neste século, então {@code aa} é sempre {@code 20aa}.
+     * Retorna {@code null} quando a coluna não traz uma data legível — a linha continua valendo
+     * pelo texto verbatim.
+     */
+    public static LocalDate dataDe(LinhaPonto linha) {
+        if (linha == null || linha.dia() == null) return null;
+        Matcher m = DIA_DATA.matcher(linha.dia());
+        if (!m.find()) return null;
+        try {
+            return LocalDate.of(2000 + Integer.parseInt(m.group(3)),
+                    Integer.parseInt(m.group(2)), Integer.parseInt(m.group(1)));
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Ocorrência (status) do dia — {@code "FERNC"}, {@code "DISPOSI"}, {@code "BancN"}, {@code "Falta"}…
+     * O cartão repete o texto do status nas células de batida, e é por isso que basta olhar a
+     * primeira: dia com letra na ENT. 1 é dia de status; dia de batida traz {@code hh:mm} e devolve
+     * {@code null}. Status e batida nunca convivem na mesma linha.
+     */
+    public static String ocorrenciaDe(LinhaPonto linha) {
+        if (linha == null) return null;
+        String ent1 = linha.ent1();
+        if (ent1 == null || ent1.isBlank() || !TEM_LETRA.matcher(ent1).find()) return null;
+        return ent1.trim();
+    }
+
+    /** Data no início da coluna DIA (o sufixo do dia da semana não entra). */
+    private static final Pattern DIA_DATA = Pattern.compile("^(\\d{2})/(\\d{2})/(\\d{2})");
+
     /** Valor de delta com sinal, tolerando espaços e horas de 1 a 3 dígitos (minutos 00–59). */
     private static final Pattern DELTA_NUM = Pattern.compile("([+-])\\s*(\\d{1,3}):([0-5]\\d)");
 

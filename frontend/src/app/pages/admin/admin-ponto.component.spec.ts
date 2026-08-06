@@ -5,7 +5,9 @@ import { Router, RouterLink, provideRouter } from '@angular/router';
 import { Subject, of, throwError } from 'rxjs';
 import { ApiService } from '../../core/services/api.service';
 import { AuthService } from '../../core/services/auth.service';
+import { FeatureFlagService } from '../../core/services/feature-flags.service';
 import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
+import { SumarioOcorrenciasComponent } from '../../shared/components/sumario-ocorrencias.component';
 import { ToastService } from '../../shared/components/toast.component';
 import { AdminPontoComponent } from './admin-ponto.component';
 
@@ -50,6 +52,7 @@ function lote(over: Record<string, unknown> = {}) {
   return {
     id: 'lote-1',
     tipo: 'MENSAL',
+    categoria: 'PREVIA',   // natureza da mensal, como o backend a devolve (nula na semanal)
     data_inicio: '2026-06-01',
     data_fim: '2026-06-30',
     status: 'REVISAO' as const,
@@ -402,6 +405,19 @@ describe('AdminPontoComponent', () => {
       expect(apiPostForm).not.toHaveBeenCalled();
     });
 
+    it('mensal sem a natureza da folha: erro e nenhum POST', () => {
+      // A natureza decide o que a publicação faz com o mês (a prévia o abre, a definitiva o fecha e
+      // substitui a prévia): sem escolha, o envio não parte — o backend recusaria com a mesma frase.
+      const comp = criarCarregado();
+      preencherUpload(comp);
+      comp.categoria = '';
+
+      comp.onUpload();
+
+      expect(comp.errorMsg()).toBe('Informe se a folha mensal é prévia ou definitiva.');
+      expect(apiPostForm).not.toHaveBeenCalled();
+    });
+
     it('semanal sem período: erro e nenhum POST', () => {
       const comp = criarCarregado();
       comp.onFileSelect(fileEvent(pdf()));
@@ -481,6 +497,41 @@ describe('AdminPontoComponent', () => {
       const fd = apiPostForm.mock.calls[0][1] as FormData;
       expect(fd.get('data_inicio')).toBe('2026-02-01');
       expect(fd.get('data_fim')).toBe('2026-02-28');
+    });
+
+    it('mensal: o multipart leva a natureza escolhida da folha', () => {
+      const comp = criarCarregado();
+      preencherUpload(comp);
+      comp.categoria = 'DEFINITIVA';
+
+      comp.onUpload();
+
+      const fd = apiPostForm.mock.calls[0][1] as FormData;
+      expect(fd.get('tipo')).toBe('MENSAL');
+      expect(fd.get('categoria')).toBe('DEFINITIVA');
+    });
+
+    it('mensal: sem mexer no formulário, a natureza enviada é a prévia', () => {
+      const comp = criarCarregado();
+      preencherUpload(comp);
+
+      comp.onUpload();
+
+      expect((apiPostForm.mock.calls[0][1] as FormData).get('categoria')).toBe('PREVIA');
+    });
+
+    it('semanal: o multipart NÃO leva o campo da natureza', () => {
+      // A semanal não é prévia nem definitiva: mandar o campo (mesmo com o valor default ainda no
+      // formulário) faz o backend recusar o upload inteiro. O gate é o TIPO, não o valor do campo.
+      const comp = criarCarregado();
+      preencherUploadSemanal(comp);
+      expect(comp.categoria).toBe('PREVIA');   // o campo continua preenchido por baixo
+
+      comp.onUpload();
+
+      const fd = apiPostForm.mock.calls[0][1] as FormData;
+      expect(fd.get('tipo')).toBe('SEMANAL');
+      expect(fd.has('categoria')).toBe(false);
     });
 
     it('sucesso: limpa o arquivo e recarrega a lista já abrindo o lote enviado', () => {
@@ -635,6 +686,17 @@ describe('AdminPontoComponent', () => {
 
       expect(comp.mesUpload).toBe(6);                    // de volta ao mês anterior ao relógio
       expect(comp.anoUpload).toBe(2026);
+    });
+
+    it('a natureza da folha também volta ao DEFAULT (prévia) quando o tipo muda', () => {
+      // A definitiva escolhida num envio não pode ficar armada para o próximo: ela FECHA o mês.
+      const comp = criarCarregado();
+      comp.categoria = 'DEFINITIVA';
+
+      comp.tipo = 'SEMANAL';
+      comp.onTipoChange();
+
+      expect(comp.categoria).toBe('PREVIA');
     });
   });
 
@@ -1530,6 +1592,86 @@ describe('AdminPontoComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
+  // RENDER do formulário de envio — a natureza da folha só existe na mensal
+  // ═══════════════════════════════════════════════════════════════════
+  describe('render do formulário de envio (natureza da folha mensal)', () => {
+    // ⚠️ Exceção ao GATE, mesma família dos controles destrutivos: o par de radios é a ÚNICA forma
+    // de escolher entre prévia e definitiva, e a escolha muda o que a publicação faz com o mês (a
+    // definitiva o FECHA, por cima da prévia). Oferecê-lo no envio semanal — que não tem natureza —
+    // levaria o admin a mandar um campo que o backend recusa, derrubando o upload inteiro. Os dois
+    // `@if` que sustentam isso vivem só no template.
+
+    /** Renderiza a página com o card "Folhas" aberto — é nele que o formulário de envio vive. */
+    async function renderizarFormulario(): Promise<ComponentFixture<AdminPontoComponent>> {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        imports: [AdminPontoComponent],
+        providers: [
+          provideRouter([]),
+          { provide: ApiService, useValue: apiMock() },
+          { provide: AuthService, useValue: { temFolhaPonto: signal(false) } },
+          { provide: ToastService, useValue: { error: toastError, success: toastSuccess } },
+        ],
+      });
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-07-12T10:00:00-03:00'));
+      const fixture = TestBed.createComponent(AdminPontoComponent);
+      fixture.detectChanges();                          // ngOnInit + render
+      fixture.componentInstance.selectCard('folhas');
+      await estabilizar(fixture);
+      return fixture;
+    }
+
+    /** `NgModel` aplica o valor no CVA numa MICROTASK — sem o `whenStable` o DOM não a reflete. */
+    async function estabilizar(fixture: ComponentFixture<AdminPontoComponent>): Promise<void> {
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+
+    const radiosNatureza = (fixture: ComponentFixture<AdminPontoComponent>) =>
+      fixture.debugElement.queryAll(By.css('input[type="radio"][name="categoria"]'))
+        .map(de => de.nativeElement as HTMLInputElement);
+
+    it('envio MENSAL: as duas naturezas são oferecidas, com a prévia já marcada', async () => {
+      const fixture = await renderizarFormulario();
+      const radios = radiosNatureza(fixture);
+
+      expect(radios.map(r => r.value)).toEqual(['PREVIA', 'DEFINITIVA']);
+      expect(radios[0].checked).toBe(true);    // o default do formulário chega ao DOM
+      expect(radios[1].checked).toBe(false);   // a definitiva nunca vem pré-escolhida
+    });
+
+    it('envio SEMANAL: a escolha some da tela (a semanal não é prévia nem definitiva)', async () => {
+      const fixture = await renderizarFormulario();
+      const comp = fixture.componentInstance;
+      expect(radiosNatureza(fixture)).toHaveLength(2);
+
+      // A troca vem do próprio <select> (o NgModel do campo é quem manda o valor ao componente):
+      // atribuir a propriedade por fora deixaria o DOM com o valor antigo.
+      const seletorTipo = fixture.debugElement.query(By.css('select[name="tipo"]'))
+        .nativeElement as HTMLSelectElement;
+      seletorTipo.value = 'SEMANAL';
+      seletorTipo.dispatchEvent(new Event('change'));
+      await estabilizar(fixture);
+
+      expect(comp.tipo).toBe('SEMANAL');
+
+      expect(radiosNatureza(fixture)).toHaveLength(0);
+    });
+
+    it('marcar "Definitiva" no DOM chega ao campo que o envio usa', async () => {
+      const fixture = await renderizarFormulario();
+      const comp = fixture.componentInstance;
+
+      radiosNatureza(fixture)[1].click();      // clique REAL no radio
+      await estabilizar(fixture);
+
+      expect(comp.categoria).toBe('DEFINITIVA');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
   // Feature-gate do card pessoal do admin — presença, não layout
   // ═══════════════════════════════════════════════════════════════════
   describe('card "Meu Ponto e Banco" (admin com folha)', () => {
@@ -1571,10 +1713,75 @@ describe('AdminPontoComponent', () => {
     });
   });
 
+  describe('card "Sumário" (flag sumarioOcorrencias)', () => {
+    /** Mesma renderização dos cards, com a flag do sumário controlada por cenário. */
+    function renderizar(flagLigada: boolean): ComponentFixture<AdminPontoComponent> {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        imports: [AdminPontoComponent],
+        providers: [
+          provideRouter([]),
+          { provide: ApiService, useValue: apiMock() },
+          { provide: AuthService, useValue: { temFolhaPonto: signal(false) } },
+          { provide: ToastService, useValue: { error: toastError, success: toastSuccess } },
+          { provide: FeatureFlagService, useValue: { isEnabled: (f: string) => flagLigada && f === 'sumarioOcorrencias' } },
+        ],
+      });
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-07-12T10:00:00-03:00'));
+      const fixture = TestBed.createComponent(AdminPontoComponent);
+      fixture.detectChanges();
+      return fixture;
+    }
+
+    function cardSumario(fixture: ComponentFixture<AdminPontoComponent>): HTMLButtonElement {
+      const card = fixture.debugElement.queryAll(By.css('button.card-pick'))
+        .map(de => de.nativeElement as HTMLButtonElement)
+        .find(b => b.textContent!.includes('Sumário'));
+      if (!card) throw new Error('o card "Sumário" não está na página');
+      return card;
+    }
+
+    const sumarioAberto = (fixture: ComponentFixture<AdminPontoComponent>) =>
+      !!fixture.debugElement.query(By.directive(SumarioOcorrenciasComponent));
+
+    it('o card anuncia o que mostra', () => {
+      expect(cardSumario(renderizar(true)).textContent).toContain('Sumário de ocorrências das folhas');
+    });
+
+    /** Flag desligada = card visível porém inerte: nada some da página, mas a seção não abre. */
+    it('flag desligada: card esmaecido, sem clique e sem seção', () => {
+      const fixture = renderizar(false);
+      const card = cardSumario(fixture);
+
+      expect(card.classList.contains('card-disabled')).toBe(true);
+      expect(card.disabled).toBe(true);
+
+      card.click();
+      fixture.detectChanges();
+
+      expect(fixture.componentInstance.activeCard()).toBeNull();
+      expect(sumarioAberto(fixture)).toBe(false);
+    });
+
+    it('flag ligada: clicar no card abre o sumário de ocorrências', () => {
+      const fixture = renderizar(true);
+      const card = cardSumario(fixture);
+      expect(card.classList.contains('card-disabled')).toBe(false);
+      expect(sumarioAberto(fixture)).toBe(false);
+
+      card.click();
+      fixture.detectChanges();
+
+      expect(fixture.componentInstance.activeCard()).toBe('sumario');
+      expect(sumarioAberto(fixture)).toBe(true);
+    });
+  });
+
   // ═══════════════════════════════════════════════════════════════════
   // Estado dos cards, rótulos e formatadores (lógica, sem asserção visual — GATE)
   // ═══════════════════════════════════════════════════════════════════
-  describe('selectCard, tipoLabel e periodoLote', () => {
+  describe('selectCard, tipoLabel, tipoLote e periodoLote', () => {
     it('nenhum card ativo no início; selectCard troca o ativo (sem alternância — sempre set)', () => {
       const comp = criarCarregado();
       expect(comp.activeCard()).toBeNull();
@@ -1600,6 +1807,23 @@ describe('AdminPontoComponent', () => {
       expect(comp.tipoLabel('TECNICO')).toBe('Técnico');
       expect(comp.tipoLabel('ADMINISTRADOR')).toBe('Administrador');
       expect(comp.tipoLabel(undefined)).toBe('');
+    });
+
+    it('tipoLote: o lote mensal exibe a natureza da folha ao lado do tipo', () => {
+      // A coluna Tipo é onde o admin distingue a prévia (retificável) da definitiva (fecha o mês).
+      const comp = criar();
+      expect(comp.tipoLote(lote() as any)).toBe('Mensal — prévia');
+      expect(comp.tipoLote(lote({ categoria: 'DEFINITIVA' }) as any)).toBe('Mensal — definitiva');
+    });
+
+    it('tipoLote: mensal sem natureza registrada exibe só "Mensal"', () => {
+      const comp = criar();
+      expect(comp.tipoLote(lote({ categoria: null }) as any)).toBe('Mensal');
+    });
+
+    it('tipoLote: o lote semanal não tem natureza', () => {
+      const comp = criar();
+      expect(comp.tipoLote(lote({ tipo: 'SEMANAL', categoria: null }) as any)).toBe('Semanal');
     });
 
     it('periodoLote: lote MENSAL exibe a competência, não o par de datas', () => {

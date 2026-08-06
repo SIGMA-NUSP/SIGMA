@@ -22,6 +22,7 @@ import java.sql.SQLException;
 import java.sql.SQLIntegrityConstraintViolationException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -58,6 +59,10 @@ class RetificacaoServiceTest {
     /** Período do lote de todas as folhas mockadas aqui — as bordas que a listagem tem de repassar. */
     private static final LocalDate INICIO = LocalDate.of(2026, 6, 1);
     private static final LocalDate FIM = LocalDate.of(2026, 6, 30);
+    /** Competência da folha de jun/2026 acima — a que o gate do mês encerrado consulta. */
+    private static final YearMonth JUNHO = YearMonth.of(2026, 6);
+    /** Competência de uma folha MENSAL inteira, usada nos casos do mês encerrado. */
+    private static final YearMonth JULHO = YearMonth.of(2026, 7);
     private static final DateTimeFormatter BR = DateTimeFormatter.ofPattern("dd/MM/yyyy");
 
     /** Configura só a página (dono OPERADOR, do lote LOTE) — o lote fica a cargo de quem chama. */
@@ -79,13 +84,29 @@ class RetificacaoServiceTest {
     }
 
     private void mockFolha(String pessoaId, String pessoaTipo, LocalDateTime pub, String status) {
+        mockFolha(pessoaId, pessoaTipo, pub, status, INICIO, FIM);
+    }
+
+    /** Idem, com o período do lote explícito — para as folhas que não são a de jun/2026. */
+    private void mockFolha(String pessoaId, String pessoaTipo, LocalDateTime pub, String status,
+                           LocalDate inicio, LocalDate fim) {
         mockPagina(pessoaId, pessoaTipo);
         PontoLote lote = new PontoLote();
         lote.setStatus(status);
         lote.setPublicadoEm(pub);
-        lote.setDataInicio(INICIO);
-        lote.setDataFim(FIM);
+        lote.setDataInicio(inicio);
+        lote.setDataFim(fim);
         lenient().when(loteRepo.findById(LOTE)).thenReturn(Optional.of(lote));
+    }
+
+    /**
+     * A pessoa tem (ou não) folha mensal DEFINITIVA publicada na competência informada. As bordas
+     * são EXATAS: se o service consultar outro mês, outra pessoa ou outro pessoa_tipo, o stub não
+     * casa, o contador volta 0 e o mês é lido como aberto.
+     */
+    private void mockDefinitiva(String pessoaId, String pessoaTipo, YearMonth mes, boolean publicada) {
+        when(paginaRepo.contarDefinitivasPublicadas(pessoaId, pessoaTipo, mes.atDay(1), mes.atEndOfMonth()))
+                .thenReturn(publicada ? 1L : 0L);
     }
 
     /**
@@ -856,6 +877,130 @@ class RetificacaoServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
+    // mês encerrado pela folha mensal DEFINITIVA: o dia fica intocável ainda que o prazo corra
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("dia de mês encerrado por folha definitiva → 400 nomeando o dia e a competência; o lote inteiro cai")
+    void mesEncerradoRecusaACriacao() {
+        // A definitiva fecha o mês de vez: o prazo de 5 dias da folha ainda estar aberto não
+        // reabre o dia — nem para a própria definitiva, nem para a prévia que ela substituiu, nem
+        // para uma semanal do mesmo mês.
+        mockFolha(DONO, "OPERADOR", LocalDateTime.now(), "PUBLICADO",
+                JULHO.atDay(1), JULHO.atEndOfMonth());
+        mockDefinitiva(DONO, "OPERADOR", JULHO, true);
+
+        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                () -> service.criarRetificacoes(PAG, DONO, lote(
+                        dia("2026-07-15", "08:00", "12:00", null, null),
+                        dia("2026-07-16", "09:00", "15:00", null, null))));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+        assertEquals("O dia 15/07/2026 não pode ser retificado: a folha de ponto definitiva "
+                + "de Julho/2026 já foi publicada.", ex.getMessage());
+        verify(retificacaoRepo, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("sem folha definitiva publicada o mês segue aberto e o dia grava normalmente")
+    void mesAbertoDeixaGravar() {
+        mockFolha(DONO, "OPERADOR", LocalDateTime.now(), "PUBLICADO",
+                JULHO.atDay(1), JULHO.atEndOfMonth());
+        mockDefinitiva(DONO, "OPERADOR", JULHO, false);
+        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", LocalDate.of(2026, 7, 15)))
+                .thenReturn(false);
+
+        Map<String, Object> out = service.criarRetificacoes(PAG, DONO,
+                body("2026-07-15", "08:00", "12:00", null, null));
+
+        assertEquals(1, out.get("total"));
+        verify(retificacaoRepo).saveAndFlush(argThat(r -> LocalDate.of(2026, 7, 15).equals(r.getData())));
+    }
+
+    @Test
+    @DisplayName("o gate olha o mês DO DIA: na folha que vira o mês, o dia de junho grava e o de julho é recusado")
+    void gateOlhaOMesDoDia() {
+        // Folha semanal a cavalo de dois meses: o fechamento é por competência, não pelo período
+        // da folha — dias do mesmo lote podem ter destinos diferentes.
+        mockFolha(DONO, "OPERADOR", LocalDateTime.now(), "PUBLICADO",
+                LocalDate.of(2026, 6, 29), LocalDate.of(2026, 7, 5));
+        mockDefinitiva(DONO, "OPERADOR", JUNHO, false);
+        mockDefinitiva(DONO, "OPERADOR", JULHO, true);
+        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", LocalDate.of(2026, 6, 30)))
+                .thenReturn(false);
+
+        service.criarRetificacoes(PAG, DONO, body("2026-06-30", "08:00", "12:00", null, null));
+
+        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                () -> service.criarRetificacoes(PAG, DONO, body("2026-07-01", "08:00", "12:00", null, null)));
+
+        assertTrue(ex.getMessage().contains("01/07/2026") && ex.getMessage().contains("Julho/2026"),
+                ex.getMessage());
+        verify(retificacaoRepo, times(1)).saveAndFlush(any());
+        verify(retificacaoRepo).saveAndFlush(argThat(r -> LocalDate.of(2026, 6, 30).equals(r.getData())));
+    }
+
+    @Test
+    @DisplayName("prazo vencido E mês encerrado: a recusa que sai é a do PRAZO — o mês nem chega a ser consultado")
+    void prazoPrecedeOMesEncerrado() {
+        mockFolha(DONO, "OPERADOR", LocalDateTime.now().minusDays(10), "PUBLICADO",
+                JULHO.atDay(1), JULHO.atEndOfMonth());
+        lenient().when(paginaRepo.contarDefinitivasPublicadas(
+                DONO, "OPERADOR", JULHO.atDay(1), JULHO.atEndOfMonth())).thenReturn(1L);
+
+        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                () -> service.criarRetificacoes(PAG, DONO, body("2026-07-15", "08:00", "12:00", null, null)));
+
+        assertEquals("PRAZO_EXPIRADO", ex.getMessage(), "o prazo é o gate anterior e é ele quem responde");
+        verify(paginaRepo, never()).contarDefinitivasPublicadas(anyString(), anyString(), any(), any());
+        verify(retificacaoRepo, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("listarRetificacoes: mes_fechado=true quando a definitiva já encerrou o mês da folha")
+    void listagemMesFechado() {
+        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
+        mockListagem(DONO, "OPERADOR");
+        mockDefinitiva(DONO, "OPERADOR", JUNHO, true);
+
+        Map<String, Object> out = service.listarRetificacoes(PAG, DONO);
+
+        assertEquals(Boolean.TRUE, out.get("mes_fechado"));
+        // o bloqueio do mês é independente do prazo: a folha recém-publicada tem a janela aberta
+        assertEquals(Boolean.FALSE, out.get("prazo_expirado"));
+    }
+
+    @Test
+    @DisplayName("listarRetificacoes: mes_fechado=false enquanto nenhuma definitiva encerrou o mês")
+    void listagemMesAberto() {
+        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
+        mockListagem(DONO, "OPERADOR");
+        mockDefinitiva(DONO, "OPERADOR", JUNHO, false);
+
+        assertEquals(Boolean.FALSE, service.listarRetificacoes(PAG, DONO).get("mes_fechado"));
+    }
+
+    @Test
+    @DisplayName("listarRetificacoes: folha que toca dois meses com só um encerrado → mes_fechado=false")
+    void listagemMesFechadoParcial() {
+        // A tela só se bloqueia por inteiro quando NADA na folha é retificável; na cobertura
+        // parcial ela continua editável e a recusa acontece dia a dia, na gravação.
+        LocalDate inicio = LocalDate.of(2026, 6, 29);
+        LocalDate fim = LocalDate.of(2026, 7, 5);
+        mockFolha(DONO, "OPERADOR", LocalDateTime.now(), "PUBLICADO", inicio, fim);
+        when(retificacaoRepo.findByPessoaIdAndPessoaTipoAndDataBetweenOrderByData(DONO, "OPERADOR", inicio, fim))
+                .thenReturn(List.of());
+        mockDefinitiva(DONO, "OPERADOR", JUNHO, true);
+        mockDefinitiva(DONO, "OPERADOR", JULHO, false);
+
+        Map<String, Object> out = service.listarRetificacoes(PAG, DONO);
+
+        assertEquals(Boolean.FALSE, out.get("mes_fechado"));
+        verify(paginaRepo).contarDefinitivasPublicadas(
+                DONO, "OPERADOR", JULHO.atDay(1), JULHO.atEndOfMonth());
+    }
+
+    // ══════════════════════════════════════════════════════════════
     // edição in-place: mesma chave de leitura da listagem, mesmo prazo e mesmas regras
     // de conteúdo da criação; a DATA e a página de origem nunca mudam
     // ══════════════════════════════════════════════════════════════
@@ -1040,6 +1185,38 @@ class RetificacaoServiceTest {
             assertEquals("07:00", r.getEnt1(), "a recusa por prazo não pode ter tocado nos valores");
             assertEquals("Anotação original.", r.getObservacoes());
             verify(retificacaoRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("mês encerrado por folha definitiva → 400 nomeando o dia e a competência; nada é alterado")
+        void mesEncerradoBloqueiaAEdicao() {
+            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
+            PontoRetificacao r = existente();
+            mockDefinitiva(DONO, "OPERADOR", JUNHO, true);
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.editarRetificacao(PAG, RET, DONO, corpo("08:00", "12:00", null, null)));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertEquals("O dia 15/06/2026 não pode ser retificado: a folha de ponto definitiva "
+                    + "de Junho/2026 já foi publicada.", ex.getMessage());
+            assertEquals("07:00", r.getEnt1(), "a recusa pelo mês encerrado não pode ter tocado nos valores");
+            assertEquals("Anotação original.", r.getObservacoes());
+            verify(retificacaoRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("mês ainda aberto: a edição sobrescreve normalmente")
+        void mesAbertoDeixaEditar() {
+            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
+            PontoRetificacao r = existente();
+            mockDefinitiva(DONO, "OPERADOR", JUNHO, false);
+
+            service.editarRetificacao(PAG, RET, DONO, corpo("09:00", "15:00", null, null));
+
+            verify(retificacaoRepo).save(same(r));
+            assertEquals("09:00", r.getEnt1());
+            assertEquals("15:00", r.getSai1());
         }
 
         @Test

@@ -19,6 +19,7 @@ import br.leg.senado.nusp.repository.AvisoCienciaRepository;
 import br.leg.senado.nusp.repository.OperadorRepository;
 import br.leg.senado.nusp.repository.PontoBancoSaldoRepository;
 import br.leg.senado.nusp.repository.PontoExclusaoLogRepository;
+import br.leg.senado.nusp.repository.PontoFolhaLinhaRepository;
 import br.leg.senado.nusp.repository.PontoLotePaginaRepository;
 import br.leg.senado.nusp.repository.PontoLoteRepository;
 import br.leg.senado.nusp.repository.PontoRetificacaoRepository;
@@ -50,6 +51,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -67,9 +69,9 @@ import static org.mockito.Mockito.when;
  *   <li>a PERMISSÃO: só o master (a propriedade {@code app.admin.master-username}, nunca um nome
  *       hardcoded) passa; para todos os outros é 403 e <b>nada é tocado</b> — nem lido;</li>
  *   <li>os alvos inexistentes (404) e a página de outro lote (400);</li>
- *   <li>a ORDEM das deleções: retificações → flush → avisos → páginas → flush → re-âncora.
- *       Trocar dois passos aqui é ORA-02292 ou uma âncora que volta para a folha que acabou
- *       de ser excluída;</li>
+ *   <li>a ORDEM das deleções: retificações → flush → avisos → linhas da folha → páginas → flush →
+ *       re-âncora. Trocar dois passos aqui é ORA-02292 ou uma âncora que volta para a folha que
+ *       acabou de ser excluída;</li>
  *   <li>a montagem do preview e do RESUMO da auditoria a partir de fatos mockados.</li>
  * </ul>
  *
@@ -92,6 +94,7 @@ class PontoExclusaoServiceTest {
 
     @Mock private PontoLoteRepository loteRepo;
     @Mock private PontoLotePaginaRepository paginaRepo;
+    @Mock private PontoFolhaLinhaRepository folhaLinhaRepo;
     @Mock private PontoRetificacaoRepository retificacaoRepo;
     @Mock private PontoBancoSaldoRepository saldoRepo;
     @Mock private PontoExclusaoLogRepository exclusaoLogRepo;
@@ -112,9 +115,9 @@ class PontoExclusaoServiceTest {
     @BeforeEach
     void setUp() {
         // ObjectMapper REAL: o RESUMO é JSON de verdade, e é ele que a auditoria grava.
-        service = new PontoExclusaoService(loteRepo, paginaRepo, retificacaoRepo, saldoRepo, exclusaoLogRepo,
-                cadastroRepo, alvoRepo, cienciaRepo, operadorRepo, tecnicoRepo, administradorRepo,
-                saldoAberturaService, new ObjectMapper());
+        service = new PontoExclusaoService(loteRepo, paginaRepo, folhaLinhaRepo, retificacaoRepo, saldoRepo,
+                exclusaoLogRepo, cadastroRepo, alvoRepo, cienciaRepo, operadorRepo, tecnicoRepo,
+                administradorRepo, saldoAberturaService, new ObjectMapper());
         ReflectionTestUtils.setField(service, "masterUsername", MASTER);
         ReflectionTestUtils.setField(service, "filesDir", filesDir.toString());
     }
@@ -223,8 +226,8 @@ class PontoExclusaoServiceTest {
                 assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
                 assertEquals("forbidden", ex.getMessage());
             }
-            verifyNoInteractions(loteRepo, paginaRepo, retificacaoRepo, saldoRepo, exclusaoLogRepo,
-                    cadastroRepo, alvoRepo, cienciaRepo, saldoAberturaService);
+            verifyNoInteractions(loteRepo, paginaRepo, folhaLinhaRepo, retificacaoRepo, saldoRepo,
+                    exclusaoLogRepo, cadastroRepo, alvoRepo, cienciaRepo, saldoAberturaService);
         }
 
         @Test
@@ -337,6 +340,33 @@ class PontoExclusaoServiceTest {
             ordem.verify(paginaRepo).flush();
             ordem.verify(saldoAberturaService).reancorar(OP, "OPERADOR");
             ordem.verify(exclusaoLogRepo).save(any(PontoExclusaoLog.class));
+        }
+
+        /**
+         * As linhas gravadas da folha cairiam sozinhas pelo cascade da página — mas só se a página
+         * ainda estivesse lá para arrastá-las. Apagá-las antes é o que permite CONTÁ-LAS: depois do
+         * delete da página o número que a trilha promete já não existe em lugar nenhum.
+         */
+        @Test
+        @DisplayName("as linhas da folha morrem depois dos avisos e antes da página que as ancora")
+        void linhasDaFolhaEntreAvisosEPaginas() {
+            cenarioMinimo("MENSAL");
+            when(retificacaoRepo.findByPaginaIdIn(List.of(PAGINA)))
+                    .thenReturn(List.of(retificacao(PAGINA, LocalDate.of(2026, 6, 3))));
+            AvisoCadastro cad = cadastro();
+            when(cadastroRepo.findByOrigemLoteId(LOTE)).thenReturn(List.of(cad));
+            when(alvoRepo.findByCadastroId(CADASTRO)).thenReturn(List.of(alvoOperador(OP)));
+            when(folhaLinhaRepo.countByPaginaIdIn(List.of(PAGINA))).thenReturn(31L);
+
+            service.excluirLote(LOTE, MASTER, CALLER_ID);
+
+            InOrder ordem = inOrder(retificacaoRepo, cadastroRepo, folhaLinhaRepo, paginaRepo);
+            ordem.verify(retificacaoRepo).deleteAll(anyList());
+            ordem.verify(cadastroRepo).delete(cad);
+            ordem.verify(folhaLinhaRepo).countByPaginaIdIn(List.of(PAGINA));
+            ordem.verify(folhaLinhaRepo).deleteByPaginaIdIn(List.of(PAGINA));
+            ordem.verify(folhaLinhaRepo).flush();
+            ordem.verify(paginaRepo).deleteAll(anyList());
         }
 
         @Test
@@ -598,6 +628,29 @@ class PontoExclusaoServiceTest {
             assertEquals(1, pv.get("arquivos"), "o PDF original é do LOTE: não sai com uma página");
             assertEquals(1, pv.get("retificacoes_excluidas"));
         }
+
+        /**
+         * As linhas gravadas da folha são detalhe interno da publicação: o admin decide pelo que ele
+         * reconhece (folhas, retificações, avisos, arquivos). O modal não ganhou linha nova — e o
+         * preview nem chega a contá-las, para não pagar um SELECT por uma informação que não mostra.
+         */
+        @Test
+        @DisplayName("o preview segue com as mesmas chaves de sempre — as linhas da folha não aparecem nele")
+        void previewNaoContaLinhasDaFolha() {
+            when(paginaRepo.findByLoteIdOrderByNumeroPagina(LOTE)).thenReturn(List.of(pagina(PAGINA, OP)));
+            when(retificacaoRepo.findByPaginaIdIn(List.of(PAGINA))).thenReturn(List.of());
+            when(cadastroRepo.findByOrigemLoteId(LOTE)).thenReturn(List.of());
+            when(saldoRepo.findByPessoaIdAndPessoaTipo(OP, "OPERADOR")).thenReturn(Optional.empty());
+            stubOperador(OP, NOME_OP);
+
+            Map<String, Object> pv = service.previewLote(LOTE, MASTER);
+
+            assertEquals(List.of("escopo", "lote", "pagina", "pessoas", "paginas_excluidas",
+                            "retificacoes_excluidas", "avisos_destinatarios", "avisos_removidos",
+                            "reabre_competencia", "arquivos"),
+                    List.copyOf(pv.keySet()));
+            verifyNoInteractions(folhaLinhaRepo);
+        }
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -658,6 +711,64 @@ class PontoExclusaoServiceTest {
             verify(exclusaoLogRepo).save(captor.capture());
             assertEquals("PAGINA", captor.getValue().getEscopo());
             assertEquals(PAGINA, captor.getValue().getPaginaId());
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    @Nested
+    @DisplayName("linhas gravadas da folha")
+    class LinhasDaFolha {
+
+        @Test
+        @DisplayName("a trilha guarda quantas linhas a folha tinha, contadas ANTES de sumirem")
+        void trilhaTrazAsLinhasContadas() {
+            cenarioMinimo("MENSAL");
+            when(folhaLinhaRepo.countByPaginaIdIn(List.of(PAGINA))).thenReturn(23L);
+
+            service.excluirLote(LOTE, MASTER, CALLER_ID);
+
+            // A contagem pergunta pelas PÁGINAS alvo — a mesma chave da deleção, nunca a pessoa.
+            verify(folhaLinhaRepo).countByPaginaIdIn(List.of(PAGINA));
+            ArgumentCaptor<PontoExclusaoLog> captor = ArgumentCaptor.forClass(PontoExclusaoLog.class);
+            verify(exclusaoLogRepo).save(captor.capture());
+            String resumo = captor.getValue().getResumo();
+            assertTrue(resumo.contains("\"linhas_folha_excluidas\":23"), () -> resumo);
+        }
+
+        @Test
+        @DisplayName("folha sem nenhuma linha gravada: nada é apagado, e a trilha registra zero")
+        void semLinhasNadaEApagado() {
+            cenarioMinimo("SEMANAL");
+            when(folhaLinhaRepo.countByPaginaIdIn(List.of(PAGINA))).thenReturn(0L);
+
+            service.excluirLote(LOTE, MASTER, CALLER_ID);
+
+            // Sem linhas não há DELETE: um IN vazio já seria SQL inválido, e o vazio é o normal das
+            // folhas publicadas antes de a tabela existir.
+            verify(folhaLinhaRepo, never()).deleteByPaginaIdIn(anyCollection());
+            verify(folhaLinhaRepo, never()).flush();
+            ArgumentCaptor<PontoExclusaoLog> captor = ArgumentCaptor.forClass(PontoExclusaoLog.class);
+            verify(exclusaoLogRepo).save(captor.capture());
+            String resumo = captor.getValue().getResumo();
+            assertTrue(resumo.contains("\"linhas_folha_excluidas\":0"), () -> resumo);
+        }
+
+        @Test
+        @DisplayName("exclusão de PÁGINA: só as linhas daquela folha são apagadas")
+        void paginaApagaSoAsLinhasDela() {
+            when(loteRepo.lockPorId(LOTE)).thenReturn(Optional.of(lote("SEMANAL", "PUBLICADO")));
+            when(paginaRepo.findById(PAGINA)).thenReturn(Optional.of(pagina(PAGINA, OP)));
+            when(retificacaoRepo.findByPaginaIdIn(List.of(PAGINA))).thenReturn(List.of());
+            when(cadastroRepo.findByOrigemLoteId(LOTE)).thenReturn(List.of());
+            when(saldoRepo.findByPessoaIdAndPessoaTipo(OP, "OPERADOR")).thenReturn(Optional.empty());
+            when(folhaLinhaRepo.countByPaginaIdIn(List.of(PAGINA))).thenReturn(5L);
+            stubOperador(OP, NOME_OP);
+
+            service.excluirPagina(LOTE, PAGINA, MASTER, CALLER_ID);
+
+            // As folhas vizinhas do mesmo lote continuam publicadas: as linhas delas nem são olhadas.
+            verify(folhaLinhaRepo).deleteByPaginaIdIn(List.of(PAGINA));
+            verify(paginaRepo, never()).findByLoteIdOrderByNumeroPagina(anyString());
         }
     }
 

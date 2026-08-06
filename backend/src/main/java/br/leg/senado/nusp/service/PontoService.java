@@ -2,6 +2,7 @@ package br.leg.senado.nusp.service;
 
 import br.leg.senado.nusp.entity.Administrador;
 import br.leg.senado.nusp.entity.Operador;
+import br.leg.senado.nusp.entity.PontoFolhaLinha;
 import br.leg.senado.nusp.entity.PontoLote;
 import br.leg.senado.nusp.entity.PontoLotePagina;
 import br.leg.senado.nusp.entity.Tecnico;
@@ -10,6 +11,7 @@ import br.leg.senado.nusp.enums.SubtipoAviso;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.repository.AdministradorRepository;
 import br.leg.senado.nusp.repository.OperadorRepository;
+import br.leg.senado.nusp.repository.PontoFolhaLinhaRepository;
 import br.leg.senado.nusp.repository.PontoLotePaginaRepository;
 import br.leg.senado.nusp.repository.PontoLoteRepository;
 import br.leg.senado.nusp.repository.TecnicoRepository;
@@ -53,6 +55,7 @@ public class PontoService {
 
     private final PontoLoteRepository loteRepo;
     private final PontoLotePaginaRepository paginaRepo;
+    private final PontoFolhaLinhaRepository folhaLinhaRepo;
     private final OperadorRepository operadorRepo;
     private final TecnicoRepository tecnicoRepo;
     private final AdministradorRepository administradorRepo;
@@ -72,6 +75,7 @@ public class PontoService {
     private static final String STATUS_REVISAO   = "REVISAO";
     private static final String STATUS_PUBLICADO = "PUBLICADO";
     private static final String TIPO_MENSAL      = "MENSAL";
+    private static final String TIPO_SEMANAL     = "SEMANAL";
     private static final String MATCH_AUTO       = "AUTO";
     private static final String MATCH_MANUAL     = "MANUAL";
     private static final String MATCH_PENDENTE   = "PENDENTE";
@@ -84,9 +88,10 @@ public class PontoService {
     // ══════════════════════════════════════════════════════════════
 
     @Transactional
-    public Map<String, Object> upload(MultipartFile arquivo, String tipoRaw,
+    public Map<String, Object> upload(MultipartFile arquivo, String tipoRaw, String categoriaRaw,
                                       String dataInicioRaw, String dataFimRaw, String adminId) {
         String tipo = normalizeTipo(tipoRaw);
+        String categoria = normalizeCategoria(categoriaRaw, tipo);
         LocalDate dataInicio = parseData(dataInicioRaw, "data_inicio");
         LocalDate dataFim = parseData(dataFimRaw, "data_fim");
         if (dataFim.isBefore(dataInicio)) {
@@ -105,7 +110,7 @@ public class PontoService {
 
         PdfReader reader = abrirPdfValido(pdfBytes);
         int totalPaginas = reader.getNumberOfPages();
-        PontoLote lote = criarLote(tipo, dataInicio, dataFim, totalPaginas, adminId, pdfBytes);
+        PontoLote lote = criarLote(tipo, categoria, dataInicio, dataFim, totalPaginas, adminId, pdfBytes);
         List<Pessoa> pessoas = carregarPessoas();
         PdfTextExtractor extractor = new PdfTextExtractor(reader);
         List<PontoLotePagina> paginas = new ArrayList<>();
@@ -134,9 +139,11 @@ public class PontoService {
         return reader;
     }
 
-    private PontoLote criarLote(String tipo, LocalDate dataInicio, LocalDate dataFim, int totalPaginas, String adminId, byte[] pdfBytes) {
+    private PontoLote criarLote(String tipo, String categoria, LocalDate dataInicio, LocalDate dataFim,
+                                int totalPaginas, String adminId, byte[] pdfBytes) {
         PontoLote lote = new PontoLote();
         lote.setTipo(tipo);
+        lote.setCategoria(categoria);
         lote.setDataInicio(dataInicio);
         lote.setDataFim(dataFim);
         lote.setTotalPaginas(totalPaginas);
@@ -295,7 +302,7 @@ public class PontoService {
         lote.setPublicadoEm(LocalDateTime.now());
         loteRepo.save(lote);
 
-        extrairBancoFinal(paginas);
+        extrairDadosDasFolhas(paginas);
         paginaRepo.saveAll(paginas);
         reancorarPessoas(paginas);
         if (emitirAviso) criarAvisosPessoais(lote, paginas);
@@ -312,6 +319,10 @@ public class PontoService {
      * uma SEMANAL atrasada daquele mês podem ser publicadas depois. O conflito é procurado no banco
      * (mensais já publicadas) e, para um lote mensal, também DENTRO do próprio lote — duas páginas
      * da mesma pessoa. O admin remove a(s) página(s) nomeada(s) e republica.
+     *
+     * <p>A ÚNICA folha que entra por cima de outra é a mensal DEFINITIVA sobre a PRÉVIA do mesmo mês:
+     * é assim que o mês fecha. Todo o resto colide — inclusive uma segunda prévia, e inclusive uma
+     * semanal atrasada de mês que a prévia já abriu.
      *
      * <p>SEMANAIS entre si continuam livres para se sobrepor: elas são CUMULATIVAS por desenho
      * (01–05, 01–12, 01–19…), e sobreposição de período é o funcionamento normal — não existe, e não
@@ -331,22 +342,28 @@ public class PontoService {
             }
         }
 
-        List<ConflitoMensal> conflitos = conflitosComMensalPublicada(lote, vinculadas);
+        List<ConflitoMensal> conflitos = umPorPessoaECompetencia(conflitosComMensalPublicada(lote, vinculadas));
         if (conflitos.isEmpty()) return;
         // A competência citada é a da MENSAL que já está publicada — não a janela consultada, que pode
         // abranger dois meses (lote que cruza a virada) e faria a frase mentir sobre o mês ainda aberto.
         String quem = nomesComCompetencia(conflitos, nomePorId);
+        String natureza = naturezaEmConflito(conflitos);
         throw recusarPublicacao(mensal
-                ? "já existe folha mensal publicada de " + quem
+                ? "já existe folha mensal" + natureza + " publicada de " + quem
                         + ". Remova a página dessa(s) pessoa(s) do lote e publique novamente."
-                : "o mês de " + quem + " já foi fechado por folha mensal publicada."
+                : "o mês de " + quem + " já foi fechado por folha mensal" + natureza + " publicada."
                         + " Remova a página dessa(s) pessoa(s) do lote e publique novamente.");
     }
 
-    /** Pessoa do lote que já tem MENSAL publicada, com a competência (mês) dessa mensal. */
-    private record ConflitoMensal(String pessoaId, YearMonth competencia) {}
+    /** Pessoa do lote que já tem MENSAL publicada, com a competência (mês) e a natureza dessa mensal. */
+    private record ConflitoMensal(String pessoaId, YearMonth competencia, String categoria) {}
 
-    /** Pessoas do lote que já têm MENSAL publicada (em outro lote) tocando a competência dele. */
+    /**
+     * Pessoas do lote que já têm MENSAL publicada (em outro lote) tocando a competência dele.
+     *
+     * <p>A prévia é ignorada quando o lote sendo publicado é a DEFINITIVA da mesma competência: aí
+     * não há conflito, e sim a substituição pretendida.
+     */
     private List<ConflitoMensal> conflitosComMensalPublicada(PontoLote lote, List<PontoLotePagina> vinculadas) {
         Set<String> pares = new HashSet<>();
         Set<String> ids = new LinkedHashSet<>();
@@ -354,15 +371,50 @@ public class PontoService {
             pares.add(chavePessoa(p.getPessoaId(), p.getPessoaTipo()));
             ids.add(p.getPessoaId());
         }
+        boolean definitiva = PontoLote.CATEGORIA_DEFINITIVA.equals(lote.getCategoria());
         List<ConflitoMensal> conflitos = new ArrayList<>();
         for (Object[] r : paginaRepo.findPessoasComMensalPublicadaNoPeriodo(
                 lote.getId(), ids, inicioCompetencia(lote), fimCompetencia(lote))) {
+            String categoriaPublicada = (String) r[3];
+            if (definitiva && PontoLote.CATEGORIA_PREVIA.equals(categoriaPublicada)) continue;
             // A query casa por PESSOA_ID; a chave real do vínculo polimórfico é o par com PESSOA_TIPO.
             if (pares.contains(chavePessoa((String) r[0], (String) r[1]))) {
-                conflitos.add(new ConflitoMensal((String) r[0], YearMonth.from((LocalDate) r[2])));
+                conflitos.add(new ConflitoMensal((String) r[0], YearMonth.from((LocalDate) r[2]), categoriaPublicada));
             }
         }
         return conflitos;
+    }
+
+    /**
+     * Um conflito por pessoa+competência, sob a folha que REALMENTE ocupa o mês.
+     *
+     * <p>A prévia substituída não some do histórico: a pessoa que teve o mês fechado tem as duas
+     * mensais publicadas e aparecia duas vezes na mesma recusa — com o nome repetido e sem a palavra
+     * da natureza (duas categorias no conjunto). Quem fechou o mês foi a definitiva, e é ela que a
+     * frase deve citar.
+     */
+    private static List<ConflitoMensal> umPorPessoaECompetencia(List<ConflitoMensal> conflitos) {
+        Map<String, ConflitoMensal> unicos = new LinkedHashMap<>();
+        for (ConflitoMensal c : conflitos) {
+            unicos.merge(c.pessoaId() + "|" + c.competencia(), c,
+                    (atual, nova) -> PontoLote.CATEGORIA_DEFINITIVA.equals(atual.categoria()) ? atual : nova);
+        }
+        return List.copyOf(unicos.values());
+    }
+
+    /**
+     * " prévia" / " definitiva" para a recusa nomear o que ocupa o mês — é a diferença entre um mês
+     * que a definitiva ainda pode fechar e um que já está fechado. Fica vazio quando o lote esbarra
+     * nas duas naturezas ao mesmo tempo (pessoas diferentes), caso em que nenhuma delas representa
+     * o conjunto.
+     */
+    private static String naturezaEmConflito(List<ConflitoMensal> conflitos) {
+        Set<String> categorias = conflitos.stream().map(ConflitoMensal::categoria).collect(Collectors.toSet());
+        if (categorias.size() != 1) return "";
+        String unica = categorias.iterator().next();
+        if (PontoLote.CATEGORIA_PREVIA.equals(unica)) return " prévia";
+        if (PontoLote.CATEGORIA_DEFINITIVA.equals(unica)) return " definitiva";
+        return "";
     }
 
     /** Pessoas presentes em mais de uma página vinculada do MESMO lote (conflito intra-lote). */
@@ -435,29 +487,79 @@ public class PontoService {
     // Banco de horas — BANCO_FINAL_MIN + âncora (E2)
     // ══════════════════════════════════════════════════════════════
 
-    /** Extrai e grava o BANCO_FINAL_MIN de cada página vinculada (Q5). Nunca aborta a publicação. */
-    private void extrairBancoFinal(List<PontoLotePagina> paginas) {
+    /**
+     * Lê o PDF de cada página vinculada UMA vez e dele tira as duas coisas que a publicação
+     * persiste: o BANCO acumulado da pessoa e a tabela da folha, linha a linha.
+     *
+     * <p>Folha ilegível nunca aborta a publicação: a página fica sem banco (NULL) e sem linhas
+     * gravadas, com WARN — o admin republica ou reprocessa depois.
+     */
+    private void extrairDadosDasFolhas(List<PontoLotePagina> paginas) {
         for (PontoLotePagina p : paginas) {
             if (p.getPessoaId() == null) continue;
-            p.setBancoFinalMin(bancoFinalDaPagina(p));
+            List<SecullumFolhaParser.LinhaPonto> linhas = linhasDaPagina(p);
+            p.setBancoFinalMin(bancoFinalDaPagina(p, linhas));
+            gravarLinhasDaFolha(p, linhas);
         }
     }
 
-    /** BANCO acumulado da folha em minutos; {@code null} (com WARN) em falha ou folha sem banco. */
-    private Integer bancoFinalDaPagina(PontoLotePagina p) {
+    /** Linhas-dia da folha; lista vazia (com WARN) quando o PDF não pode ser lido ou parseado. */
+    private List<SecullumFolhaParser.LinhaPonto> linhasDaPagina(PontoLotePagina p) {
         try {
-            String texto = extrairTextoFolha(lerArquivo(p.getArquivoPagina()));
-            Integer min = SecullumFolhaParser.bancoFinalMin(SecullumFolhaParser.parse(texto));
-            if (min == null) {
-                log.warn("BANCO nao encontrado na pagina {} ({}) — BANCO_FINAL_MIN fica NULL.",
-                        p.getId(), p.getArquivoPagina());
-            }
-            return min;
+            return SecullumFolhaParser.parse(extrairTextoFolha(lerArquivo(p.getArquivoPagina())));
         } catch (Exception e) {
-            log.warn("Falha ao extrair BANCO da pagina {} ({}): {} — BANCO_FINAL_MIN fica NULL.",
+            log.warn("Falha ao ler a folha da pagina {} ({}): {} — sem BANCO e sem linhas gravadas.",
                     p.getId(), p.getArquivoPagina(), e.getMessage());
-            return null;
+            return List.of();
         }
+    }
+
+    /** BANCO acumulado da folha em minutos; {@code null} (com WARN) na folha sem banco. */
+    private Integer bancoFinalDaPagina(PontoLotePagina p, List<SecullumFolhaParser.LinhaPonto> linhas) {
+        Integer min = SecullumFolhaParser.bancoFinalMin(linhas);
+        if (min == null && !linhas.isEmpty()) {
+            log.warn("BANCO nao encontrado na pagina {} ({}) — BANCO_FINAL_MIN fica NULL.",
+                    p.getId(), p.getArquivoPagina());
+        }
+        return min;
+    }
+
+    /**
+     * Regrava a tabela da folha. As linhas anteriores saem antes: reprocessar a mesma folha grava
+     * tudo de novo, e a unicidade (página, ordem) não admite duas gerações convivendo.
+     */
+    private void gravarLinhasDaFolha(PontoLotePagina p, List<SecullumFolhaParser.LinhaPonto> linhas) {
+        folhaLinhaRepo.deleteByPaginaId(p.getId());
+        folhaLinhaRepo.flush();
+        if (linhas.isEmpty()) return;
+        List<PontoFolhaLinha> novas = new ArrayList<>(linhas.size());
+        int ordem = 1;
+        for (SecullumFolhaParser.LinhaPonto l : linhas) {
+            novas.add(linhaDaFolha(p.getId(), ordem++, l));
+        }
+        folhaLinhaRepo.saveAll(novas);
+    }
+
+    /** Linha gravada: as 7 colunas verbatim + a data e a ocorrência derivadas delas. */
+    private static PontoFolhaLinha linhaDaFolha(String paginaId, int ordem, SecullumFolhaParser.LinhaPonto l) {
+        PontoFolhaLinha e = new PontoFolhaLinha();
+        e.setPaginaId(paginaId);
+        e.setOrdem(ordem);
+        e.setDiaVerbatim(vazioParaNulo(l.dia()));
+        e.setEnt1(vazioParaNulo(l.ent1()));
+        e.setSai1(vazioParaNulo(l.sai1()));
+        e.setEnt2(vazioParaNulo(l.ent2()));
+        e.setSai2(vazioParaNulo(l.sai2()));
+        e.setTotalDia(vazioParaNulo(l.totalDia()));
+        e.setBanco(vazioParaNulo(l.banco()));
+        e.setData(SecullumFolhaParser.dataDe(l));
+        e.setOcorrencia(SecullumFolhaParser.ocorrenciaDe(l));
+        return e;
+    }
+
+    /** Célula em branco na folha vira nulo — no Oracle, string vazia e nulo são a mesma coisa. */
+    private static String vazioParaNulo(String s) {
+        return s == null || s.isEmpty() ? null : s;
     }
 
     /** Re-ancora cada pessoa distinta com página vinculada (na transação corrente — gotcha 3). */
@@ -497,8 +599,10 @@ public class PontoService {
         List<Map<String, Object>> semBanco = new ArrayList<>();
         int gravadas = 0;
         for (PontoLotePagina p : pendentes) {
-            Integer min = bancoFinalDaPagina(p);
+            List<SecullumFolhaParser.LinhaPonto> linhas = linhasDaPagina(p);
+            Integer min = bancoFinalDaPagina(p, linhas);
             p.setBancoFinalMin(min);
+            gravarLinhasDaFolha(p, linhas);
             if (min != null) gravadas++;
             else semBanco.add(resumoPaginaSemBanco(p));
         }
@@ -544,19 +648,28 @@ public class PontoService {
         if (destinatarios.isEmpty()) return;
         // O lote vai marcado no cadastro (ORIGEM_LOTE_ID): é por essa proveniência, e só por ela, que a
         // exclusão do lote sabe QUAIS avisos são dele (F59) — nunca por autor, tipo ou texto.
-        SubtipoAviso subtipo = "SEMANAL".equals(lote.getTipo()) ? SubtipoAviso.FOLHA_SEMANAL : SubtipoAviso.FOLHA_MENSAL;
+        SubtipoAviso subtipo = TIPO_SEMANAL.equals(lote.getTipo()) ? SubtipoAviso.FOLHA_SEMANAL : SubtipoAviso.FOLHA_MENSAL;
         avisoService.criarPessoalIndividual(destinatarios, mensagemFolhaPublicada(lote),
                 lote.getCriadoPorId(), subtipo, lote.getId());
     }
 
+    /**
+     * Texto do aviso de publicação. A definitiva é a única que não convida a conferir: ela fecha o
+     * mês, não há prazo de retificação a anunciar — só o registro de que o mês foi encerrado.
+     */
     private String mensagemFolhaPublicada(PontoLote lote) {
-        boolean semanal = "SEMANAL".equals(lote.getTipo());
+        String competencia = ReportConfig.fmtCompetencia(lote.getDataInicio());
+        if (TIPO_MENSAL.equals(lote.getTipo()) && PontoLote.CATEGORIA_DEFINITIVA.equals(lote.getCategoria())) {
+            return "Folha de ponto definitiva do mês " + competencia + " publicada.";
+        }
         // Mensal é identificada pela competência ("Junho/2026"); semanal, pelo intervalo de datas.
+        boolean semanal = TIPO_SEMANAL.equals(lote.getTipo());
+        String folhaTxt = semanal ? "semanal" : "mensal — prévia";
         String periodoTxt = semanal
                 ? ReportConfig.fmtDate(lote.getDataInicio()) + " a " + ReportConfig.fmtDate(lote.getDataFim())
-                : ReportConfig.fmtCompetencia(lote.getDataInicio());
+                : competencia;
         LocalDate limite = retificacaoService.limiteRetificacao(lote);
-        return "Sua folha de ponto " + (semanal ? "semanal" : "mensal") + " (" + periodoTxt
+        return "Sua folha de ponto " + folhaTxt + " (" + periodoTxt
                 + ") foi publicada. "
                 + "Acesse \"Minhas Folhas\" para visualizá-la."
                 + (limite != null ? " Retificações até " + ReportConfig.fmtDate(limite) + "." : "");
@@ -572,15 +685,31 @@ public class PontoService {
         for (Object[] row : paginaRepo.findFolhasPublicadasByPessoa(pessoaId)) {
             PontoLotePagina p = (PontoLotePagina) row[0];
             PontoLote l = (PontoLote) row[1];
+            if (previaSubstituida(p, l)) continue;
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", p.getId());
             m.put("tipo", l.getTipo());
+            m.put("categoria", l.getCategoria());
             m.put("data_inicio", l.getDataInicio().toString());
             m.put("data_fim", l.getDataFim().toString());
             m.put("publicado_em", l.getPublicadoEm() != null ? l.getPublicadoEm().toString() : null);
             out.add(m);
         }
         return out;
+    }
+
+    /**
+     * A folha prévia foi substituída pela definitiva do mesmo mês daquela pessoa?
+     *
+     * <p>Publicada a definitiva, a prévia deixa de ser a folha do mês: sai da lista do dono e o
+     * acesso direto a ela acompanha. Para o admin nada some — o histórico de lotes continua inteiro.
+     */
+    private boolean previaSubstituida(PontoLotePagina pagina, PontoLote lote) {
+        if (!TIPO_MENSAL.equals(lote.getTipo()) || !PontoLote.CATEGORIA_PREVIA.equals(lote.getCategoria())) {
+            return false;
+        }
+        return paginaRepo.contarDefinitivasPublicadas(pagina.getPessoaId(), pagina.getPessoaTipo(),
+                inicioCompetencia(lote), fimCompetencia(lote)) > 0;
     }
 
     /** Download da folha por um operador/técnico (só a própria) ou admin (qualquer). */
@@ -614,6 +743,7 @@ public class PontoService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("id", pg.getId());
         out.put("tipo", lote.getTipo());
+        out.put("categoria", lote.getCategoria());
         out.put("data_inicio", lote.getDataInicio().toString());
         out.put("data_fim", lote.getDataFim().toString());
         out.put("linhas", rows);
@@ -659,7 +789,7 @@ public class PontoService {
             if (pg.getPessoaId() == null || !pg.getPessoaId().equals(solicitanteId)) {
                 throw new ServiceValidationException("Acesso negado a esta folha.", HttpStatus.FORBIDDEN);
             }
-            if (!STATUS_PUBLICADO.equals(lote.getStatus())) {
+            if (!STATUS_PUBLICADO.equals(lote.getStatus()) || previaSubstituida(pg, lote)) {
                 throw new ServiceValidationException("Folha indisponível.", HttpStatus.NOT_FOUND);
             }
         }
@@ -821,6 +951,7 @@ public class PontoService {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", l.getId());
         m.put("tipo", l.getTipo());
+        m.put("categoria", l.getCategoria());
         m.put("data_inicio", l.getDataInicio().toString());
         m.put("data_fim", l.getDataFim().toString());
         m.put("status", l.getStatus());
@@ -858,10 +989,32 @@ public class PontoService {
 
     private String normalizeTipo(String tipo) {
         String t = tipo == null ? "" : tipo.trim().toUpperCase(Locale.ROOT);
-        if (!t.equals("SEMANAL") && !t.equals("MENSAL")) {
+        if (!t.equals(TIPO_SEMANAL) && !t.equals(TIPO_MENSAL)) {
             throw new ServiceValidationException("Tipo inválido (use SEMANAL ou MENSAL).");
         }
         return t;
+    }
+
+    /**
+     * Natureza da folha mensal, escolhida no envio: a prévia abre o mês para conferência, a
+     * definitiva o fecha. A semanal não tem essa distinção — é cumulativa — e por isso recusa a
+     * categoria em vez de ignorá-la em silêncio.
+     */
+    private String normalizeCategoria(String categoria, String tipo) {
+        String c = categoria == null ? "" : categoria.trim().toUpperCase(Locale.ROOT);
+        if (!TIPO_MENSAL.equals(tipo)) {
+            if (!c.isEmpty()) {
+                throw new ServiceValidationException("Folha semanal não é prévia nem definitiva.");
+            }
+            return null;
+        }
+        if (c.isEmpty()) {
+            throw new ServiceValidationException("Informe se a folha mensal é prévia ou definitiva.");
+        }
+        if (!c.equals(PontoLote.CATEGORIA_PREVIA) && !c.equals(PontoLote.CATEGORIA_DEFINITIVA)) {
+            throw new ServiceValidationException("Categoria inválida (use PREVIA ou DEFINITIVA).");
+        }
+        return c;
     }
 
     private LocalDate parseData(String raw, String campo) {

@@ -114,8 +114,6 @@ const ORDEM_TIPO = ['OPERADOR', 'TECNICO', 'ADMINISTRADOR'];
     .painel-actions { display:flex; justify-content:flex-end; margin-top:12px; }
     .req { color:#dc2626; }
     .radio-row { display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
-    .radio-opt { display:flex; align-items:center; gap:6px; font-weight:500; margin:0; cursor:pointer; }
-    .radio-opt input { width:auto; }
     .duracao-inline { display:flex; align-items:center; gap:8px; }
     .duracao-inline label { margin:0; white-space:nowrap; }
     .duracao-inline input { width:90px; }
