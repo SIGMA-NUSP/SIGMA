@@ -545,8 +545,7 @@ class MarcacaoServiceTest {
                     () -> service.aplicarLote(body, ADMIN));
 
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-            assertEquals("O tipo \"Feriado\" não está mais disponível. "
-                    + "Recarregue as ocorrências e tente novamente.", ex.getMessage());
+            assertEquals("O tipo \"Feriado\" não está mais disponível.", ex.getMessage());
         }
     }
 

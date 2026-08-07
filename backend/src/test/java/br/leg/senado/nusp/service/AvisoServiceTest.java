@@ -546,7 +546,7 @@ class AvisoServiceTest {
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                     () -> service.criar(reqSala(List.of(SALA_ID)), ADMIN_ID));
 
-            assertEquals(SALA_NOME + " já possui um aviso ativo (cadastro nº 42). Desative-o antes de cadastrar outro.",
+            assertEquals(SALA_NOME + " já possui um aviso ativo (cadastro nº 42).",
                     ex.getMessage());
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             verify(q).setParameter(1, SALA_ID);

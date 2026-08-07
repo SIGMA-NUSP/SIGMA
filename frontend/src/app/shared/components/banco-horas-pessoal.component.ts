@@ -23,16 +23,14 @@ const HTTP_CONFLITO = 409;
 
 /** Guia da tela na falha TRANSITÓRIA da carga do mês (F44) — o detalhe do backend vem anexado. */
 const GUIA_CARGA =
-  'Não foi possível carregar o seu banco de horas deste mês. Sem ele não dá para marcar dias — ' +
-  'tente novamente ou escolha outro mês.';
+  'Não foi possível carregar o banco de horas.';
 
 /** Fallback do erro FATAL: a mensagem do Q17 vem do backend; isto só cobre um 409 sem corpo. */
 const MSG_BLOQUEIO = 'Erro ao carregar o banco de horas.';
 
 /** Guia da tela na falha da tabela "Minhas Solicitações" (canal de erro do C7). */
 const GUIA_SOLICITACOES =
-  'Não foi possível carregar as suas solicitações de folga. Pode haver pedidos pendentes ou já ' +
-  'aprovados que não aparecem aqui.';
+  'Não foi possível carregar as solicitações.';
 
 /** GET /api/ponto/banco — saldo + situação do mês pedido. */
 interface BancoInfo {
@@ -82,7 +80,7 @@ interface SolicitacaoRow {
             <span class="text-muted-sm">(atualizando...)</span>
           }
           @if (d.sem_folha_oficial) {
-            <span class="text-muted-sm">(sem folha de ponto oficial — saldo de abertura zerado)</span>
+            <span class="text-muted-sm">(sem folha de ponto - saldo zerado)</span>
           }
           @if (selecionados().size > 0) {
             <span class="saldo-acoes">

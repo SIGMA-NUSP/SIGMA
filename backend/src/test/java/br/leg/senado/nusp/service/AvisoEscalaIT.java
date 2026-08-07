@@ -236,7 +236,7 @@ class AvisoEscalaIT {
             var req = new AvisoService.CriarAvisoRequest("ESCALA", null, null, false,
                     List.of("Segundo"), null, List.of(pleno.getId()), List.of(), List.of(), List.of(), esc.getId(), null);
             var ex = assertThrows(ServiceValidationException.class, () -> service.criar(req, admin.getId()));
-            assertTrue(ex.getMessage().contains("já possui um aviso"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("um aviso por escala"), ex.getMessage());
         }
 
         @Test

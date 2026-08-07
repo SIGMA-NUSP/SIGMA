@@ -289,8 +289,7 @@ public class AvisoService {
         // 1 cadastro por escala (análogo ao "1 aviso ativo por sala") — conta os não-desativados.
         Long ocupadaPor = numeroCadastroEscalaAtivo(escalaId);
         if (ocupadaPor != null)
-            throw new ServiceValidationException("Esta escala já possui um aviso (cadastro nº " + ocupadaPor
-                    + "). Desative-o antes de cadastrar outro.");
+            throw new ServiceValidationException("Só é permitido um aviso por escala.");
 
         boolean exigeCiencia = resolverExigeCiencia(TipoAviso.ESCALA, req.exigeCiencia());
         boolean manter = resolverManter(req.manterAposCiencia(), exigeCiencia);
@@ -1139,7 +1138,7 @@ public class AvisoService {
                 long numero = ((Number) ocup.get(0)).longValue();
                 String nome = salaRepo.findById(sid).map(s -> s.getNome()).orElse("Sala " + sid);
                 throw new ServiceValidationException(
-                        nome + " já possui um aviso ativo (cadastro nº " + numero + "). Desative-o antes de cadastrar outro.");
+                        nome + " já possui um aviso ativo (cadastro nº " + numero + ").");
             }
         }
     }

@@ -311,7 +311,7 @@ class TipoMarcacaoServiceTest {
                 ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                         () -> service.criar(Map.of("tipos", List.of(pedido(grafia, "BH", "GLOBAL"))),
                                 MASTER, CALLER_ID));
-                assertTrue(ex.getMessage().contains("folgas do banco de horas"), ex.getMessage());
+                assertTrue(ex.getMessage().contains("reservado pelo sistema"), ex.getMessage());
             }
             verify(tipoRepo, never()).saveAllAndFlush(any());
         }
@@ -324,7 +324,7 @@ class TipoMarcacaoServiceTest {
                     () -> service.criar(Map.of("tipos", List.of(pedido("Luto", "ßß", "GLOBAL"))),
                             MASTER, CALLER_ID));
 
-            assertTrue(ex.getMessage().contains("não cabem no limite"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("Limite de caracteres excedido"), ex.getMessage());
             verify(tipoRepo, never()).saveAllAndFlush(any());
         }
 
@@ -340,8 +340,7 @@ class TipoMarcacaoServiceTest {
                     () -> service.criar(Map.of("tipos", List.of(pedido("Luto", "Lut", "GLOBAL"))),
                             MASTER, CALLER_ID));
 
-            assertEquals("Nome ou badge já cadastrado por outra operação. "
-                    + "Confira o catálogo e tente novamente.", ex.getMessage());
+            assertEquals("Não foi possível concluir a operação.", ex.getMessage());
         }
 
         private String erroDoCadastro(Map<String, Object> item) {

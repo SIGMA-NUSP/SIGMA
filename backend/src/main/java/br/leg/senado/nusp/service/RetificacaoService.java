@@ -242,9 +242,7 @@ public class RetificacaoService {
      */
     private void exigirMesAberto(String pessoaId, String pessoaTipo, LocalDate dia) {
         if (!mesFechadoPorDefinitiva(pessoaId, pessoaTipo, YearMonth.from(dia))) return;
-        throw new ServiceValidationException("O dia " + ReportConfig.fmtDate(dia)
-                + " não pode ser retificado: a folha de ponto definitiva de "
-                + ReportConfig.fmtCompetencia(dia) + " já foi publicada.");
+        throw new ServiceValidationException("Não é possível retificar. Folha definitiva já publicada.");
     }
 
     private boolean mesFechadoPorDefinitiva(String pessoaId, String pessoaTipo, YearMonth mes) {

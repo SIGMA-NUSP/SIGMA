@@ -239,7 +239,7 @@ describe('PontoRetificarComponent', () => {
       const comp = criarCarregado();
 
       expect(comp.linhas()).toHaveLength(3);              // a folha continua visível (ela carregou)
-      expect(comp.erroRetificacoes()).toContain('Não foi possível verificar quais dias você já retificou');
+      expect(comp.erroRetificacoes()).toContain('Não foi possível concluir a operação.');
       expect(comp.retificacoesCarregadas()).toBe(false);  // ← o que bloqueia o Salvar
       expect(comp.erro()).toBe('');                       // canal do formulário intocado (não se misturam)
 
@@ -247,7 +247,7 @@ describe('PontoRetificarComponent', () => {
       comp.salvar();
 
       expect(apiPost).not.toHaveBeenCalled();             // preencher e mandar salvar não passa
-      expect(comp.erro()).toContain('recarregue antes de enviar');
+      expect(comp.erro()).toContain('Não foi possível concluir a operação.');
     });
 
     it('o retry recarrega, aplica marcação/prazo e DESTRAVA o envio', () => {
@@ -345,7 +345,7 @@ describe('PontoRetificarComponent', () => {
 
       const caixa = fixture.debugElement.query(By.css('app-erro-carga [role="alert"], app-erro-carga.erro-carga, .erro-carga'));
       expect(caixa).not.toBeNull();
-      expect(caixa!.nativeElement.textContent).toContain('Enviar agora poderia derrubar o lote inteiro');
+      expect(caixa!.nativeElement.textContent).toContain('Não foi possível concluir a operação.');
       expect(fixture.debugElement.query(By.css('button.salvar-top'))).toBeNull();   // sem Salvar
     });
 
@@ -447,7 +447,7 @@ describe('PontoRetificarComponent', () => {
   // ═══════════════════════════════════════════════════════════════════
   describe('mês encerrado pela folha definitiva', () => {
     const TEXTO_MES_FECHADO =
-      'Esta folha não pode mais ser retificada: a folha de ponto definitiva do mês já foi publicada.';
+      'Não é possível retificar esta folha.';
 
     /** Folha carregada com o mês encerrado; o prazo, por padrão, ainda está correndo. */
     function criarComMesFechado(extra: Record<string, unknown> = {}): PontoRetificarComponent {
@@ -924,7 +924,7 @@ describe('PontoRetificarComponent', () => {
       comp.salvar();
 
       expect(comp.erro()).toBe(
-        'Não foi possível salvar a retificação — nenhum dia foi gravado. (O dia 08/07/2026 já foi retificado.)');
+        'Não foi possível concluir a operação. (O dia 08/07/2026 já foi retificado.)');
       expect(comp.enviado()).toBe(false);
       expect(navigateByUrl).not.toHaveBeenCalled(); // o setTimeout de saída nem chega a ser agendado
       // re-sync: 2º GET /retificacoes (dias que porventura passaram) — sem drenar timers,
@@ -938,7 +938,7 @@ describe('PontoRetificarComponent', () => {
       apiPost.mockReturnValue(throwError(() => new Error('rede')));
       preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
       comp.salvar();
-      expect(comp.erro()).toBe('Não foi possível salvar a retificação — nenhum dia foi gravado.');
+      expect(comp.erro()).toBe('Não foi possível concluir a operação.');
     });
   });
 
@@ -1029,7 +1029,7 @@ describe('PontoRetificarComponent', () => {
       comp.salvar();
 
       expect(comp.erro()).toBe(
-        'Informe ao menos o par Ent. 1 / Saí. 1 em 06/07/26 - seg: não é possível retificar um dia sem horários.');
+        'Horário de entrada e saída são obrigatórios.');
       expect(apiPost).not.toHaveBeenCalled();
     });
 
@@ -1040,7 +1040,7 @@ describe('PontoRetificarComponent', () => {
 
       comp.salvar();
 
-      expect(comp.erro()).toContain('08/07/26 - qua');
+      expect(comp.erro()).toContain('Horário de entrada e saída são obrigatórios');
       expect(apiPost).not.toHaveBeenCalled();
     });
   });
@@ -1279,7 +1279,7 @@ describe('PontoRetificarComponent', () => {
 
       comp.salvarEdicao(l);
 
-      expect(comp.erro()).toBe('Não foi possível salvar a edição — a retificação não foi alterada. (Retificação não encontrada.)');
+      expect(comp.erro()).toBe('Não foi possível salvar a edição. (Retificação não encontrada.)');
       expect(l.editando).toBe(true);                    // o usuário não perde o que digitou
       expect(l.r_ent1).toBe('07:30');
       expect(l.salvandoEdicao).toBe(false);
@@ -1292,7 +1292,7 @@ describe('PontoRetificarComponent', () => {
       const comp = criarComRetifGravada();
       const l = linhaEmEdicao(comp);
       comp.salvarEdicao(l);
-      expect(comp.erro()).toBe('Não foi possível salvar a edição — a retificação não foi alterada.');
+      expect(comp.erro()).toBe('Não foi possível salvar a edição.');
     });
 
     it('2º clique com o PUT no ar NÃO dispara outro (trava salvandoEdicao)', () => {
@@ -1315,7 +1315,7 @@ describe('PontoRetificarComponent', () => {
       comp.salvarEdicao(l);
 
       expect(comp.erro()).toBe(
-        'Informe ao menos o par Ent. 1 / Saí. 1 em 08/07/26 - qua: não é possível retificar um dia sem horários.');
+        'Horário de entrada e saída são obrigatórios.');
       expect(apiPut).not.toHaveBeenCalled();
       expect(l.editando).toBe(true);
     });
@@ -1466,7 +1466,7 @@ describe('PontoRetificarComponent', () => {
 
       comp.salvar();
 
-      expect(comp.erro()).toContain('nenhum dia foi gravado');     // a guia da tela
+      expect(comp.erro()).toContain('Não foi possível concluir a operação.');   // a guia da tela
       expect(comp.erro()).toContain('máximo de 300 caracteres');   // o motivo do backend
       expect(comp.enviado()).toBe(false);
       expect(comp.salvando()).toBe(false);                         // a trava é liberada: dá para consertar

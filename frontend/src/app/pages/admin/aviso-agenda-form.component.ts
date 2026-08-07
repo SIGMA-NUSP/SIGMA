@@ -16,8 +16,7 @@ import { httpErrorMsg } from '../../core/helpers/http.helpers';
   template: `
     <section class="card-custom painel-aviso">
       <p class="painel-hint">
-        O aviso aparece como popup para operadores e técnicos ao entrarem na Agenda Legislativa,
-        uma única vez por pessoa.
+        Comunicado para operadores e técnicos ao entrarem na página Agenda Legislativa.
       </p>
 
       <app-aviso-mensagens [(mensagens)]="mensagens" />

@@ -612,7 +612,7 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
 
       expect(comp.preview()).toBeNull();
       expect(comp.erro()).toBe(
-        'Não foi possível verificar o que a exclusão apagaria — nada foi excluído. (Erro interno do servidor)',
+        'Não foi possível concluir a operação. (Erro interno do servidor)',
       );
       expect(apiDelete).not.toHaveBeenCalled();
       expect(comp.marcadoId()).toBe('t-1'); // a marcação continua para o retry
@@ -625,7 +625,7 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
 
       comp.aplicar();
 
-      expect(comp.erro()).toBe('Não foi possível verificar o que a exclusão apagaria — nada foi excluído.');
+      expect(comp.erro()).toBe('Não foi possível concluir a operação.');
     });
 
     it('preview sem data não abre confirmação vazia', () => {
@@ -1154,7 +1154,7 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
       expect(fixture.debugElement.queryAll(By.css('.modal-title'))).toHaveLength(1);
       expect(btnExcluir(fixture)).toBeUndefined();
       expect((fixture.debugElement.query(By.css('.error-box')).nativeElement as HTMLElement).textContent)
-        .toContain('nada foi excluído.');
+        .toContain('Não foi possível concluir a operação.');
     });
 
     it('"Excluir definitivamente" dispara o DELETE do tipo confirmado', () => {

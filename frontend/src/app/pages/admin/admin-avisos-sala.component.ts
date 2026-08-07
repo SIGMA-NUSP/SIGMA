@@ -45,16 +45,16 @@ interface AvisoRow {
     <!-- ════════════ CARDS DE SELEÇÃO (1 ativo por vez; reclicar oculta o painel) ════════════ -->
     <div class="grid-cards cols-auto cards-aviso">
       <button class="card-custom card-pick" [class.active]="activeCard() === 'verificacao'" (click)="toggleCard('verificacao')">
-        <strong>Verificação</strong>
+        <strong>Verificação</strong><span class="text-muted-sm">Cadastro de aviso no formulário de verificação</span>
       </button>
       <button class="card-custom card-pick" [class.active]="activeCard() === 'escala'" (click)="toggleCard('escala')">
-        <strong>Escala</strong>
+        <strong>Escala</strong><span class="text-muted-sm">Cadastro de aviso por escala semanal</span>
       </button>
       <button class="card-custom card-pick" [class.active]="activeCard() === 'agenda'" (click)="toggleCard('agenda')">
-        <strong>Agenda</strong>
+        <strong>Agenda</strong><span class="text-muted-sm">Cadastro de comunicado - Agenda Legislativa</span>
       </button>
       <button class="card-custom card-pick" [class.active]="activeCard() === 'pessoal'" (click)="toggleCard('pessoal')">
-        <strong>Pessoal</strong>
+        <strong>Pessoal</strong><span class="text-muted-sm">Cadastro de mensagem individual ou por grupos</span>
       </button>
     </div>
 
@@ -283,11 +283,11 @@ export class AdminAvisosSalaComponent implements OnInit {
 
   // ── Listagem ──
   cols: ColumnFilterDef[] = [
-    { key: 'tipo',       label: 'Tipo',           type: 'text' },
-    { key: 'data',       label: 'Data',           type: 'date' },
+    { key: 'tipo', label: 'Tipo', type: 'text' },
+    { key: 'data', label: 'Data', type: 'date' },
     { key: 'criado_por', label: 'Cadastrado por', type: 'text' },
-    { key: 'expira',     label: 'Expira em',      type: 'date' },
-    { key: 'status',     label: 'Status',         type: 'text' },
+    { key: 'expira', label: 'Expira em', type: 'date' },
+    { key: 'status', label: 'Status', type: 'text' },
   ];
   ctrl = new TableStateController<AvisoRow>(this.api, {
     endpoint: '/api/admin/avisos/list', defaultSort: 'data', defaultDir: 'desc',
@@ -316,7 +316,7 @@ export class AdminAvisosSalaComponent implements OnInit {
         if (seq !== this.seqSalasOcupadas) return;   // a falha velha não religa o bloqueio destravado
         this.loadingSalasOcupadas.set(false);
         this.erroSalasOcupadas.set(erroCargaMsg(err,
-          'Não foi possível verificar quais locais já têm aviso ativo. O cadastro fica bloqueado até recarregar — um local ocupado apareceria como livre.'));
+          'Não foi possível concluir a operação.'));
       },
     });
   }

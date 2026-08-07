@@ -380,7 +380,7 @@ export class ConfigurarTiposMarcacaoComponent implements OnInit {
       },
       error: err => {
         this.salvando.set(false);
-        this.erro.set(erroCargaMsg(err, 'Não foi possível verificar o que a exclusão apagaria — nada foi excluído.'));
+        this.erro.set(erroCargaMsg(err, 'Não foi possível concluir a operação.'));
       },
     });
   }
@@ -414,7 +414,7 @@ export class ConfigurarTiposMarcacaoComponent implements OnInit {
 
   tentarFechar(): void {
     if (this.salvando() || this.preview()) return;
-    if (this.temRascunho() && !confirm('Há alterações não aplicadas. Fechar vai descartá-las. Continuar?')) return;
+    if (this.temRascunho() && !confirm('Fechar e descartar as alterações realizadas?')) return;
     this.fechar.emit();
   }
 

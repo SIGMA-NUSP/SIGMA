@@ -262,13 +262,13 @@ class BancoHorasServiceTest {
     // ── GET /api/ponto/banco ──────────────────────────────────────
 
     @Test
-    @DisplayName("consultar: CARGA_HORARIA NULL → 409 com a mensagem da Gestão de Pessoas (Q17)")
+    @DisplayName("consultar: CARGA_HORARIA NULL → 409 com a orientação de procurar o supervisor (Q17)")
     void consultarCargaNula() {
         mockCarga(null);
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                 () -> service.consultar(OP, ROLE, HOJE.getYear(), HOJE.getMonthValue()));
         assertEquals(HttpStatus.CONFLICT, ex.getStatus());
-        assertTrue(ex.getMessage().contains("Gestão de Pessoas"));
+        assertTrue(ex.getMessage().contains("Procure o supervisor"));
     }
 
     @Test
@@ -641,8 +641,9 @@ class BancoHorasServiceTest {
                 () -> service.solicitar(OP, ROLE,
                         bodyDias(corrente.toString(), seguinte.toString(), segundoSeguinte.toString())));
 
+        // Saldo de 1439 contra débito de 1440: só a SOMA dos três meses excede — a própria recusa
+        // prova que o lote inteiro compôs o débito (um mês sozinho, 480, teria passado).
         assertTrue(ex.getMessage().contains("Saldo insuficiente"));
-        assertTrue(ex.getMessage().contains("+24:00"), "três débitos de 480 minutos compõem o lote");
         verify(solicitacaoRepo, never()).saveAllAndFlush(any());
     }
 

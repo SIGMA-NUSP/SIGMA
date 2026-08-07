@@ -119,12 +119,11 @@ describe('PontoBancoComponent', () => {
       expect(comErro.loading()).toBe(false);
     });
 
-    it('erro sem mensagem do backend cai no fallback que cita o prazo', () => {
+    it('erro sem mensagem do backend cai no fallback', () => {
       apiGet.mockReturnValue(throwError(() => ({ status: 503 })));
       const comp = criarCarregado();
       expect(comp.erro()).toBe(
-        'Não foi possível carregar as suas folhas de ponto. '
-        + 'Você pode ter folhas publicadas dentro do prazo de retificação.');
+        'Não foi possível carregar as folhas de ponto.');
     });
 
     it('o retry re-dispara a carga; o sucesso limpa o erro e exibe as folhas', () => {
@@ -318,7 +317,7 @@ describe('PontoBancoComponent', () => {
 
       const caixa = fixture.debugElement.query(By.directive(ErroCargaComponent));
       expect(caixa).not.toBeNull();
-      expect(caixa.componentInstance.mensagem()).toContain('prazo de retificação');
+      expect(caixa.componentInstance.mensagem()).toContain('Não foi possível carregar as folhas de ponto.');
       expect(painel(fixture)).not.toContain('Nenhuma folha de ponto disponível ainda.');
     });
 

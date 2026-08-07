@@ -142,7 +142,7 @@ export class AvisoEscalaFormComponent implements OnInit {
       error: err => {
         this.loadingEscalas.set(false);
         this.erroEscalas.set(erroCargaMsg(err,
-          'Não foi possível carregar as escalas. O cadastro fica bloqueado até recarregar.'));
+          'Não foi possível concluir a operação.'));
       },
     });
   }

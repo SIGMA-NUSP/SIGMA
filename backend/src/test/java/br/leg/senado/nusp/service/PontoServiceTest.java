@@ -653,7 +653,7 @@ class PontoServiceTest {
 
             // A folha mensal É a competência inteira: o intervalo 01/06–30/06 em datas seria redundante
             // e ilegível — o aviso diz o MÊS; o intervalo de datas é identidade só da semanal.
-            assertEquals("Sua folha de ponto mensal — prévia (Junho/2026) foi publicada. "
+            assertEquals("Folha de ponto mensal — prévia (Junho/2026) publicada. "
                     + "Acesse \"Minhas Folhas\" para visualizá-la. Retificações até 10/07/2026.",
                     textoDoAviso());
         }
@@ -669,7 +669,7 @@ class PontoServiceTest {
 
             service.publicar(LOTE, true);
 
-            assertEquals("Sua folha de ponto mensal — prévia (Março/2026) foi publicada. "
+            assertEquals("Folha de ponto mensal — prévia (Março/2026) publicada. "
                     + "Acesse \"Minhas Folhas\" para visualizá-la.",
                     textoDoAviso());
         }
@@ -699,7 +699,7 @@ class PontoServiceTest {
 
             service.publicar(LOTE, true);
 
-            assertEquals("Sua folha de ponto semanal (01/06/2026 a 05/06/2026) foi publicada. "
+            assertEquals("Folha de ponto semanal (01/06/2026 a 05/06/2026) publicada. "
                     + "Acesse \"Minhas Folhas\" para visualizá-la. Retificações até 12/06/2026.",
                     textoDoAviso());
         }
@@ -737,8 +737,7 @@ class PontoServiceTest {
             mensalPublicadaDe(OP, "OPERADOR", JULHO_INI, JULHO_FIM, PREVIA);
 
             assertEquals("Publicação recusada: o mês de Maria Silva (07/2026) já foi fechado por"
-                    + " folha mensal prévia publicada."
-                    + " Remova a página dessa(s) pessoa(s) do lote e publique novamente.",
+                    + " folha mensal prévia publicada.",
                     recusaAoPublicar());
         }
 
@@ -750,8 +749,7 @@ class PontoServiceTest {
             mensalPublicadaDe(OP, "OPERADOR", JULHO_INI, JULHO_FIM, DEFINITIVA);
 
             assertEquals("Publicação recusada: o mês de Maria Silva (07/2026) já foi fechado por"
-                    + " folha mensal definitiva publicada."
-                    + " Remova a página dessa(s) pessoa(s) do lote e publique novamente.",
+                    + " folha mensal definitiva publicada.",
                     recusaAoPublicar());
         }
 
@@ -764,8 +762,7 @@ class PontoServiceTest {
             // Corrigir a prévia é retificar, não republicar: uma segunda prévia deixaria duas folhas
             // igualmente válidas do mesmo mês para a mesma pessoa.
             assertEquals("Publicação recusada: já existe folha mensal prévia publicada de"
-                    + " Maria Silva (07/2026)."
-                    + " Remova a página dessa(s) pessoa(s) do lote e publique novamente.",
+                    + " Maria Silva (07/2026).",
                     recusaAoPublicar());
         }
 
@@ -776,8 +773,7 @@ class PontoServiceTest {
             mensalPublicadaDe(OP, "OPERADOR", JULHO_INI, JULHO_FIM, DEFINITIVA);
 
             assertEquals("Publicação recusada: já existe folha mensal definitiva publicada de"
-                    + " Maria Silva (07/2026)."
-                    + " Remova a página dessa(s) pessoa(s) do lote e publique novamente.",
+                    + " Maria Silva (07/2026).",
                     recusaAoPublicar());
         }
 
@@ -788,8 +784,7 @@ class PontoServiceTest {
             mensalPublicadaDe(OP, "OPERADOR", JULHO_INI, JULHO_FIM, DEFINITIVA);
 
             assertEquals("Publicação recusada: já existe folha mensal definitiva publicada de"
-                    + " Maria Silva (07/2026)."
-                    + " Remova a página dessa(s) pessoa(s) do lote e publique novamente.",
+                    + " Maria Silva (07/2026).",
                     recusaAoPublicar());
         }
 
@@ -828,8 +823,7 @@ class PontoServiceTest {
                     new Object[] { OP, "OPERADOR", JULHO_INI, DEFINITIVA });
 
             assertEquals("Publicação recusada: o mês de Maria Silva (07/2026) já foi fechado por"
-                    + " folha mensal definitiva publicada."
-                    + " Remova a página dessa(s) pessoa(s) do lote e publique novamente.",
+                    + " folha mensal definitiva publicada.",
                     recusaAoPublicar());
         }
 
@@ -846,8 +840,7 @@ class PontoServiceTest {
             // Nenhuma das duas naturezas representa o conjunto: dizer "prévia" seria falso para quem já
             // teve o mês fechado, e "definitiva" seria falso para quem ainda o tem aberto.
             assertEquals("Publicação recusada: já existe folha mensal publicada de"
-                    + " Ana Paula (07/2026), Maria Silva (07/2026)."
-                    + " Remova a página dessa(s) pessoa(s) do lote e publique novamente.",
+                    + " Ana Paula (07/2026), Maria Silva (07/2026).",
                     recusaAoPublicar());
         }
     }

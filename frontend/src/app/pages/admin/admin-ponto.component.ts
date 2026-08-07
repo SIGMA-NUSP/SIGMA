@@ -246,8 +246,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
                       } @else {
                         @if (l.status === 'REVISAO') {
                           <p class="text-muted-sm" style="margin:0 0 10px">
-                            Confira o vínculo de cada página. Páginas <strong>pendentes</strong> não ficarão
-                            visíveis a ninguém até serem vinculadas. Use “Ver PDF” em caso de dúvida.
+                            Verifique se há alguma pendência antes de publicar o lote.
                           </p>
                         } @else {
                           <p class="text-muted-sm" style="margin:0 0 10px">
@@ -281,7 +280,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
                                          "— pendente —" — um clique inocente DESVINCULARIA a página. -->
                                     <select class="pessoa-select" [ngModel]="valorPessoa(p)" (ngModelChange)="onAssign(l, p, $event)" [name]="'pessoa-' + p.id"
                                             [disabled]="vinculoBloqueado()"
-                                            [title]="vinculoBloqueado() ? 'Lista de pessoas indisponível — aguarde a carga ou tente novamente' : ''">
+                                            [title]="vinculoBloqueado() ? 'Não foi possível carregar a lista.' : ''">
                                       <option value="">— pendente —</option>
                                       <optgroup label="Operadores">
                                         @for (o of operadores(); track o.id) {
@@ -335,7 +334,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
                             </label>
                             @if (l.pendentes > 0) {
                               <span class="text-muted-sm" style="color:var(--color-red)">
-                                {{ l.pendentes }} página(s) pendente(s) — ficarão indisponíveis se publicar agora.
+                                {{ l.pendentes }} página(s) pendente(s)!
                               </span>
                             }
                           </div>
@@ -679,7 +678,7 @@ export class AdminPontoComponent implements OnInit {
         this.pessoas.set([]);
         this.loadingPessoas.set(false);
         this.erroPessoas.set(erroCargaMsg(err,
-          'Não foi possível carregar a lista de pessoas. O vínculo das páginas fica indisponível até recarregar.'));
+          'Não foi possível carregar a lista.'));
       },
     });
   }
@@ -727,7 +726,7 @@ export class AdminPontoComponent implements OnInit {
         this.lotes.set([]);
         this.loadingLotes.set(false);
         this.erroLotes.set(erroCargaMsg(err,
-          'Não foi possível carregar os lotes enviados. Não reenvie o PDF antes de recarregar — o lote pode já ter sido processado.'));
+          'Falha ao carregar os PDFs enviados.'));
       },
     });
   }
@@ -835,7 +834,7 @@ export class AdminPontoComponent implements OnInit {
         this.soltarValorEmVoo(p.id);                    // F48: o select REVERTE ao vínculo real do servidor
         // F57: a frase do backend vem em `error` (não em `message`), mas a GUIA da tela vem na frente:
         // em todo 500 o corpo é o genérico "Erro interno do servidor", que sozinho não diz nada ao admin.
-        this.toast.error(erroCargaMsg(err, 'Não foi possível vincular a página — a escolha foi desfeita.'));
+        this.toast.error(erroCargaMsg(err, 'Não foi possível vincular a página.'));
         this.recarregarLote(l);
       },
     });
@@ -905,7 +904,7 @@ export class AdminPontoComponent implements OnInit {
    */
   private recarregarLote(l: Lote): void {
     this.carregarDetalhe(l, err => this.toast.error(erroCargaMsg(err,
-      'Não foi possível recarregar o lote. Os vínculos exibidos podem estar desatualizados — recarregue a página.')));
+      'Não foi possível recarregar.')));
   }
 
   // ── Preview ──
@@ -921,9 +920,9 @@ export class AdminPontoComponent implements OnInit {
     if (this.publicando(l.id)) return;   // F49: trava por lote (o [disabled] do botão é a camada de UI)
 
     const aviso = l.pendentes > 0
-      ? `\n\nAtenção: ${l.pendentes} página(s) pendente(s) não ficarão visíveis a ninguém.`
+      ? `\n\nAtenção: Há ${l.pendentes} página(s) pendente(s).`
       : '';
-    if (!confirm(`Publicar lote? As folhas vinculadas ficarão disponíveis aos destinatários.${aviso}`)) return;
+    if (!confirm(`Publicar lote e vincular as folhas aos destinatários?${aviso}`)) return;
 
     this.marcarPublicando(l.id, true);
     this.definirErroPublicacao(l.id, '');   // nova tentativa: a recusa anterior sai da tela
@@ -1002,7 +1001,7 @@ export class AdminPontoComponent implements OnInit {
       },
       error: err => {
         this.marcarExclusao(chave, false);
-        this.toast.error(erroCargaMsg(err, 'Não foi possível verificar o que a exclusão apagaria — nada foi excluído.'));
+        this.toast.error(erroCargaMsg(err, 'Não foi possível concluir a operação.'));
       },
     });
   }

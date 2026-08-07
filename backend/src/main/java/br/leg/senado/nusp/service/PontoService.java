@@ -336,9 +336,8 @@ public class PontoService {
         if (mensal) {
             List<String> repetidas = pessoasRepetidas(vinculadas);
             if (!repetidas.isEmpty()) {
-                throw recusarPublicacao("o lote traz mais de uma folha mensal de "
-                        + nomes(repetidas, nomePorId) + " na competência " + competencia(lote)
-                        + ". Remova a página duplicada e publique novamente.");
+                throw recusarPublicacao("Há mais de uma folha mensal de "
+                        + nomes(repetidas, nomePorId) + " na competência " + competencia(lote) + ".");
             }
         }
 
@@ -349,10 +348,8 @@ public class PontoService {
         String quem = nomesComCompetencia(conflitos, nomePorId);
         String natureza = naturezaEmConflito(conflitos);
         throw recusarPublicacao(mensal
-                ? "já existe folha mensal" + natureza + " publicada de " + quem
-                        + ". Remova a página dessa(s) pessoa(s) do lote e publique novamente."
-                : "o mês de " + quem + " já foi fechado por folha mensal" + natureza + " publicada."
-                        + " Remova a página dessa(s) pessoa(s) do lote e publique novamente.");
+                ? "já existe folha mensal" + natureza + " publicada de " + quem + "."
+                : "o mês de " + quem + " já foi fechado por folha mensal" + natureza + " publicada.");
     }
 
     /** Pessoa do lote que já tem MENSAL publicada, com a competência (mês) e a natureza dessa mensal. */
@@ -669,8 +666,8 @@ public class PontoService {
                 ? ReportConfig.fmtDate(lote.getDataInicio()) + " a " + ReportConfig.fmtDate(lote.getDataFim())
                 : competencia;
         LocalDate limite = retificacaoService.limiteRetificacao(lote);
-        return "Sua folha de ponto " + folhaTxt + " (" + periodoTxt
-                + ") foi publicada. "
+        return "Folha de ponto " + folhaTxt + " (" + periodoTxt
+                + ") publicada. "
                 + "Acesse \"Minhas Folhas\" para visualizá-la."
                 + (limite != null ? " Retificações até " + ReportConfig.fmtDate(limite) + "." : "");
     }

@@ -88,7 +88,7 @@ interface LinhaCiencia {
           @case ('AGENDA') {
             <div class="field">
               <label>Exibição</label>
-              <div class="field-value">Exibição única por usuário — o aviso deixa de aparecer para cada pessoa depois de exibido 1 vez.</div>
+              <div class="field-value">Exibição única por usuário.</div>
             </div>
           }
           @default {
@@ -115,8 +115,8 @@ interface LinhaCiencia {
           </div>
         }
 
-        <!-- 3) Destino -->
-        <h3>3) Destino</h3>
+        <!-- 3) Destino (excluído pelo Douglas: item desnecessário, pois há a tabela de destinatários no final da página) -->
+        <!-- <h3>3) Destino</h3>
         @switch (tipo()) {
           @case ('VERIFICACAO') {
             <div class="field">
@@ -138,7 +138,7 @@ interface LinhaCiencia {
                 @for (p of plenarios(); track $index) { <span class="chip">{{ p }}</span> }
               </div>
             </div>
-            <p class="nota">Os destinatários são os operadores vinculados a estes plenários <strong>na escala</strong> — trocas de operador mudam quem vê o aviso automaticamente.</p>
+            <p class="nota">Operadores escalados no(s) plenário(s) acima</p>
           }
           @case ('AGENDA') {
             <div class="field">
@@ -172,10 +172,10 @@ interface LinhaCiencia {
               <div class="field-value">{{ grupoDescricao() }}</div>
             </div>
           }
-        }
+        } -->
 
-        <!-- 4) Mensagens -->
-        <h3>4) Mensagens</h3>
+        <!-- 3) Mensagens -->
+        <h3>3) Mensagens</h3>
         @for (msg of mensagens(); track msg['ordem']; let i = $index) {
           <div class="field">
             <label>{{ ordinal(i + 1) }} Texto</label>

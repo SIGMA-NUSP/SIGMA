@@ -70,7 +70,7 @@ public class BancoHorasService {
 
     /** Mensagem única do gate de carga horária (Q17) — NULL ou fora de {30, 40}. */
     private static final String MSG_CARGA_INVALIDA =
-            "Sua carga horária não está cadastrada corretamente. Procure a Gestão de Pessoas.";
+            "Carga horária cadastrada incorretamente. Procure o supervisor.";
 
     private static final Map<String, String> MS_SORT = new LinkedHashMap<>() {{
         put("data_folga", "s.DATA_FOLGA");
@@ -187,9 +187,7 @@ public class BancoHorasService {
 
         long totalDebito = (long) debitoPorDia * dias.size();
         if (saldoVigente < totalDebito) {
-            throw new ServiceValidationException("Saldo insuficiente: a solicitação debita "
-                    + formatarSaldo((int) totalDebito) + " e o saldo atual é "
-                    + formatarSaldo(saldoVigente) + ".");
+            throw new ServiceValidationException("Saldo insuficiente.");
         }
 
         List<PontoSolicitacaoFolga> novas = new ArrayList<>();
@@ -436,8 +434,8 @@ public class BancoHorasService {
         if (papel == null) return;   // tipo já validado no fluxo; guarda contra o no-op silencioso
         String dia = ReportConfig.fmtDate(s.getDataFolga());
         String mensagem = aprovado
-                ? "Sua solicitação de folga para " + dia + " foi APROVADA."
-                : "Sua solicitação de folga para " + dia + " foi REJEITADA."
+                ? "Solicitação para " + dia + " APROVADA."
+                : "Solicitação para " + dia + " REJEITADA."
                         + (motivo != null && !motivo.isBlank() ? " Motivo: " + motivo.trim() + "." : "");
         SubtipoAviso subtipo = aprovado ? SubtipoAviso.SOLICITACAO_APROVADA : SubtipoAviso.SOLICITACAO_REJEITADA;
         avisoService.criarPessoalIndividual(

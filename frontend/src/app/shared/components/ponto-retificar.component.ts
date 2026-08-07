@@ -15,8 +15,7 @@ import { ToastService } from './toast.component';
  * um único dia repetido derruba o envio inteiro.
  */
 const GUIA_RETIFICACOES =
-  'Não foi possível verificar quais dias você já retificou nem o prazo desta folha. Enviar agora ' +
-  'poderia derrubar o lote inteiro — tente novamente.';
+  'Não foi possível concluir a operação.';
 
 /** Retificação já gravada de um dia, como o backend a devolve. */
 interface RetifSalva {
@@ -97,7 +96,7 @@ interface DadosFolha {
            retificar naquela competência, ainda que os 5 dias desta folha estejam correndo. -->
       @if (mesFechado()) {
         <div class="error-box">
-          Esta folha não pode mais ser retificada: a folha de ponto definitiva do mês já foi publicada.
+          Não é possível retificar esta folha.
         </div>
       } @else if (limiteFmt()) {
         @if (prazoExpirado()) {
@@ -481,7 +480,7 @@ export class PontoRetificarComponent implements OnInit, OnDestroy {
       if (h && !HORA_RE.test(h)) return `Horário inválido em ${l.dia} (use HH:MM).`;
     }
     if (horas.every(h => !h)) {
-      return `Informe ao menos o par Ent. 1 / Saí. 1 em ${l.dia}: não é possível retificar um dia sem horários.`;
+      return `Horário de entrada e saída são obrigatórios.`;
     }
     const par1Completo = !!horas[0] && !!horas[1];   // ≥1 par completo — e o par 1 vem primeiro
     const par2Completo = !!horas[2] === !!horas[3];
@@ -569,7 +568,7 @@ export class PontoRetificarComponent implements OnInit, OnDestroy {
       error: err => {
         l.salvandoEdicao = false;
         this.linhas.set([...this.linhas()]);
-        this.erro.set(erroCargaMsg(err, 'Não foi possível salvar a edição — a retificação não foi alterada.'));
+        this.erro.set(erroCargaMsg(err, 'Não foi possível salvar a edição.'));
       },
     });
   }
@@ -587,7 +586,7 @@ export class PontoRetificarComponent implements OnInit, OnDestroy {
     // F63: o botão já some sem a listagem carregada — este guard é a segunda camada (lição do C9:
     // esconder/desabilitar no template não é garantia de que o handler não roda).
     if (!this.retificacoesCarregadas()) {
-      this.erro.set('Não foi possível verificar os dias já retificados desta folha — recarregue antes de enviar.');
+      this.erro.set('Não foi possível concluir a operação.');
       return;
     }
 
@@ -626,7 +625,7 @@ export class PontoRetificarComponent implements OnInit, OnDestroy {
         this.salvando.set(false);
         // A recusa é uma TAREFA (qual dia consertar): a guia da tela — que o lote é tudo-ou-nada —
         // vem na frente, e o motivo do backend, que nomeia o dia, vem anexado. Fica na tela.
-        this.erro.set(erroCargaMsg(err, 'Não foi possível salvar a retificação — nenhum dia foi gravado.'));
+        this.erro.set(erroCargaMsg(err, 'Não foi possível concluir a operação.'));
         this.carregarRetificacoes(id);   // re-sincroniza os dias que porventura passaram
       },
     });

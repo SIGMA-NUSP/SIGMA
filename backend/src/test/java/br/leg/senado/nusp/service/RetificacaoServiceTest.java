@@ -896,8 +896,7 @@ class RetificacaoServiceTest {
                         dia("2026-07-16", "09:00", "15:00", null, null))));
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertEquals("O dia 15/07/2026 não pode ser retificado: a folha de ponto definitiva "
-                + "de Julho/2026 já foi publicada.", ex.getMessage());
+        assertEquals("Não é possível retificar. Folha definitiva já publicada.", ex.getMessage());
         verify(retificacaoRepo, never()).saveAndFlush(any());
     }
 
@@ -934,8 +933,7 @@ class RetificacaoServiceTest {
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                 () -> service.criarRetificacoes(PAG, DONO, body("2026-07-01", "08:00", "12:00", null, null)));
 
-        assertTrue(ex.getMessage().contains("01/07/2026") && ex.getMessage().contains("Julho/2026"),
-                ex.getMessage());
+        assertEquals("Não é possível retificar. Folha definitiva já publicada.", ex.getMessage());
         verify(retificacaoRepo, times(1)).saveAndFlush(any());
         verify(retificacaoRepo).saveAndFlush(argThat(r -> LocalDate.of(2026, 6, 30).equals(r.getData())));
     }
@@ -1198,8 +1196,7 @@ class RetificacaoServiceTest {
                     () -> service.editarRetificacao(PAG, RET, DONO, corpo("08:00", "12:00", null, null)));
 
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-            assertEquals("O dia 15/06/2026 não pode ser retificado: a folha de ponto definitiva "
-                    + "de Junho/2026 já foi publicada.", ex.getMessage());
+            assertEquals("Não é possível retificar. Folha definitiva já publicada.", ex.getMessage());
             assertEquals("07:00", r.getEnt1(), "a recusa pelo mês encerrado não pode ter tocado nos valores");
             assertEquals("Anotação original.", r.getObservacoes());
             verify(retificacaoRepo, never()).save(any());

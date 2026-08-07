@@ -176,8 +176,7 @@ public class MarcacaoService {
     private void exigirDiaSemMarcacaoGlobal(LocalDate data) {
         if (diaRepo.findByData(data).isPresent()) {
             throw new ServiceValidationException("O dia " + ReportConfig.fmtDate(data)
-                    + " tem uma ocorrência geral, que vale para todos os funcionários."
-                    + " Recarregue a tela e tente novamente.");
+                    + " possui ocorrência geral. Recarregue a página e tente novamente.");
         }
     }
 
@@ -191,7 +190,7 @@ public class MarcacaoService {
             escrita.run();
         } catch (DataIntegrityViolationException e) {
             throw new ServiceValidationException("O tipo \"" + tipo.getNome()
-                    + "\" não está mais disponível. Recarregue as ocorrências e tente novamente.");
+                    + "\" não está mais disponível.");
         }
     }
 

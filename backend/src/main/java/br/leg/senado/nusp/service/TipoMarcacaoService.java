@@ -181,7 +181,7 @@ public class TipoMarcacaoService {
         } catch (DataIntegrityViolationException e) {
             // Corrida entre dois cadastros do mesmo nome/badge: a constraint é a autoridade final.
             throw new ServiceValidationException(
-                    "Nome ou badge já cadastrado por outra operação. Confira o catálogo e tente novamente.");
+                    "Não foi possível concluir a operação.");
         }
 
         List<Map<String, Object>> criados = new ArrayList<>();
@@ -334,12 +334,10 @@ public class TipoMarcacaoService {
         // Há caracteres que crescem ao virar maiúscula ("ß" → "SS"), e é a forma normalizada que o
         // banco guarda: sem esta guarda, um nome dentro do teto estouraria a coluna já no INSERT.
         if (nomeNorm.length() > MAX_NOME || badgeNorm.length() > MAX_BADGE) {
-            throw new ServiceValidationException("Nome ou badge com caracteres que não cabem no limite "
-                    + "(" + MAX_NOME + " e " + MAX_BADGE + " caracteres). Use uma grafia mais curta.");
+            throw new ServiceValidationException("Limite de caracteres excedido.");
         }
         if (NOME_RESERVADO.equals(nomeNorm)) {
-            throw new ServiceValidationException("O nome \"" + nome + "\" é usado pelo sistema para marcar "
-                    + "as folgas do banco de horas e não pode nomear um tipo de ocorrência.");
+            throw new ServiceValidationException("Nome \"" + nome + "\" reservado pelo sistema.");
         }
         return new Novo(nome, nomeNorm, badge, badgeNorm, escopoValido(texto(item.get("escopo"))));
     }

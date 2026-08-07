@@ -44,18 +44,16 @@ const META = { page: 1, limit: 10, total: 1, pages: 1 };
 
 // ── Erros, no shape REAL do backend: `{ok:false, error:"…"}` (GlobalExceptionHandler) ──
 /** Q17 — único erro FATAL do GET /api/ponto/banco: gate de carga horária, 409. */
-const MSG_Q17 = 'Sua carga horária não está cadastrada corretamente. Procure a Gestão de Pessoas.';
+const MSG_Q17 = 'Carga horária cadastrada incorretamente. Procure o supervisor.';
 const Q17_409 = { status: 409, error: { ok: false, error: MSG_Q17 } };
 /** 500 do backend: a mensagem do corpo é sempre genérica — por isso a guia da TELA vem na frente. */
 const ERRO_500 = { status: 500, error: { ok: false, error: 'Erro interno do servidor' } };
 
 /** Guias da tela — o texto que o usuário efetivamente lê nas caixas de erro. */
 const GUIA_CARGA =
-  'Não foi possível carregar o seu banco de horas deste mês. Sem ele não dá para marcar dias — ' +
-  'tente novamente ou escolha outro mês.';
+  'Não foi possível carregar o banco de horas.';
 const GUIA_SOLICITACOES =
-  'Não foi possível carregar as suas solicitações de folga. Pode haver pedidos pendentes ou já ' +
-  'aprovados que não aparecem aqui.';
+  'Não foi possível carregar as solicitações.';
 
 describe('BancoHorasPessoalComponent', () => {
   let apiGet: ReturnType<typeof vi.fn>;

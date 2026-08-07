@@ -283,7 +283,7 @@ describe('AdminPontoComponent', () => {
       apiGet.mockImplementation(() => throwError(() => ({ status: 503 })));
       const comp = criarCarregado();
       expect(comp.erroPessoas()).toBe(
-        'Não foi possível carregar a lista de pessoas. O vínculo das páginas fica indisponível até recarregar.');
+        'Não foi possível carregar a lista.');
     });
 
     it('o retry das pessoas re-dispara a carga, limpa o erro e destrava o vínculo', () => {
@@ -318,8 +318,7 @@ describe('AdminPontoComponent', () => {
         url === '/api/admin/ponto/lotes' ? throwError(() => ({ status: 500 })) : of({ ok: true, data: [] }));
       const comp = criarCarregado();
       expect(comp.erroLotes()).toBe(
-        'Não foi possível carregar os lotes enviados. '
-        + 'Não reenvie o PDF antes de recarregar — o lote pode já ter sido processado.');
+        'Falha ao carregar os PDFs enviados.');
     });
 
     it('o retry dos lotes limpa o erro e repovoa a lista', () => {
@@ -864,7 +863,7 @@ describe('AdminPontoComponent', () => {
       comp.onAssign(l, l.paginas[1], 'OPERADOR:op-2');
 
       expect(toastError).toHaveBeenCalledWith(
-        'Não foi possível vincular a página — a escolha foi desfeita. (Página já vinculada.)');
+        'Não foi possível vincular a página. (Página já vinculada.)');
       expect(apiGet).toHaveBeenCalledWith('/api/admin/ponto/lote/lote-1');   // recarregarLote
       expect(l.paginas).toHaveLength(3);
     });
@@ -879,7 +878,7 @@ describe('AdminPontoComponent', () => {
       comp.onAssign(l, l.paginas[1], 'OPERADOR:op-2');
 
       expect(toastError).toHaveBeenCalledWith(
-        'Não foi possível vincular a página — a escolha foi desfeita. (Erro interno do servidor)');
+        'Não foi possível vincular a página. (Erro interno do servidor)');
     });
 
     it('faceta recarregarLote — a falha do GET de recuperação é SINALIZADA, sem unhandled', () => {
@@ -907,8 +906,7 @@ describe('AdminPontoComponent', () => {
       comp.onAssign(l, l.paginas[1], 'OPERADOR:op-2');
 
       expect(toastError).toHaveBeenCalledWith(
-        'Não foi possível recarregar o lote. '
-        + 'Os vínculos exibidos podem estar desatualizados — recarregue a página.');   // sem corpo → só a guia
+        'Não foi possível recarregar.');   // sem corpo → só a guia
     });
 
     it('a resposta atrasada de uma página NÃO desfaz o vínculo já salvo de outra', () => {
@@ -1228,7 +1226,7 @@ describe('AdminPontoComponent', () => {
       comp.publicar(l);
 
       expect(confirmSpy).toHaveBeenCalledWith(
-        'Publicar lote? As folhas vinculadas ficarão disponíveis aos destinatários.');
+        'Publicar lote e vincular as folhas aos destinatários?');
       expect(apiPost).toHaveBeenCalledWith('/api/admin/ponto/lote/lote-1/publicar', { emitir_aviso: true });
       expect(l.status).toBe('PUBLICADO');       // o payload da resposta é mesclado no lote
       expect(comp.publicando('lote-1')).toBe(false);
@@ -1241,8 +1239,8 @@ describe('AdminPontoComponent', () => {
       comp.publicar(l);
 
       expect(confirmSpy).toHaveBeenCalledWith(
-        'Publicar lote? As folhas vinculadas ficarão disponíveis aos destinatários.'
-        + '\n\nAtenção: 2 página(s) pendente(s) não ficarão visíveis a ninguém.');
+        'Publicar lote e vincular as folhas aos destinatários?'
+        + '\n\nAtenção: Há 2 página(s) pendente(s).');
     });
 
     it('confirmação negada: nenhum POST', () => {
@@ -1901,7 +1899,7 @@ describe('AdminPontoComponent', () => {
 
       expect(comp.previewExclusao()).toBeNull();
       expect(toastError).toHaveBeenCalledWith(
-        'Não foi possível verificar o que a exclusão apagaria — nada foi excluído. (Erro interno do servidor)');
+        'Não foi possível concluir a operação. (Erro interno do servidor)');
       expect(apiDelete).not.toHaveBeenCalled();
     });
 

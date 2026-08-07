@@ -181,7 +181,7 @@ export class AvisoPessoalFormComponent implements OnInit {
       error: err => {
         this.loadingPessoas.set(false);
         this.erroPessoas.set(erroCargaMsg(err,
-          'Não foi possível carregar a lista de pessoas. O cadastro fica bloqueado até recarregar.'));
+          'Não foi possível concluir a operação.'));
       },
     });
   }

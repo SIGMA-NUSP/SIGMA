@@ -399,8 +399,7 @@ class PontoSubstituicaoDefinitivaIT {
         void nenhumaFolhaRetificaODiaDoMesFechado() {
             publicarADefinitivaDeJulho();
 
-            String recusaEsperada = "O dia 02/07/2026 não pode ser retificado: "
-                    + "a folha de ponto definitiva de Julho/2026 já foi publicada.";
+            String recusaEsperada = "Não é possível retificar. Folha definitiva já publicada.";
 
             // A semanal continua dentro do prazo dela e o dia continua dentro do período dela: o que
             // fecha a porta é a competência, não a folha por onde o usuário entra.
@@ -433,8 +432,7 @@ class PontoSubstituicaoDefinitivaIT {
                     folhaSemanal.getId(), retificacaoDoDiaAberto, ana.getId(),
                     Map.of("ent1", "09:00", "sai1", "13:00")));
             assertEquals(HttpStatus.BAD_REQUEST, edicao.getStatus());
-            assertEquals("O dia 01/07/2026 não pode ser retificado: "
-                    + "a folha de ponto definitiva de Julho/2026 já foi publicada.", edicao.getMessage());
+            assertEquals("Não é possível retificar. Folha definitiva já publicada.", edicao.getMessage());
 
             Map<String, Object> mantida = itens(retificacoesNaFolha(folhaSemanal)).get(0);
             assertEquals("08:00", mantida.get("ent1"), "a recusa não pode ter gravado a edição pela metade");

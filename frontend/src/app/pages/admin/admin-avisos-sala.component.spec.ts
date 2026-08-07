@@ -366,8 +366,7 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
   // SUCEDEU (em voo ou falhou) mostra erro com retry e BLOQUEIA o envio; preencher pode.
   // ═══════════════════════════════════════════════════════════════════
   describe('lock "1 aviso ativo por sala" — fail-closed', () => {
-    const MSG_ERRO_LOCK_SALAS = 'Não foi possível verificar quais locais já têm aviso ativo. '
-      + 'O cadastro fica bloqueado até recarregar — um local ocupado apareceria como livre. (Erro interno do servidor)';
+    const MSG_ERRO_LOCK_SALAS = 'Não foi possível concluir a operação. (Erro interno do servidor)';
 
     const botaoCadastrar = (f: ComponentFixture<AdminAvisosSalaComponent>) =>
       f.debugElement.query(By.css('.btn-primary-custom')).nativeElement as HTMLButtonElement;
@@ -458,9 +457,15 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
     const cardBtns = (f: ComponentFixture<AdminAvisosSalaComponent>) =>
       f.debugElement.queryAll(By.css('.cards-aviso .card-pick')).map(d => d.nativeElement as HTMLButtonElement);
 
-    it('renderiza os 4 cards; Verificação começa ativo com o form inline visível e nenhum sub-painel', async () => {
+    it('renderiza os 4 cards com título e subtítulo; Verificação começa ativo com o form inline visível e nenhum sub-painel', async () => {
       const fixture = await renderizar();
-      expect(cardBtns(fixture).map(b => b.textContent?.trim())).toEqual(['Verificação', 'Escala', 'Agenda', 'Pessoal']);
+      expect(cardBtns(fixture).map(b => b.querySelector('strong')?.textContent)).toEqual(['Verificação', 'Escala', 'Agenda', 'Pessoal']);
+      expect(cardBtns(fixture).map(b => b.querySelector('.text-muted-sm')?.textContent)).toEqual([
+        'Cadastro de aviso no formulário de verificação',
+        'Cadastro de aviso por escala semanal',
+        'Cadastro de comunicado - Agenda Legislativa',
+        'Cadastro de mensagem individual ou por grupos',
+      ]);
       expect(fixture.componentInstance.activeCard()).toBe('verificacao');
       expect(cardBtns(fixture)[0].classList.contains('active')).toBe(true);
       expect(fixture.debugElement.query(By.css('app-multi-select-dropdown'))).not.toBeNull();  // salas (Verificação)

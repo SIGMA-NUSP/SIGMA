@@ -102,7 +102,7 @@ export class PontoBancoComponent implements OnInit {
         this.folhas.set([]);
         this.loading.set(false);
         this.erro.set(erroCargaMsg(err,
-          'Não foi possível carregar as suas folhas de ponto. Você pode ter folhas publicadas dentro do prazo de retificação.'));
+          'Não foi possível carregar as folhas de ponto.'));
       },
     });
   }

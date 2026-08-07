@@ -119,15 +119,13 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
   });
 
   // ═══ 1) Verificação ═══
-  it('Verificação: rótulo, status com bolinha, chips de locais, coluna Local e ciências por sala (sem resumo)', async () => {
+  it('Verificação: rótulo, status com bolinha, coluna Local e ciências por sala (sem resumo)', async () => {
     resposta = ok(verificacao());
     const f = await render();
 
     expect(apiGet).toHaveBeenCalledWith('/api/admin/avisos/av-1/detalhe');
     expect(texto(f)).toContain('Verificação');
     expect(f.debugElement.query(By.css('.status-dot')).nativeElement.getAttribute('data-status')).toBe('Ativo');
-    expect(f.debugElement.queryAll(By.css('.chip')).map(c => (c.nativeElement as HTMLElement).textContent?.trim()))
-      .toEqual(['Plenário 2', 'Plenário 3']);
     expect(texto(f)).toContain('1º Texto');
     expect(texto(f)).not.toContain('1º Aviso');
 
@@ -146,7 +144,6 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     const f = await render();
 
     expect(texto(f)).toContain('Período da escala — 14/07/2026 a 18/07/2026');
-    expect(texto(f)).toContain('trocas de operador mudam quem vê');   // nota do Destino
     expect(texto(f)).toContain('Manter após ciência');
     expect(cabecalhos(f)).toEqual(['Destinatário', 'Plenário', 'Ciência (data)', 'Ciência (hora)']);
     expect(resumo(f).nativeElement.textContent).toContain('1 de 2 deram ciência');
@@ -165,7 +162,6 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     const f = await render();
 
     expect(texto(f)).toContain('Exibição única por usuário');
-    expect(texto(f)).toContain('Todos os operadores e técnicos');
     expect(texto(f)).not.toContain('Manter após ciência');
     expect(f.debugElement.query(By.css('.status-dot'))).toBeNull();   // "—" não tem bolinha
     expect(cabecalhos(f)).toEqual(['Destinatário', 'Função', 'Exibido em (data)', 'Exibido em (hora)']);
@@ -176,13 +172,10 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
   });
 
   // ═══ 4) Pessoal ═══
-  it('Pessoal: destino por papel, coluna "Função", resumo "1 de 2", pendente primeiro e ciência de não-destinatário marcada', async () => {
+  it('Pessoal: coluna "Função", resumo "1 de 2", pendente primeiro e ciência de não-destinatário marcada', async () => {
     resposta = ok(pessoal());
     const f = await render();
 
-    expect(texto(f)).toContain('Operadores');
-    expect(texto(f)).toContain('Técnicos');
-    expect(texto(f)).toContain('Administradores');
     expect(cabecalhos(f)).toEqual(['Destinatário', 'Função', 'Ciência (data)', 'Ciência (hora)']);
     expect(resumo(f).nativeElement.textContent).toContain('1 de 2 deram ciência');
 
@@ -194,7 +187,7 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
   });
 
   // ═══ 5) Grupo (GERAL) sem ciência — tabela de exibição ═══
-  it('Grupo (GERAL) sem ciência: mostra o coletivo, lista quem já viu em "Exibido em" e não tem "Manter após ciência"', async () => {
+  it('Grupo (GERAL) sem ciência: lista quem já viu em "Exibido em" e não tem "Manter após ciência"', async () => {
     resposta = ok(grupo({
       exibido_para: [
         { nome: 'Ana', papel: 'Operador', sala_id: null, sala_nome: null, ciente_em: '2026-07-10T10:00:00' },
@@ -203,7 +196,6 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     }));
     const f = await render();
 
-    expect(texto(f)).toContain('Todos os operadores');
     expect(texto(f)).toContain('Exige ciência');
     expect(texto(f)).not.toContain('Manter após ciência');
     expect(cabecalhos(f)).toEqual(['Destinatário', 'Função', 'Exibido em (data)', 'Exibido em (hora)']);
