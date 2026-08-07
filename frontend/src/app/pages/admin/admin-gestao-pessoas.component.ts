@@ -59,7 +59,7 @@ const CONTEXTO_DASHBOARD = 'GESTAO_PESSOAS';
   styles: [`
     .grid-cards { margin:16px 0 28px; }
     .dash-section { background:var(--card); border:1px solid var(--border); border-radius:8px; overflow:hidden; min-height:400px; display:flex; }
-    iframe { width:100%; height:2400px; border:0; }
+    iframe { width:100%; height:3000px; border:0; }
     .info-embed { flex:1; display:flex; align-items:center; justify-content:center; font-size:.9rem; color:var(--muted); padding:24px; text-align:center; min-height:400px; }
   `],
 })
