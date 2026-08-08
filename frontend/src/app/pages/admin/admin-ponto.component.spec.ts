@@ -501,22 +501,22 @@ describe('AdminPontoComponent', () => {
     it('mensal: o multipart leva a natureza escolhida da folha', () => {
       const comp = criarCarregado();
       preencherUpload(comp);
-      comp.categoria = 'DEFINITIVA';
+      comp.categoria = 'PREVIA';
 
       comp.onUpload();
 
       const fd = apiPostForm.mock.calls[0][1] as FormData;
       expect(fd.get('tipo')).toBe('MENSAL');
-      expect(fd.get('categoria')).toBe('DEFINITIVA');
+      expect(fd.get('categoria')).toBe('PREVIA');
     });
 
-    it('mensal: sem mexer no formulário, a natureza enviada é a prévia', () => {
+    it('mensal: sem mexer no formulário, a natureza enviada é a definitiva', () => {
       const comp = criarCarregado();
       preencherUpload(comp);
 
       comp.onUpload();
 
-      expect((apiPostForm.mock.calls[0][1] as FormData).get('categoria')).toBe('PREVIA');
+      expect((apiPostForm.mock.calls[0][1] as FormData).get('categoria')).toBe('DEFINITIVA');
     });
 
     it('semanal: o multipart NÃO leva o campo da natureza', () => {
@@ -524,7 +524,7 @@ describe('AdminPontoComponent', () => {
       // formulário) faz o backend recusar o upload inteiro. O gate é o TIPO, não o valor do campo.
       const comp = criarCarregado();
       preencherUploadSemanal(comp);
-      expect(comp.categoria).toBe('PREVIA');   // o campo continua preenchido por baixo
+      expect(comp.categoria).toBe('DEFINITIVA');   // o campo continua preenchido por baixo
 
       comp.onUpload();
 
@@ -687,15 +687,15 @@ describe('AdminPontoComponent', () => {
       expect(comp.anoUpload).toBe(2026);
     });
 
-    it('a natureza da folha também volta ao DEFAULT (prévia) quando o tipo muda', () => {
-      // A definitiva escolhida num envio não pode ficar armada para o próximo: ela FECHA o mês.
+    it('a natureza da folha também volta ao DEFAULT (definitiva) quando o tipo muda', () => {
+      // Trocar o tipo devolve o formulário ao estado inicial — a natureza volta ao default junto.
       const comp = criarCarregado();
-      comp.categoria = 'DEFINITIVA';
+      comp.categoria = 'PREVIA';
 
       comp.tipo = 'SEMANAL';
       comp.onTipoChange();
 
-      expect(comp.categoria).toBe('PREVIA');
+      expect(comp.categoria).toBe('DEFINITIVA');
     });
   });
 
@@ -1225,11 +1225,34 @@ describe('AdminPontoComponent', () => {
 
       comp.publicar(l);
 
-      expect(confirmSpy).toHaveBeenCalledWith(
-        'Publicar lote e vincular as folhas aos destinatários?');
+      // O confirm da mensal nomeia a natureza e a competência: é ele que segura o clique desatento
+      expect(confirmSpy).toHaveBeenCalledWith('Publicar folha mensal PRÉVIA de Junho/2026?');
       expect(apiPost).toHaveBeenCalledWith('/api/admin/ponto/lote/lote-1/publicar', { emitir_aviso: true });
       expect(l.status).toBe('PUBLICADO');       // o payload da resposta é mesclado no lote
       expect(comp.publicando('lote-1')).toBe(false);
+    });
+
+    it('lote mensal definitivo: o confirm declara a natureza que fecha o mês', () => {
+      const comp = criarCarregado();
+      const l: any = comp.lotes()[0];
+      l.categoria = 'DEFINITIVA';
+      l.pendentes = 0;
+
+      comp.publicar(l);
+
+      expect(confirmSpy).toHaveBeenCalledWith('Publicar folha mensal DEFINITIVA de Junho/2026?');
+    });
+
+    it('lote semanal: o confirm segue o genérico de vínculo (a semanal não tem natureza)', () => {
+      const comp = criarCarregado();
+      const l: any = comp.lotes()[0];
+      l.tipo = 'SEMANAL';
+      l.pendentes = 0;
+
+      comp.publicar(l);
+
+      expect(confirmSpy).toHaveBeenCalledWith(
+        'Publicar lote e vincular as folhas aos destinatários?');
     });
 
     it('o confirm avisa quantas páginas pendentes ficarão invisíveis', () => {
@@ -1239,7 +1262,7 @@ describe('AdminPontoComponent', () => {
       comp.publicar(l);
 
       expect(confirmSpy).toHaveBeenCalledWith(
-        'Publicar lote e vincular as folhas aos destinatários?'
+        'Publicar folha mensal PRÉVIA de Junho/2026?'
         + '\n\nAtenção: Há 2 página(s) pendente(s).');
     });
 
@@ -1631,13 +1654,13 @@ describe('AdminPontoComponent', () => {
       fixture.debugElement.queryAll(By.css('input[type="radio"][name="categoria"]'))
         .map(de => de.nativeElement as HTMLInputElement);
 
-    it('envio MENSAL: as duas naturezas são oferecidas, com a prévia já marcada', async () => {
+    it('envio MENSAL: as duas naturezas são oferecidas, com a definitiva já marcada', async () => {
       const fixture = await renderizarFormulario();
       const radios = radiosNatureza(fixture);
 
-      expect(radios.map(r => r.value)).toEqual(['PREVIA', 'DEFINITIVA']);
+      expect(radios.map(r => r.value)).toEqual(['DEFINITIVA', 'PREVIA']);
       expect(radios[0].checked).toBe(true);    // o default do formulário chega ao DOM
-      expect(radios[1].checked).toBe(false);   // a definitiva nunca vem pré-escolhida
+      expect(radios[1].checked).toBe(false);   // a prévia é a escolha ativa, nunca a pré-marcada
     });
 
     it('envio SEMANAL: a escolha some da tela (a semanal não é prévia nem definitiva)', async () => {
@@ -1658,14 +1681,14 @@ describe('AdminPontoComponent', () => {
       expect(radiosNatureza(fixture)).toHaveLength(0);
     });
 
-    it('marcar "Definitiva" no DOM chega ao campo que o envio usa', async () => {
+    it('marcar "Prévia" no DOM chega ao campo que o envio usa', async () => {
       const fixture = await renderizarFormulario();
       const comp = fixture.componentInstance;
 
       radiosNatureza(fixture)[1].click();      // clique REAL no radio
       await estabilizar(fixture);
 
-      expect(comp.categoria).toBe('DEFINITIVA');
+      expect(comp.categoria).toBe('PREVIA');
     });
   });
 

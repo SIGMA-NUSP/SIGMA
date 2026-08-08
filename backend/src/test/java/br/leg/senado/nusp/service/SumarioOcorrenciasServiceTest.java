@@ -299,12 +299,13 @@ class SumarioOcorrenciasServiceTest {
     class Colunas {
 
         @Test
-        @DisplayName("feriado e ponto facultativo ficam de fora — são de calendário, todo mundo os tem")
-        void excluiOcorrenciasDeCalendario() {
+        @DisplayName("feriado, ponto facultativo e dispensa de ponto ficam de fora — são coletivos, todo mundo os tem")
+        void excluiOcorrenciasColetivas() {
             PontoLote previa = mensal("l-previa", PontoLote.CATEGORIA_PREVIA, 2026, 7, 1);
             candidatas(folhaDe("p-previa", previa, ANA));
             dias(dia("p-previa", "2026-07-09", "Feriado"),
                  dia("p-previa", "2026-07-10", "P.facul"),
+                 dia("p-previa", "2026-07-11", "DISPOSI"),
                  dia("p-previa", "2026-07-13", "FERNC"));
 
             Map<String, Object> resposta = service.sumario(JULHO_DE, JULHO_ATE);
@@ -312,6 +313,7 @@ class SumarioOcorrenciasServiceTest {
             assertEquals(List.of("FERNC"), codigos(resposta));
             assertNull(celula(resposta, "Ana Lima", "Feriado"));
             assertNull(celula(resposta, "Ana Lima", "P.facul"));
+            assertNull(celula(resposta, "Ana Lima", "DISPOSI"));
         }
 
         @Test

@@ -4,6 +4,7 @@ import { ApiService } from '../../core/services/api.service';
 import { AuthService } from '../../core/services/auth.service';
 import { homeRouteForRole } from '../../core/helpers/auth.helpers';
 import { erroCargaMsg } from '../../core/helpers/http.helpers';
+import { FeatureToggleDirective } from '../directives/feature-toggle.directive';
 import { AjudaChatComponent } from './ajuda-chat.component';
 import { BancoHorasPessoalComponent } from './banco-horas-pessoal.component';
 import { ErroCargaComponent } from './erro-carga.component';
@@ -21,7 +22,7 @@ import { RegistroManualPontoComponent } from './registro-manual-ponto.component'
   selector: 'app-ponto-banco',
   standalone: true,
   imports: [AjudaChatComponent, RouterLink, BancoHorasPessoalComponent, ErroCargaComponent,
-    FolhasPontoListaComponent, RegistroManualPontoComponent],
+    FeatureToggleDirective, FolhasPontoListaComponent, RegistroManualPontoComponent],
   template: `
     <h1>Ponto e Banco de Horas</h1>
     <a [routerLink]="backLink()" class="back-link">&larr; Voltar</a>
@@ -53,9 +54,12 @@ import { RegistroManualPontoComponent } from './registro-manual-ponto.component'
         <app-banco-horas-pessoal />
       </div>
 
-      <!-- Registro manual de ponto -->
-      <button class="card-custom card-pick" [class.active]="activeCard() === 'manual'" (click)="toggleCard('manual')">
+      <!-- Registro manual de ponto — card visível porém inerte enquanto a flag estiver desligada -->
+      <button class="card-custom card-pick" [featureToggle]="'registroManualPonto'" #fManual="featureToggle"
+              [class.active]="activeCard() === 'manual'" [disabled]="!fManual.enabled()"
+              (click)="toggleCard('manual')">
         <strong>Registro manual de ponto</strong>
+        @if (!fManual.enabled()) { <span class="text-muted-sm">Indisponível</span> }
       </button>
       <div class="painel" [hidden]="activeCard() !== 'manual'">
         <app-registro-manual-ponto />

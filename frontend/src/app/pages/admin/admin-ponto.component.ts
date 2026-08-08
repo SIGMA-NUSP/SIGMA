@@ -159,10 +159,10 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
           <label>Folha mensal *</label>
           <div class="radio-linha">
             <label class="radio-opt">
-              <input type="radio" [(ngModel)]="categoria" name="categoria" value="PREVIA"> Prévia
+              <input type="radio" [(ngModel)]="categoria" name="categoria" value="DEFINITIVA"> Definitiva
             </label>
             <label class="radio-opt">
-              <input type="radio" [(ngModel)]="categoria" name="categoria" value="DEFINITIVA"> Definitiva
+              <input type="radio" [(ngModel)]="categoria" name="categoria" value="PREVIA"> Prévia
             </label>
           </div>
         </div>
@@ -479,7 +479,7 @@ export class AdminPontoComponent implements OnInit {
   // Upload
   tipo = 'MENSAL';
   /** Natureza da folha mensal enviada: PREVIA (abre o mês) ou DEFINITIVA (fecha o mês). */
-  categoria = 'PREVIA';
+  categoria = 'DEFINITIVA';
   dataInicio = '';
   dataFim = '';
   mesUpload = 0;
@@ -638,7 +638,7 @@ export class AdminPontoComponent implements OnInit {
   /** Alternar Mensal↔Semanal descarta o período preenchido (os campos não são equivalentes). */
   onTipoChange(): void {
     this.resetPeriodoUpload();
-    this.categoria = 'PREVIA';
+    this.categoria = 'DEFINITIVA';
     this.errorMsg.set('');
   }
 
@@ -922,7 +922,11 @@ export class AdminPontoComponent implements OnInit {
     const aviso = l.pendentes > 0
       ? `\n\nAtenção: Há ${l.pendentes} página(s) pendente(s).`
       : '';
-    if (!confirm(`Publicar lote e vincular as folhas aos destinatários?${aviso}`)) return;
+    // A mensal declara a natureza no confirm: a DEFINITIVA fecha o mês de quem está no lote.
+    const pergunta = l.tipo === 'MENSAL'
+      ? `Publicar folha mensal ${l.categoria === 'DEFINITIVA' ? 'DEFINITIVA' : 'PRÉVIA'} de ${this.periodoLote(l)}?`
+      : 'Publicar lote e vincular as folhas aos destinatários?';
+    if (!confirm(`${pergunta}${aviso}`)) return;
 
     this.marcarPublicando(l.id, true);
     this.definirErroPublicacao(l.id, '');   // nova tentativa: a recusa anterior sai da tela

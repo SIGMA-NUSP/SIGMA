@@ -5,6 +5,7 @@ import { provideRouter } from '@angular/router';
 import { Subject, of, throwError } from 'rxjs';
 import { ApiService } from '../../core/services/api.service';
 import { AuthService } from '../../core/services/auth.service';
+import { FeatureFlagService } from '../../core/services/feature-flags.service';
 import { ErroCargaComponent } from './erro-carga.component';
 import { MinhaFolha } from './folhas-ponto-lista.component';
 import { PontoBancoComponent } from './ponto-banco.component';
@@ -25,6 +26,7 @@ describe('PontoBancoComponent', () => {
   let apiGet: ReturnType<typeof vi.fn>;
   let apiGetList: ReturnType<typeof vi.fn>;
   let role: WritableSignal<string | null>;
+  let flagRegistroManual: boolean;
 
   const FOLHAS: MinhaFolha[] = [
     { id: 'f-1', tipo: 'MENSAL', data_inicio: '2026-06-01', data_fim: '2026-06-30', publicado_em: '2026-07-02' },
@@ -40,6 +42,7 @@ describe('PontoBancoComponent', () => {
     );
     apiGetList = vi.fn().mockReturnValue(of({ data: [], meta: { page: 1, limit: 10, total: 0, pages: 1 } }));
     role = signal<string | null>('operador');
+    flagRegistroManual = true;   // o card destravado é o cenário da maioria dos testes
 
     await TestBed.configureTestingModule({
       imports: [PontoBancoComponent],
@@ -47,6 +50,9 @@ describe('PontoBancoComponent', () => {
         provideRouter([]),   // o template usa RouterLink no "Voltar" (instanciado só no render)
         { provide: ApiService, useValue: { get: apiGet, getList: apiGetList, post: vi.fn(), patch: vi.fn() } },
         { provide: AuthService, useValue: { role, temFolhaPonto: signal(true) } },
+        // Só a flag do card é controlada; as demais seguem desligadas, como no runtime sem config
+        { provide: FeatureFlagService, useValue: {
+          isEnabled: (flag: string) => flag === 'registroManualPonto' && flagRegistroManual } },
       ],
     }).compileComponents(); // com timers reais — só depois falsificamos
   });
@@ -265,6 +271,23 @@ describe('PontoBancoComponent', () => {
       fixture.detectChanges();
       expect(comp.activeCard()).toBeNull();
       expect(painelManual.hidden).toBe(true);
+    });
+
+    it('flag desligada: o card fica visível porém inerte, dizendo "Indisponível"', () => {
+      flagRegistroManual = false;
+      const { fixture, comp } = criar();
+      fixture.detectChanges();
+
+      const botao = fixture.debugElement.queryAll(By.css('button.card-pick'))
+        .map(d => d.nativeElement as HTMLButtonElement)
+        .find(b => b.textContent!.includes('Registro manual de ponto'))!;
+      expect(botao.disabled).toBe(true);
+      expect(botao.classList.contains('card-disabled')).toBe(true);
+      expect(botao.textContent).toContain('Indisponível');
+
+      botao.click();
+      fixture.detectChanges();
+      expect(comp.activeCard()).toBeNull();   // o clique num botão inerte não chega ao handler
     });
 
     it('ao abrir outro card mantém somente um painel aberto e preserva a instância manual', () => {

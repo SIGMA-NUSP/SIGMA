@@ -8,11 +8,12 @@ import { SumarioOcorrenciasComponent, TRADUCAO_OCORRENCIA } from './sumario-ocor
  * SumarioOcorrenciasComponent (card admin "Sumário"): filtro de competências, consulta ao
  * endpoint e a matriz funcionários × "Ocorrências Secullum".
  *
- * A tela não decide nada sobre os dados — quais colunas existem, em que ordem e quantos dias
- * cada célula tem vem TODO do backend (é lá que mora a precedência definitiva → prévia →
- * última semanal, e a exclusão do feriado e do ponto facultativo). O que se testa aqui é o
- * filtro (o que é pedido ao servidor), a fidelidade da renderização e o tooltip que traduz o
- * código impresso na folha.
+ * A tela não decide nada sobre os DADOS — quais colunas existem e quantos dias cada célula tem
+ * vem do backend (é lá que mora a precedência definitiva → prévia → última semanal, e a exclusão
+ * das ocorrências coletivas). O recorte é local: filtro de valores na coluna Funcionário,
+ * classificação em todas e o rodapé somado das linhas exibidas. O que se testa aqui é o filtro de
+ * competências (o que é pedido ao servidor), a fidelidade da renderização, o tooltip que traduz o
+ * código impresso na folha e esse recorte local.
  *
  * Relógio congelado ANTES de `createComponent`: o período default (o ano corrente inteiro) e a
  * lista de anos são lidos no field initializer.
@@ -69,6 +70,10 @@ describe('SumarioOcorrenciasComponent', () => {
 
   const cabecalhos = (f: ComponentFixture<SumarioOcorrenciasComponent>) =>
     f.debugElement.queryAll(By.css('thead th.col-oc')).map(d => d.nativeElement as HTMLElement);
+
+  /** Título da coluna sem o ícone (▽/▼) que o gatilho do filtro acrescenta ao texto. */
+  const titulos = (f: ComponentFixture<SumarioOcorrenciasComponent>) =>
+    cabecalhos(f).map(h => h.textContent!.replace(/[▽▼]/g, '').trim());
 
   const linhas = (f: ComponentFixture<SumarioOcorrenciasComponent>) =>
     f.debugElement.queryAll(By.css('tbody tr'));
@@ -134,7 +139,7 @@ describe('SumarioOcorrenciasComponent', () => {
       const fixture = renderizar();
 
       const heads = cabecalhos(fixture);
-      expect(heads.map(h => h.textContent!.trim())).toEqual(['FERNC', 'ZZNOVO']);
+      expect(titulos(fixture)).toEqual(['FERNC', 'ZZNOVO']);
       expect(heads[0].getAttribute('title')).toBe(TRADUCAO_OCORRENCIA['FERNC']);
       // Sem tradução, o atributo nem existe — o cursor de ajuda não promete uma dica que não vem.
       expect(heads[1].getAttribute('title')).toBeNull();
@@ -151,10 +156,87 @@ describe('SumarioOcorrenciasComponent', () => {
       expect(celulasDaAna).toEqual(['3', '']);   // Ana não tem ZZNOVO
     });
 
-    it('o rodapé repete o total de cada coluna, como o backend o calculou', () => {
+    it('o rodapé soma cada coluna das linhas exibidas', () => {
       const fixture = renderizar();
 
       expect(textos(fixture, 'tfoot td.col-oc')).toEqual(['5', '2']);
+    });
+
+    it('sem paginação: todas as linhas do período ficam na tela de uma vez', () => {
+      const muitos = Array.from({ length: 12 }, (_, i) => ({
+        pessoa_id: `op-${i}`, pessoa_tipo: 'OPERADOR', nome: `Func ${String(i).padStart(2, '0')}`,
+        contagens: { FERNC: 1 },
+      }));
+      apiGet.mockReturnValue(of({ ok: true, data: {
+        de: '2026-01', ate: '2026-12', ocorrencias: [{ codigo: 'FERNC', total: 12 }], funcionarios: muitos,
+      } }));
+
+      const fixture = renderizar();
+
+      expect(linhas(fixture)).toHaveLength(12);
+    });
+  });
+
+  describe('recorte local: filtro e classificação', () => {
+    it('cada coluna tem o gatilho de filtro no cabeçalho', () => {
+      const fixture = renderizar();
+
+      // Funcionário + uma por ocorrência
+      expect(fixture.debugElement.queryAll(By.css('thead th app-column-filter'))).toHaveLength(3);
+    });
+
+    it('filtrar a coluna Funcionário recorta as linhas e o rodapé acompanha', () => {
+      const fixture = renderizar();
+
+      fixture.componentInstance.onFiltroNomes({ key: 'nome', state: { values: ['Ana Lima'] } });
+      fixture.detectChanges();
+
+      expect(textos(fixture, 'tbody td.col-nome')).toEqual(['Ana Lima']);
+      expect(textos(fixture, 'tfoot td.col-oc')).toEqual(['3', '0']);   // só os dias da Ana
+    });
+
+    it('filtro sem nenhum resultado diz isso na tabela, sem derrubá-la', () => {
+      const fixture = renderizar();
+
+      fixture.componentInstance.onFiltroNomes({ key: 'nome', state: { values: ['Ninguém'] } });
+      fixture.detectChanges();
+
+      // A tabela fica de pé: é nela que o admin reabre o painel e limpa o filtro
+      expect(fixture.debugElement.query(By.css('table.sumario'))).not.toBeNull();
+      expect(fixture.debugElement.query(By.css('tbody .empty-state')).nativeElement.textContent)
+        .toContain('Nenhum funcionário corresponde ao filtro.');
+    });
+
+    it('limpar o filtro (state null) devolve todas as linhas', () => {
+      const fixture = renderizar();
+      fixture.componentInstance.onFiltroNomes({ key: 'nome', state: { values: ['Ana Lima'] } });
+      fixture.detectChanges();
+
+      fixture.componentInstance.onFiltroNomes({ key: 'nome', state: null });
+      fixture.detectChanges();
+
+      expect(textos(fixture, 'tbody td.col-nome')).toEqual(['Ana Lima', 'Bruno Dias']);
+    });
+
+    it('classificar por uma coluna de ocorrência reordena pela contagem', () => {
+      const fixture = renderizar();
+
+      fixture.componentInstance.onSort({ sort: 'oc:FERNC', direction: 'asc' });
+      fixture.detectChanges();
+      expect(textos(fixture, 'tbody td.col-nome')).toEqual(['Bruno Dias', 'Ana Lima']);   // 2 < 3
+
+      fixture.componentInstance.onSort({ sort: 'oc:FERNC', direction: 'desc' });
+      fixture.detectChanges();
+      expect(textos(fixture, 'tbody td.col-nome')).toEqual(['Ana Lima', 'Bruno Dias']);
+    });
+
+    it('classificar por Funcionário ordena pelo nome', () => {
+      const fixture = renderizar();
+
+      fixture.componentInstance.onSort({ sort: 'nome', direction: 'desc' });
+      fixture.detectChanges();
+
+      expect(textos(fixture, 'tbody td.col-nome')).toEqual(['Bruno Dias', 'Ana Lima']);
     });
   });
 
@@ -241,7 +323,7 @@ describe('SumarioOcorrenciasComponent', () => {
       primeira.complete();
       fixture.detectChanges();
 
-      expect(cabecalhos(fixture).map(h => h.textContent!.trim())).toEqual(['Falta']);
+      expect(titulos(fixture)).toEqual(['Falta']);
     });
   });
 });

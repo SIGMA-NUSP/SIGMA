@@ -27,7 +27,7 @@ import java.util.TreeMap;
 
 /**
  * Sumário de ocorrências das folhas — "Ocorrências Secullum": a matriz funcionários × status
- * impressos no cartão-ponto (FERNC, Atecc, DISPOSI, Falta…), contando DIAS num intervalo de
+ * impressos no cartão-ponto (FERNC, Atecc, BancN, Falta…), contando DIAS num intervalo de
  * competências.
  *
  * <p>A fonte é a tabela da folha gravada na publicação, e cada mês-calendário de cada pessoa é
@@ -54,10 +54,11 @@ import java.util.TreeMap;
 public class SumarioOcorrenciasService {
 
     /**
-     * Ocorrências de calendário: valem para a equipe inteira nos mesmos dias, então enchem a tabela
-     * sem distinguir ninguém — ficam fora do sumário. A comparação é pela forma normalizada.
+     * Ocorrências coletivas — feriado, ponto facultativo e dispensa de ponto: valem para a equipe
+     * inteira nos mesmos dias, então enchem a tabela sem distinguir ninguém — ficam fora do
+     * sumário. A comparação é pela forma normalizada.
      */
-    private static final Set<String> OCORRENCIAS_DE_CALENDARIO = Set.of("feriado", "p.facul");
+    private static final Set<String> OCORRENCIAS_COLETIVAS = Set.of("feriado", "p.facul", "disposi");
 
     private static final String TIPO_MENSAL = "MENSAL";
 
@@ -216,7 +217,7 @@ public class SumarioOcorrenciasService {
             LocalDate data = (LocalDate) r[1];
             String ocorrencia = ((String) r[2]).trim();
             String chave = normalizar(ocorrencia);
-            if (chave.isEmpty() || OCORRENCIAS_DE_CALENDARIO.contains(chave)) continue;
+            if (chave.isEmpty() || OCORRENCIAS_COLETIVAS.contains(chave)) continue;
 
             Folha folha = folhaDaPagina.get(paginaId);
             if (folha == null || !daFolhaDoMes(folha, YearMonth.from(data), folhaDoMes)) continue;

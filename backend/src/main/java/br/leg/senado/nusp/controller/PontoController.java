@@ -286,7 +286,7 @@ public class PontoController {
 
     /**
      * "Ocorrências Secullum" do período: funcionários × os status impressos nas folhas (FERNC,
-     * Atecc, DISPOSI, Falta…), contando dias. O intervalo vai de uma competência a outra, ambas
+     * Atecc, BancN, Falta…), contando dias. O intervalo vai de uma competência a outra, ambas
      * {@code AAAA-MM} e inclusive; a validação (formato e ordem) é do service. Qualquer admin.
      */
     @AdminOnly

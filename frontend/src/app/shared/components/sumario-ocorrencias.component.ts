@@ -2,10 +2,9 @@ import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { Subscription } from 'rxjs';
 import { ApiService } from '../../core/services/api.service';
 import { httpErrorMsg } from '../../core/helpers/http.helpers';
-import { ClientPager } from '../../core/helpers/client-pager';
 import { MESES } from '../../core/helpers/table.helpers';
+import { ColumnFilterComponent, ColumnFilterDef, ColumnFilterState } from './column-filter.component';
 import { anosNavegaveis } from './mes-ano-selector.component';
-import { PaginationComponent } from './pagination.component';
 
 /** Uma coluna do sumário: o código impresso na folha e quantos dias ele soma no período. */
 interface Ocorrencia { codigo: string; total: number; }
@@ -33,7 +32,6 @@ interface SumarioData {
  */
 export const TRADUCAO_OCORRENCIA: Record<string, string> = {
   BancN: 'Banco de Horas',
-  DISPOSI: 'À disposição (dispensa de ponto)',
   Feriado: 'Feriado',
   FERNC: 'Férias',
   'P.facul': 'Ponto Facultativo',
@@ -53,14 +51,17 @@ const TRADUCAO_POR_CODIGO = new Map(
  * Secullum") num intervalo de competências. As colunas são as ocorrências que as folhas do
  * período realmente trouxeram, da mais frequente para a menos; a célula conta DIAS.
  *
- * <p>Feriado e ponto facultativo não entram (o backend os retira): valem para a equipe inteira nos
- * mesmos dias e só encheriam a tabela. A escolha de qual folha representa cada mês — definitiva,
- * prévia ou a última semanal — também é do backend; aqui é só apresentação.
+ * <p>Feriado, ponto facultativo e dispensa de ponto não entram (o backend os retira): valem para a
+ * equipe inteira nos mesmos dias e só encheriam a tabela. A escolha de qual folha representa cada
+ * mês — definitiva, prévia ou a última semanal — também é do backend; aqui é só apresentação.
+ *
+ * <p>O recorte da tela é local: filtro de valores na coluna Funcionário, classificação em todas, e
+ * o rodapé de totais soma as linhas exibidas — filtrar muda o total junto.
  */
 @Component({
   selector: 'app-sumario-ocorrencias',
   standalone: true,
-  imports: [PaginationComponent],
+  imports: [ColumnFilterComponent],
   template: `
     <div class="section-header"><h2>Ocorrências Secullum</h2></div>
 
@@ -101,35 +102,47 @@ const TRADUCAO_POR_CODIGO = new Map(
         <table class="data-table sumario">
           <thead>
             <tr>
-              <th class="col-nome">Funcionário</th>
+              <th class="col-nome">
+                <app-column-filter [col]="colFuncionario" [distinctValues]="nomesDistintos()"
+                                   [currentSort]="sortKey()" [currentDir]="sortDir()"
+                                   (sortChange)="onSort($event)" (filterChange)="onFiltroNomes($event)" />
+              </th>
               @for (o of ocorrencias(); track o.codigo) {
                 <!-- attr.title (e não title): a property recebendo null viraria o texto "null" -->
+                <!-- Sem distinctValues o painel só oferece Classificar: contagem não se filtra por valor -->
                 <th scope="col" class="col-oc" [class.traduzida]="!!traducao(o.codigo)"
-                    [attr.title]="traducao(o.codigo) || null">{{ o.codigo }}</th>
+                    [attr.title]="traducao(o.codigo) || null">
+                  <app-column-filter [col]="colOcorrencia(o.codigo)"
+                                     [currentSort]="sortKey()" [currentDir]="sortDir()"
+                                     (sortChange)="onSort($event)" />
+                </th>
               }
             </tr>
           </thead>
           <tbody>
             <!-- A pessoa é o par (id, tipo): os três cadastros não compartilham chave -->
-            @for (f of pager.rows(); track f.pessoa_tipo + ':' + f.pessoa_id) {
+            @for (f of linhas(); track f.pessoa_tipo + ':' + f.pessoa_id) {
               <tr>
                 <td class="col-nome">{{ f.nome }}</td>
                 @for (o of ocorrencias(); track o.codigo) {
                   <td class="col-oc">{{ contagem(f, o.codigo) }}</td>
                 }
               </tr>
+            } @empty {
+              <tr><td class="empty-state" [attr.colspan]="ocorrencias().length + 1">
+                Nenhum funcionário corresponde ao filtro.
+              </td></tr>
             }
           </tbody>
           <tfoot>
-            <!-- Total do PERÍODO e de TODOS: a tabela é paginada, e a soma da página enganaria -->
+            <!-- O rodapé soma as linhas exibidas: com filtro ativo, o total acompanha o recorte -->
             <tr>
-              <td class="col-nome">Total (todos os funcionários)</td>
-              @for (o of ocorrencias(); track o.codigo) { <td class="col-oc">{{ o.total }}</td> }
+              <td class="col-nome">Total</td>
+              @for (o of ocorrencias(); track o.codigo) { <td class="col-oc">{{ totalVisivel(o.codigo) }}</td> }
             </tr>
           </tfoot>
         </table>
       </div>
-      <app-pagination [meta]="pager.meta()" (pageChange)="pager.onPage($event)" (limitChange)="pager.onLimit($event)" />
     }
   `,
   styles: [`
@@ -168,7 +181,53 @@ export class SumarioOcorrenciasComponent implements OnInit {
 
   ocorrencias = computed(() => this.sumario()?.ocorrencias ?? []);
   funcionarios = computed(() => this.sumario()?.funcionarios ?? []);
-  protected pager = new ClientPager(this.funcionarios);
+
+  /** Coluna Funcionário: a única com filtro de valores — nas demais o painel só classifica. */
+  protected readonly colFuncionario: ColumnFilterDef =
+    { key: 'nome', label: 'Funcionário', type: 'text', sortable: true };
+  /** Defs das colunas de ocorrência, uma por código — recriar o objeto a cada render reiniciaria o painel. */
+  private readonly defsOcorrencia = new Map<string, ColumnFilterDef>();
+
+  sortKey = signal('');
+  sortDir = signal('');
+  /** Nomes marcados no filtro da coluna Funcionário; null = todos. */
+  nomesSelecionados = signal<string[] | null>(null);
+
+  /** Linhas exibidas: as do período, recortadas pelo filtro de nomes e na ordem pedida. */
+  linhas = computed(() => {
+    const selecionados = this.nomesSelecionados();
+    let out = this.funcionarios();
+    if (selecionados !== null) {
+      const nomes = new Set(selecionados);
+      out = out.filter(f => nomes.has(f.nome));
+    }
+    const key = this.sortKey();
+    const dir = this.sortDir();
+    if (!key || !dir) return out;
+    const mul = dir === 'desc' ? -1 : 1;
+    out = [...out];
+    if (key === 'nome') {
+      out.sort((a, b) => mul * a.nome.localeCompare(b.nome));
+    } else if (key.startsWith('oc:')) {
+      const codigo = key.slice(3);
+      out.sort((a, b) => mul * ((a.contagens?.[codigo] ?? 0) - (b.contagens?.[codigo] ?? 0)));
+    }
+    return out;
+  });
+
+  /** Valores do filtro da coluna Funcionário: os nomes do período, na ordem em que já vêm. */
+  nomesDistintos = computed(() => this.funcionarios().map(f => ({ value: f.nome, label: f.nome })));
+
+  /** Totais do rodapé, somados das linhas exibidas — filtrar muda o total junto. */
+  private totaisVisiveis = computed(() => {
+    const totais = new Map<string, number>();
+    for (const f of this.linhas()) {
+      for (const [codigo, n] of Object.entries(f.contagens ?? {})) {
+        totais.set(codigo, (totais.get(codigo) ?? 0) + n);
+      }
+    }
+    return totais;
+  });
 
   /** Só a resposta da consulta mais nova vale: trocar de período rápido põe duas em voo. */
   private seq = 0;
@@ -188,6 +247,30 @@ export class SumarioOcorrenciasComponent implements OnInit {
   contagem(f: FuncionarioSumario, codigo: string): string {
     const n = f.contagens?.[codigo];
     return n ? String(n) : '';
+  }
+
+  /** Def da coluna daquele código, sempre a mesma instância. */
+  colOcorrencia(codigo: string): ColumnFilterDef {
+    let def = this.defsOcorrencia.get(codigo);
+    if (!def) {
+      def = { key: 'oc:' + codigo, label: codigo, type: 'text', sortable: true };
+      this.defsOcorrencia.set(codigo, def);
+    }
+    return def;
+  }
+
+  onSort(ev: { sort: string; direction: string }): void {
+    this.sortKey.set(ev.sort);
+    this.sortDir.set(ev.direction);
+  }
+
+  onFiltroNomes(ev: { key: string; state: ColumnFilterState | null }): void {
+    this.nomesSelecionados.set(ev.state?.values ?? null);
+  }
+
+  /** Total da coluna nas linhas exibidas. */
+  totalVisivel(codigo: string): number {
+    return this.totaisVisiveis().get(codigo) ?? 0;
   }
 
   onMes(campo: 'de' | 'ate', ev: Event): void {
@@ -234,7 +317,6 @@ export class SumarioOcorrenciasComponent implements OnInit {
 
     this.carregando.set(true);
     this.erro.set('');
-    this.pager.onPage(1);   // outro período, outra lista de funcionários
     this.emVoo = this.api.get<{ ok: boolean; data: SumarioData }>(
       '/api/admin/ponto/ocorrencias/sumario', { de, ate }).subscribe({
       next: res => {

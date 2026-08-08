@@ -157,7 +157,7 @@ class SumarioOcorrenciasIT {
     }
 
     @Test
-    @DisplayName("feriado e ponto facultativo não viram coluna; folha em revisão e dia sem data não contam")
+    @DisplayName("feriado, ponto facultativo e dispensa não viram coluna; folha em revisão e dia sem data não contam")
     void oQueFicaDeForaDoSumario() {
         PontoLotePagina previa = folhaPublicada("MENSAL", PontoLote.CATEGORIA_PREVIA,
                 INICIO_JULHO, FIM_JULHO, ana.getId(), OPERADOR);
@@ -165,6 +165,7 @@ class SumarioOcorrenciasIT {
         diaDeStatus(previa, 2, LocalDate.of(2026, 7, 10), "P.facul");
         diaDeStatus(previa, 3, LocalDate.of(2026, 7, 13), "Atecc");
         diaDeStatus(previa, 4, null, "Atecc");   // dia ilegível na folha: sem data, sem mês a que pertencer
+        diaDeStatus(previa, 5, LocalDate.of(2026, 7, 11), "DISPOSI");
 
         PontoLote emRevisao = CenarioFactory.novoLotePonto(emReal(), "MENSAL", PontoLote.CATEGORIA_PREVIA,
                 INICIO_JULHO, FIM_JULHO, admin);
