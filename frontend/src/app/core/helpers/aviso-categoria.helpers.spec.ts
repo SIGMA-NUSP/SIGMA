@@ -36,13 +36,13 @@ describe('aviso-categoria.helpers', () => {
   });
 
   describe('tituloComunicacao', () => {
-    it('com contexto: "categoria — contexto"', () => {
-      expect(tituloComunicacao('AVISO', 'Verificação')).toBe('Aviso — Verificação');
-      expect(tituloComunicacao('COMUNICADO', 'Agenda Legislativa')).toBe('Comunicado — Agenda Legislativa');
-      expect(tituloComunicacao('NOTIFICACAO', 'Folha semanal disponível')).toBe('Notificação — Folha semanal disponível');
+    it('com contexto: só o contexto — a categoria já está no selo ao lado', () => {
+      expect(tituloComunicacao('AVISO', 'Verificação')).toBe('Verificação');
+      expect(tituloComunicacao('COMUNICADO', 'Agenda Legislativa')).toBe('Agenda Legislativa');
+      expect(tituloComunicacao('NOTIFICACAO', 'Folha semanal disponível')).toBe('Folha semanal disponível');
     });
 
-    it('sem contexto: só a categoria, sem travessão solto', () => {
+    it('sem contexto: o nome da categoria, sem travessão solto', () => {
       for (const vazio of [null, undefined, '']) {
         expect(tituloComunicacao('MENSAGEM', vazio)).toBe('Mensagem');
       }

@@ -1,5 +1,6 @@
 package br.leg.senado.nusp.service;
 
+import br.leg.senado.nusp.enums.PapelPessoa;
 import br.leg.senado.nusp.enums.SubtipoAviso;
 import br.leg.senado.nusp.entity.Operador;
 import br.leg.senado.nusp.entity.PontoFolhaLinha;
@@ -40,6 +41,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -730,6 +733,535 @@ class PontoServiceTest {
             assertEquals("Folha de ponto semanal (01/06/2026 a 05/06/2026) publicada. "
                     + "Acesse \"Minhas Folhas\" para visualizá-la. Retificações até 12/06/2026.",
                     textoDoAviso());
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // Dia com registro incompleto: quem é avisado à parte
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * A folha publicada é conferida dia a dia: dia de número ÍMPAR de batidas ficou com uma entrada
+     * ou uma saída faltando, e quem tem um desses recebe, além do aviso da folha, o alerta para
+     * corrigir. São dois cadastros de comunicação por publicação, com destinatários DISJUNTOS —
+     * ninguém recebe dois avisos da mesma folha.
+     */
+    @Nested
+    @DisplayName("publicar separa quem tem dia com registro incompleto")
+    class AvisoDeRegistroIncompleto {
+
+        /** O que a pessoa lê quando nem foi possível nomear o dia que ficou pela metade. */
+        private static final String TEXTO_GENERICO =
+                "Sua folha tem dias com registro de entrada ou saída incompleto.";
+
+        /** Uma pessoa por folha do lote — o nome não importa aqui, só a identidade. */
+        private static final String OP3 = "op-3";
+        private static final String OP4 = "op-4";
+        private static final String OP5 = "op-5";
+
+        /** A data dos dias que o teste não olha: existe para que o dia POSSA ser nomeado. */
+        private static final LocalDate DIA_PADRAO = LocalDate.of(2026, 6, 3);
+
+        /** Como o dia padrão aparece no texto que a pessoa lê. */
+        private static final String UM_DIA_SO =
+                "O dia 03/06 da sua folha está sem registro de entrada ou de saída.";
+
+        @Captor private ArgumentCaptor<String> texto;
+        @Captor private ArgumentCaptor<List<AvisoService.DestinatarioAviso>> destinatarios;
+
+        // ── fixtures das linhas da folha ──
+
+        /** Linha-dia de batidas de um dia qualquer: sem ocorrência, com as células informadas. */
+        private static Object[] dia(String paginaId, String... celulas) {
+            return diaEm(paginaId, DIA_PADRAO, celulas);
+        }
+
+        /** Linha-dia de batidas de uma data certa — é ela que o aviso nomeia à pessoa. */
+        private static Object[] diaEm(String paginaId, LocalDate data, String... celulas) {
+            return linha(paginaId, null, data, impresso(data), celulas);
+        }
+
+        /** Linha-dia cuja data não pôde ser derivada: sobra o dia como a folha o imprimiu. */
+        private static Object[] diaSemData(String paginaId, String diaImpresso, String... celulas) {
+            return linha(paginaId, null, null, diaImpresso, celulas);
+        }
+
+        /** Linha-dia de status (Feriado, Falta, FERNC…): o que ocupa as células não é batida. */
+        private static Object[] diaDeStatus(String paginaId, String ocorrencia, String... celulas) {
+            return linha(paginaId, ocorrencia, DIA_PADRAO, impresso(DIA_PADRAO), celulas);
+        }
+
+        /**
+         * {@code [paginaId, ocorrencia, data, diaImpresso, ENT. 1, SAÍ. 1, ENT. 2, SAÍ. 2]}, com as
+         * células que faltam nulas.
+         */
+        private static Object[] linha(String paginaId, String ocorrencia, LocalDate data,
+                                      String diaImpresso, String... celulas) {
+            Object[] out = new Object[] { paginaId, ocorrencia, data, diaImpresso, null, null, null, null };
+            System.arraycopy(celulas, 0, out, 4, celulas.length);
+            return out;
+        }
+
+        /** O dia como o cartão o imprime, na coluna DIA: "dd/mm/aa - qua". */
+        private static String impresso(LocalDate data) {
+            return data.format(DateTimeFormatter.ofPattern("dd/MM/yy")) + " - qua";
+        }
+
+        /**
+         * As linhas que a publicação vai encontrar nas folhas do lote.
+         *
+         * <p>{@code Arrays.asList} e não {@code List.of}: com um array de arrays, a sobrecarga de UM
+         * elemento de {@code List.of} vence a varargs e a lista sairia com uma linha só.
+         */
+        private void folhasComAsLinhas(Object[]... linhas) {
+            when(folhaLinhaRepo.findCelulasDasFolhas(anyCollection())).thenReturn(Arrays.asList(linhas));
+        }
+
+        /** Lote semanal em revisão com uma folha por pessoa informada. */
+        private void loteSemanalDe(String... pessoaIds) {
+            PontoLotePagina[] paginas = new PontoLotePagina[pessoaIds.length];
+            List<Operador> elenco = new ArrayList<>();
+            for (int i = 0; i < pessoaIds.length; i++) {
+                paginas[i] = pagina(i + 1, pessoaIds[i], "OPERADOR");
+                elenco.add(operador(pessoaIds[i], "Pessoa " + (i + 1)));
+            }
+            cenario(elenco, emRevisao("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5)), paginas);
+            nenhumaMensalPublicada();
+        }
+
+        // ── leitura do que foi criado ──
+
+        /** Os destinatários do alerta de registro incompleto, cada um com o complemento que só ele lê. */
+        private List<AvisoService.DestinatarioAviso> alvosDoAlerta() {
+            verify(avisoService).criarPessoalIndividual(destinatarios.capture(), anyString(), eq(ADMIN),
+                    eq(SubtipoAviso.FOLHA_REGISTRO_INCOMPLETO), eq(LOTE));
+            return destinatarios.getValue();
+        }
+
+        /** Quem recebeu o alerta de registro incompleto. */
+        private List<String> alertados() {
+            return alvosDoAlerta().stream().map(AvisoService.DestinatarioAviso::pessoaId).toList();
+        }
+
+        /** O que cada pessoa alertada lê depois do aviso da folha, na ordem dos destinatários. */
+        private List<String> diasQueCadaUmLe() {
+            return alvosDoAlerta().stream().map(AvisoService.DestinatarioAviso::complemento).toList();
+        }
+
+        /** Quem recebeu só o aviso da folha. */
+        private List<String> avisadosDaFolha() {
+            return alvosDaFolha().stream().map(AvisoService.DestinatarioAviso::pessoaId).toList();
+        }
+
+        private List<AvisoService.DestinatarioAviso> alvosDaFolha() {
+            verify(avisoService).criarPessoalIndividual(destinatarios.capture(), anyString(), eq(ADMIN),
+                    eq(SubtipoAviso.FOLHA_SEMANAL), eq(LOTE));
+            return destinatarios.getValue();
+        }
+
+        /**
+         * O último argumento é {@code any()}, e não {@code anyString()}: aviso emitido com
+         * proveniência NULA — o que o faria sobreviver à exclusão do lote — não pode escapar do
+         * {@code never()} por não casar o matcher.
+         */
+        private void nenhumAlerta() {
+            verify(avisoService, never()).criarPessoalIndividual(anyList(), anyString(), anyString(),
+                    eq(SubtipoAviso.FOLHA_REGISTRO_INCOMPLETO), any());
+        }
+
+        /** Nenhum aviso comum de folha — os dois cadastros compartilham a assinatura, só o subtipo os separa. */
+        private void nenhumAvisoDeFolha() {
+            verify(avisoService, never()).criarPessoalIndividual(anyList(), anyString(), anyString(),
+                    argThat(s -> s != SubtipoAviso.FOLHA_REGISTRO_INCOMPLETO), any());
+        }
+
+        // ── a contagem de batidas do dia ──
+
+        @Test
+        @DisplayName("só o dia de 1 ou 3 batidas alerta: 0, 2 e 4 são dias fechados")
+        void apenasContagemImparAlerta() {
+            loteSemanalDe(OP, OP2, OP3, OP4, OP5);
+            folhasComAsLinhas(
+                    dia("pag-1"),                                                  // nenhuma batida
+                    dia("pag-2", "08:00"),                                         // só entrou
+                    dia("pag-3", "08:00", "12:00"),                                // turno fechado
+                    dia("pag-4", "08:00", "12:00", "13:00"),                       // voltou e não saiu
+                    dia("pag-5", "08:00", "12:00", "13:00", "17:00"));             // dia completo
+
+            service.publicar(LOTE, true, false);
+
+            // Falta uma batida no dia: o dia inteiro vira débito no banco se ninguém corrigir.
+            assertEquals(List.of(OP2, OP4), alertados());
+            assertEquals(List.of(OP, OP3, OP5), avisadosDaFolha());
+        }
+
+        @Test
+        @DisplayName("dia de status não tem batida a contar, mesmo que traga horário na célula")
+        void diaDeStatusFicaDeFora() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(
+                    // Como o cartão de fato imprime o dia de status: o texto repetido nas quatro células.
+                    diaDeStatus("pag-1", "Falta", "Falta", "Falta", "Falta", "Falta"),
+                    // E a guarda vale mesmo se um dia trouxer status E horário — o dia não é de batidas.
+                    diaDeStatus("pag-1", "Atest", "08:00"),
+                    dia("pag-1", "08:00", "12:00", "13:00", "17:00"));
+
+            service.publicar(LOTE, true, false);
+
+            nenhumAlerta();
+            assertEquals(List.of(OP), avisadosDaFolha());
+        }
+
+        @Test
+        @DisplayName("célula que não é horário não conta como batida (o total do dia vem com sinal)")
+        void celulaQueNaoEHorarioNaoConta() {
+            loteSemanalDe(OP);
+            // Duas batidas de verdade e um texto que só PARECE horário: contar o delta faria o dia
+            // fechado virar ímpar e alertar quem está em dia.
+            folhasComAsLinhas(dia("pag-1", "08:00", "12:00", "+04:00"));
+
+            service.publicar(LOTE, true, false);
+
+            nenhumAlerta();
+            assertEquals(List.of(OP), avisadosDaFolha());
+        }
+
+        @Test
+        @DisplayName("o alerta endereça o papel de cada pessoa: técnico e administrador também têm folha")
+        void alertaEnderecaOPapelDaPessoa() {
+            cenario(List.of(operador()),
+                    emRevisao("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5)),
+                    pagina(1, "tec-1", "TECNICO"),
+                    pagina(2, "adm-9", "ADMINISTRADOR"));
+            nenhumaMensalPublicada();
+            folhasComAsLinhas(
+                    dia("pag-1", "08:00", "12:00", "13:00"),
+                    dia("pag-2", "08:00"));
+
+            service.publicar(LOTE, true, false);
+
+            // O papel é o que decide em qual coluna o alvo do aviso é gravado — errar aqui endereça a
+            // notificação a um operador inexistente. ⚠️ O vínculo diz ADMINISTRADOR; o papel é ADMIN.
+            assertEquals(List.of(
+                            new AvisoService.DestinatarioAviso("tec-1", PapelPessoa.TECNICO, UM_DIA_SO),
+                            new AvisoService.DestinatarioAviso("adm-9", PapelPessoa.ADMIN, UM_DIA_SO)),
+                    alvosDoAlerta());
+            nenhumAvisoDeFolha();
+        }
+
+        @Test
+        @DisplayName("um único dia incompleto no meio da folha basta para alertar")
+        void umDiaIncompletoBasta() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(
+                    dia("pag-1", "08:00", "12:00", "13:00", "17:00"),
+                    diaDeStatus("pag-1", "Feriado", "Feriado", "Feriado", "Feriado", "Feriado"),
+                    dia("pag-1", "08:00", "12:00", "13:00"),
+                    dia("pag-1", "08:00", "12:00", "13:00", "17:00"));
+
+            service.publicar(LOTE, true, false);
+
+            assertEquals(List.of(OP), alertados());
+            nenhumAvisoDeFolha();   // não sobrou ninguém para o aviso comum
+        }
+
+        // ── os dois grupos ──
+
+        @Test
+        @DisplayName("quem tem duas folhas no lote, uma delas incompleta, recebe UM aviso só — o do alerta")
+        void gruposSaoDisjuntos() {
+            PontoLotePagina completa = pagina(1, OP, "OPERADOR");
+            PontoLotePagina incompleta = pagina(2, OP, "OPERADOR");
+            PontoLotePagina deOutraPessoa = pagina(3, OP2, "OPERADOR");
+            cenario(List.of(operador(), operador(OP2, NOME_OP2)),
+                    emRevisao("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5)),
+                    completa, incompleta, deOutraPessoa);
+            nenhumaMensalPublicada();
+            folhasComAsLinhas(
+                    dia("pag-1", "08:00", "12:00", "13:00", "17:00"),
+                    dia("pag-2", "08:00"),
+                    dia("pag-3", "08:00", "12:00", "13:00", "17:00"));
+
+            service.publicar(LOTE, true, false);
+
+            assertEquals(List.of(OP), alertados());
+            // A pessoa alertada não pode aparecer também no aviso comum: seriam dois popups da mesma folha.
+            assertEquals(List.of(OP2), avisadosDaFolha());
+        }
+
+        @Test
+        @DisplayName("lote sem nenhum dia incompleto cria só o aviso da folha, como sempre")
+        void semIncompletosSoOAvisoDaFolha() {
+            loteSemanalDe(OP, OP2);
+            folhasComAsLinhas(
+                    dia("pag-1", "08:00", "12:00", "13:00", "17:00"),
+                    dia("pag-2", "08:00", "12:00"));
+
+            service.publicar(LOTE, true, false);
+
+            assertEquals(List.of(OP, OP2), avisadosDaFolha());
+            nenhumAlerta();
+        }
+
+        @Test
+        @DisplayName("o alerta leva o aviso da folha como mensagem e os dias no complemento de cada um")
+        void alertaSomaOAvisoDaFolhaEOsDias() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(dia("pag-1", "08:00", "12:00", "13:00"));
+            when(retificacaoService.limiteRetificacao(any())).thenReturn(LocalDate.of(2026, 6, 12));
+
+            service.publicar(LOTE, true, false);
+
+            verify(avisoService).criarPessoalIndividual(anyList(), texto.capture(), eq(ADMIN),
+                    eq(SubtipoAviso.FOLHA_REGISTRO_INCOMPLETO), eq(LOTE));
+            // A mensagem do cadastro é o mesmo aviso de folha que todo mundo recebe — com o prazo, que
+            // é o que dá sentido ao alerta; e o cadastro é um só, para a pessoa ver tudo numa janela.
+            assertEquals("Folha de ponto semanal (01/06/2026 a 05/06/2026) publicada. "
+                    + "Acesse \"Minhas Folhas\" para visualizá-la. Retificações até 12/06/2026.",
+                    texto.getValue());
+            // O que varia de pessoa para pessoa não é a mensagem: é o complemento do alvo dela.
+            assertEquals(List.of(UM_DIA_SO), diasQueCadaUmLe());
+        }
+
+        @Test
+        @DisplayName("a folha é gravada ANTES de ser conferida: o alerta olha a folha desta publicação")
+        void aFolhaEGravadaAntesDeSerConferida() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(dia("pag-1", "08:00", "12:00", "13:00"));
+
+            service.publicar(LOTE, true, false);
+
+            // Conferir antes de gravar leria a folha da publicação ANTERIOR (ou nenhuma), e o alerta
+            // falaria de um dia que a folha nova já não tem.
+            InOrder ordem = inOrder(folhaLinhaRepo, avisoService);
+            ordem.verify(folhaLinhaRepo).deleteByPaginaId("pag-1");
+            ordem.verify(folhaLinhaRepo).findCelulasDasFolhas(anyCollection());
+            ordem.verify(avisoService).criarPessoalIndividual(anyList(), anyString(), eq(ADMIN),
+                    eq(SubtipoAviso.FOLHA_REGISTRO_INCOMPLETO), eq(LOTE));
+        }
+
+        // ── o checkbox "Emitir aviso" e a folha definitiva ──
+
+        @Test
+        @DisplayName("publicação em silêncio ainda alerta quem tem dia incompleto — e só ele")
+        void semEmitirAvisoAindaAlerta() {
+            loteSemanalDe(OP, OP2);
+            folhasComAsLinhas(
+                    dia("pag-1", "08:00", "12:00", "13:00"),
+                    dia("pag-2", "08:00", "12:00", "13:00", "17:00"));
+
+            service.publicar(LOTE, false, false);
+
+            // O alerta existe para provocar a correção enquanto o prazo corre: publicar em silêncio
+            // não pode calar justamente o aviso que pede uma providência.
+            assertEquals(List.of(OP), alertados());
+            nenhumAvisoDeFolha();
+        }
+
+        @Test
+        @DisplayName("publicação em silêncio sem dia incompleto não avisa ninguém")
+        void semEmitirAvisoESemIncompletoNinguemERecebe() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(dia("pag-1", "08:00", "12:00", "13:00", "17:00"));
+
+            service.publicar(LOTE, false, false);
+
+            verifyNoInteractions(avisoService);
+        }
+
+        @Test
+        @DisplayName("a prévia mensal também é conferida — nela ainda dá tempo de retificar")
+        void previaMensalTambemAlerta() {
+            cenario(List.of(operador(), operador(OP2, NOME_OP2)),
+                    mensal(PREVIA, JULHO_INI, JULHO_FIM),
+                    pagina(1, OP, "OPERADOR"),
+                    pagina(2, OP2, "OPERADOR"));
+            nenhumaMensalPublicada();
+            folhasComAsLinhas(
+                    dia("pag-1", "08:00"),
+                    dia("pag-2", "08:00", "12:00", "13:00", "17:00"));
+
+            service.publicar(LOTE, true, false);
+
+            assertEquals(List.of(OP), alertados());
+            // Na mensal o aviso comum continua sendo o da folha mensal: o alerta não rouba o subtipo
+            // de quem está em dia.
+            verify(avisoService).criarPessoalIndividual(destinatarios.capture(), anyString(), eq(ADMIN),
+                    eq(SubtipoAviso.FOLHA_MENSAL), eq(LOTE));
+            assertEquals(List.of(OP2), destinatarios.getValue().stream()
+                    .map(AvisoService.DestinatarioAviso::pessoaId).toList());
+        }
+
+        @Test
+        @DisplayName("duas folhas incompletas da mesma pessoa valem um destinatário só")
+        void duasFolhasIncompletasDaMesmaPessoa() {
+            cenario(emRevisao("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5)),
+                    pagina(1, OP, "OPERADOR"),
+                    pagina(2, OP, "OPERADOR"));
+            nenhumaMensalPublicada();
+            folhasComAsLinhas(
+                    diaEm("pag-1", LocalDate.of(2026, 6, 2), "08:00"),
+                    diaEm("pag-2", LocalDate.of(2026, 6, 4), "08:00", "12:00", "13:00"));
+
+            service.publicar(LOTE, true, false);
+
+            assertEquals(List.of(OP), alertados(), "uma pessoa, um alvo — não um por folha");
+            // E o texto dela reúne os dias das DUAS folhas: é a pessoa que é avisada, não a folha.
+            assertEquals(List.of("Os dias 02/06 e 04/06 da sua folha estão sem registro de entrada ou de saída."),
+                    diasQueCadaUmLe());
+            nenhumAvisoDeFolha();
+        }
+
+        @Test
+        @DisplayName("a folha DEFINITIVA não é conferida: o mês está fechado e não há mais o que corrigir")
+        void definitivaNaoEConferida() {
+            cenario(mensal(DEFINITIVA, JULHO_INI, JULHO_FIM), pagina(1, OP, "OPERADOR"));
+            nenhumaMensalPublicada();
+
+            service.publicar(LOTE, true, false);
+
+            // Nem chega a perguntar ao banco pelas linhas da folha.
+            verify(folhaLinhaRepo, never()).findCelulasDasFolhas(anyCollection());
+            nenhumAlerta();
+            verify(avisoService).criarPessoalIndividual(anyList(), anyString(), eq(ADMIN),
+                    eq(SubtipoAviso.FOLHA_MENSAL), eq(LOTE));
+        }
+
+        @Test
+        @DisplayName("lote sem página vinculada não consulta as linhas de folha nenhuma")
+        void lotePendenteNaoConsultaAsFolhas() {
+            cenario(emRevisao("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5)),
+                    pagina(1, null, null));
+
+            service.publicar(LOTE, true, false);
+
+            verify(folhaLinhaRepo, never()).findCelulasDasFolhas(anyCollection());
+            verifyNoInteractions(avisoService);
+        }
+
+        // ── os dias que cada pessoa lê ──
+
+        @Test
+        @DisplayName("um dia só é anunciado no singular; vários vêm em lista, com \"e\" antes do último")
+        void umDiaNoSingularVariosEmLista() {
+            loteSemanalDe(OP, OP2);
+            folhasComAsLinhas(
+                    diaEm("pag-1", LocalDate.of(2026, 6, 1), "08:00", "12:00", "13:00"),
+                    diaEm("pag-2", LocalDate.of(2026, 6, 1), "08:00"),
+                    diaEm("pag-2", LocalDate.of(2026, 6, 3), "08:00", "12:00", "13:00"),
+                    diaEm("pag-2", LocalDate.of(2026, 6, 5), "17:00"));
+
+            service.publicar(LOTE, true, false);
+
+            assertEquals(List.of(
+                            "O dia 01/06 da sua folha está sem registro de entrada ou de saída.",
+                            "Os dias 01/06, 03/06 e 05/06 da sua folha estão sem registro de entrada ou de saída."),
+                    diasQueCadaUmLe());
+        }
+
+        @Test
+        @DisplayName("os dias saem em ordem cronológica, não na ordem em que a folha os traz")
+        void diasSaemEmOrdemCronologica() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(
+                    diaEm("pag-1", LocalDate.of(2026, 6, 10), "08:00"),
+                    diaEm("pag-1", LocalDate.of(2026, 6, 2), "08:00"),
+                    diaEm("pag-1", LocalDate.of(2026, 7, 1), "08:00"));
+
+            service.publicar(LOTE, true, false);
+
+            // Ordenar por data, e não pelo texto: "02/06" vem antes de "10/06", e julho depois de junho.
+            assertEquals(List.of("Os dias 02/06, 10/06 e 01/07 da sua folha estão sem registro de entrada ou de saída."),
+                    diasQueCadaUmLe());
+        }
+
+        @Test
+        @DisplayName("o mesmo dia em duas folhas da pessoa é citado uma vez só")
+        void diaRepetidoECitadoUmaVez() {
+            cenario(emRevisao("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5)),
+                    pagina(1, OP, "OPERADOR"),
+                    pagina(2, OP, "OPERADOR"));
+            nenhumaMensalPublicada();
+            folhasComAsLinhas(
+                    diaEm("pag-1", LocalDate.of(2026, 6, 2), "08:00"),
+                    diaEm("pag-2", LocalDate.of(2026, 6, 2), "08:00", "12:00", "13:00"));
+
+            service.publicar(LOTE, true, false);
+
+            assertEquals(List.of("O dia 02/06 da sua folha está sem registro de entrada ou de saída."),
+                    diasQueCadaUmLe());
+        }
+
+        @Test
+        @DisplayName("dia sem data derivada é nomeado pelo que a folha imprimiu")
+        void diaSemDataUsaODiaImpresso() {
+            loteSemanalDe(OP);
+            // Folha torta: a data não pôde ser derivada, mas o dia continua impresso na coluna DIA.
+            folhasComAsLinhas(diaSemData("pag-1", "14/07/26 - ter", "08:00", "12:00", "13:00"));
+
+            service.publicar(LOTE, true, false);
+
+            assertEquals(List.of("O dia 14/07 da sua folha está sem registro de entrada ou de saída."),
+                    diasQueCadaUmLe());
+        }
+
+        @Test
+        @DisplayName("sem conseguir nomear dia nenhum, a pessoa ainda é avisada — em termos gerais")
+        void semNomearNenhumDiaOTextoFicaGenerico() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(diaSemData("pag-1", null, "08:00", "12:00", "13:00"));
+
+            service.publicar(LOTE, true, false);
+
+            // Calar seria pior: o dia continua valendo débito no banco de horas.
+            assertEquals(List.of(OP), alertados());
+            assertEquals(List.of(TEXTO_GENERICO), diasQueCadaUmLe());
+        }
+
+        @Test
+        @DisplayName("o dia que não dá para nomear não estraga a lista dos que dão")
+        void diaSemNomeNaoEstragaALista() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(
+                    diaEm("pag-1", LocalDate.of(2026, 6, 2), "08:00"),
+                    diaSemData("pag-1", "", "08:00"));
+
+            service.publicar(LOTE, true, false);
+
+            assertEquals(List.of("O dia 02/06 da sua folha está sem registro de entrada ou de saída."),
+                    diasQueCadaUmLe());
+        }
+
+        @Test
+        @DisplayName("cada pessoa lê os dias dela, e só os dela")
+        void cadaPessoaLeSoOsDiasDela() {
+            loteSemanalDe(OP, OP2);
+            folhasComAsLinhas(
+                    diaEm("pag-1", LocalDate.of(2026, 6, 2), "08:00"),
+                    diaEm("pag-2", LocalDate.of(2026, 6, 4), "08:00", "12:00", "13:00"));
+
+            service.publicar(LOTE, true, false);
+
+            // O cadastro é um só e o texto é por destinatário — ninguém lê o dia do colega.
+            assertEquals(List.of(OP, OP2), alertados());
+            assertEquals(List.of(
+                            "O dia 02/06 da sua folha está sem registro de entrada ou de saída.",
+                            "O dia 04/06 da sua folha está sem registro de entrada ou de saída."),
+                    diasQueCadaUmLe());
+        }
+
+        @Test
+        @DisplayName("quem está em dia não recebe complemento nenhum")
+        void oAvisoComumNaoLevaComplemento() {
+            loteSemanalDe(OP, OP2);
+            folhasComAsLinhas(
+                    dia("pag-1", "08:00"),
+                    dia("pag-2", "08:00", "12:00", "13:00", "17:00"));
+
+            service.publicar(LOTE, true, false);
+
+            assertEquals(List.of(OP2), avisadosDaFolha());
+            assertNull(alvosDaFolha().get(0).complemento(), "o aviso comum é igual para todo mundo");
         }
     }
 

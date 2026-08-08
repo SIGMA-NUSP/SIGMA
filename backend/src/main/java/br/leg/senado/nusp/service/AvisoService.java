@@ -404,8 +404,21 @@ public class AvisoService {
 
     // ═══ Criação programática (ex.: publicação de folha de ponto) ═══
 
-    /** Destinatário individual de um aviso (pessoa + papel). */
-    public record DestinatarioAviso(String pessoaId, PapelPessoa papel) {}
+    /**
+     * Destinatário individual de um aviso: a pessoa, o papel por que ela é alcançada e — quando há —
+     * o complemento que só ela lê, depois das mensagens comuns do cadastro.
+     *
+     * <p>O complemento faz parte da identidade do destinatário: a mesma pessoa com complementos
+     * diferentes são objetos diferentes. Quem agrupa destinatários em conjunto deve chavear pela
+     * forma sem complemento, sob pena de a mesma pessoa entrar duas vezes.
+     */
+    public record DestinatarioAviso(String pessoaId, PapelPessoa papel, String complemento) {
+
+        /** Destinatário sem nada dirigido só a ele — a forma comum. */
+        public DestinatarioAviso(String pessoaId, PapelPessoa papel) {
+            this(pessoaId, papel, null);
+        }
+    }
 
     /**
      * Aviso PESSOAL sem proveniência de lote — é o caminho do desfecho de folga do banco de horas
@@ -420,29 +433,32 @@ public class AvisoService {
     }
 
     /**
-     * Cria um aviso PESSOAL (permanente, some após a ciência) com uma única
-     * mensagem e um alvo individual por destinatário (operador/técnico/admin).
-     * Usado pela publicação de folha de ponto. Os IDs vêm de vínculo interno
-     * confiável (integridade garantida pelas FKs), por isso não revalida cada
-     * pessoa como o cadastro do form admin. Sem destinatários válidos, é no-op.
+     * Cria um aviso PESSOAL (permanente, some após a ciência) com um alvo individual por
+     * destinatário (operador/técnico/admin) e a mensagem informada — comum a todos eles. O que muda
+     * de uma pessoa para outra é o complemento do alvo dela, que ela lê logo depois, na mesma janela.
      *
-     * <p>{@code subtipo} é o código do qual o popup/tabela derivam os rótulos (§2): a publicação de
-     * folha passa {@code FOLHA_SEMANAL}/{@code FOLHA_MENSAL}; o desfecho de folga,
-     * {@code SOLICITACAO_APROVADA}/{@code SOLICITACAO_REJEITADA}. O texto da mensagem não depende dele.
+     * <p>A mensagem em branco é recusada antes de qualquer leitura, porque um aviso sem texto não
+     * teria o que dizer a quem o recebesse.
      *
-     * <p>{@code origemLoteId} é a PROVENIÊNCIA (F59): o lote cuja publicação criou este aviso.
-     * Excluir aquele lote apaga exatamente os cadastros marcados com ele — e nenhum outro.
-     * {@code null} para as origens que não são uma publicação.
+     * <p>Os IDs vêm de vínculo interno confiável (integridade garantida pelas FKs), por isso não
+     * revalida cada pessoa como o cadastro do form admin. Sem destinatários válidos, é no-op.
+     *
+     * <p>{@code subtipo} é o código do qual o popup e a tabela do admin derivam os rótulos; o texto
+     * da mensagem não depende dele.
+     *
+     * <p>{@code origemLoteId} é a PROVENIÊNCIA: o lote cuja publicação criou este aviso. Excluir
+     * aquele lote apaga exatamente os cadastros marcados com ele — e nenhum outro. {@code null} para
+     * as origens que não são uma publicação.
      */
     @Transactional
     public void criarPessoalIndividual(List<DestinatarioAviso> destinatarios, String mensagem,
                                        String criadoPorId, SubtipoAviso subtipo, String origemLoteId) {
         if (mensagem == null || mensagem.isBlank())
             throw new ServiceValidationException("Mensagem do aviso é obrigatória.");
-        adminRepo.findById(criadoPorId).orElseThrow(() ->
-                new ServiceValidationException("Administrador inválido.", HttpStatus.NOT_FOUND));
+        List<String> textos = validarMensagens(List.of(mensagem));
+        validarAutor(criadoPorId);
 
-        // Dedup por (papel, pessoa); ignora entradas incompletas.
+        // Dedup por (papel, pessoa) — o primeiro complemento da pessoa é o que vale; ignora entradas incompletas.
         List<DestinatarioAviso> validos = new ArrayList<>();
         Set<String> vistos = new HashSet<>();
         for (DestinatarioAviso d : (destinatarios == null ? List.<DestinatarioAviso>of() : destinatarios)) {
@@ -459,15 +475,11 @@ public class AvisoService {
         cad.setManterAposCiencia(false);  // some quando a pessoa marca ciência
         cad.setStatus(StatusAviso.ATIVO);
         cad.setCriadoPorId(criadoPorId);
-        cad.setSubtipo(subtipo);             // §2: FOLHA_SEMANAL/MENSAL ou SOLICITACAO_APROVADA/REJEITADA
-        cad.setOrigemLoteId(origemLoteId);   // F59: NULL fora da publicação de folha
+        cad.setSubtipo(subtipo);             // de onde saem a categoria e o contexto exibidos
+        cad.setOrigemLoteId(origemLoteId);   // NULL fora da publicação de folha
         cad = cadastroRepo.save(cad);
 
-        AvisoMensagem m = new AvisoMensagem();
-        m.setCadastroId(cad.getId());
-        m.setOrdem(1);
-        m.setTexto(mensagem.trim());
-        mensagemRepo.save(m);
+        gravarMensagens(cad.getId(), textos);
 
         List<AvisoAlvo> alvos = new ArrayList<>();
         for (DestinatarioAviso d : validos) {
@@ -478,6 +490,8 @@ public class AvisoService {
                 case TECNICO  -> { a.setAlvoTipo(AlvoTipoAviso.TECNICO);  a.setTecnicoId(d.pessoaId()); }
                 case ADMIN    -> { a.setAlvoTipo(AlvoTipoAviso.ADMIN);    a.setAdminId(d.pessoaId()); }
             }
+            // Complemento em branco é o mesmo que nenhum: a gravação não distingue os dois.
+            a.setComplemento(d.complemento() == null || d.complemento().isBlank() ? null : d.complemento().trim());
             alvos.add(a);
         }
         alvoRepo.saveAll(alvos);
@@ -709,6 +723,9 @@ public class AvisoService {
      * Destinatários do PESSOAL (§5.d): os alvos individuais (operador/técnico/admin) cruzados POR ID com as
      * ciências (pendente = {@code ciente_em} nulo); + as ciências de quem não é destinatário, marcadas
      * {@code fora_do_publico}. Cobre também os programáticos (Folha/Solicitação) e o legado (mesmo tipo PESSOAL).
+     *
+     * <p>Quem recebeu um complemento o traz na própria linha: é assim que o administrador lê o que foi
+     * dito a cada pessoa — a comunicação é uma só, mas o texto final de cada uma pode ser diferente.
      */
     private List<Map<String, Object>> destinatariosPessoal(List<AvisoAlvo> alvos,
                                                            List<AvisoCiencia> ciencias, ResolvedorNomes nomes) {
@@ -726,7 +743,10 @@ public class AvisoService {
                 default -> { continue; }   // PESSOAL não tem alvo coletivo/SALA — ignora defensivamente
             }
             chavesAlvo.add(chave);
-            out.add(linhaDestinatario(nome, papel, null, cienciaPorChave.get(chave), false));
+            Map<String, Object> linha = linhaDestinatario(nome, papel, null, cienciaPorChave.get(chave), false);
+            if (a.getComplemento() != null && !a.getComplemento().isBlank())
+                linha.put("complemento", a.getComplemento());
+            out.add(linha);
         }
         // Ciência de quem não é destinatário (a API aceita — §5.e) → visível e marcada, no fim.
         for (AvisoCiencia c : ciencias) {
@@ -797,7 +817,8 @@ public class AvisoService {
             boolean exigeCiencia = ((Number) r[2]).intValue() == 1;
             boolean jaCiente = temCiencia(cadastroId, salaId, pessoaId, papel);
             if (!manter && jaCiente) continue; // já marcou NESTA sala e não é pra manter → pula
-            return Optional.of(montarPayloadPendente(cadastroId, manter, TipoAviso.VERIFICACAO, null, exigeCiencia));
+            // Verificação é aviso de SALA: o alvo não é uma pessoa, e não há a quem personalizar.
+            return Optional.of(montarPayloadPendente(cadastroId, manter, TipoAviso.VERIFICACAO, null, exigeCiencia, null));
         }
         return Optional.empty();
     }
@@ -872,7 +893,8 @@ public class AvisoService {
             // não exige) tira o aviso da lista — para sempre, naquele usuário. A única exceção é o
             // cadastro com ciência E "manter após ciência": esse reaparece a cada login.
             if (!(exigeCiencia && manter) && temCiencia(cadastroId, null, pessoaId, papel)) continue;
-            out.add(montarPayloadPendente(cadastroId, manter, tipo, subtipo, exigeCiencia));
+            out.add(montarPayloadPendente(cadastroId, manter, tipo, subtipo, exigeCiencia,
+                    complementoDaPessoa(cadastroId, pessoaId, papel)));
         }
         return out;
     }
@@ -1227,9 +1249,14 @@ public class AvisoService {
      * CONTEXTO que complementa o título ("Comunicado — Agenda Legislativa") e vem vazio quando a
      * categoria basta (Mensagem). Ambos derivam do subtipo quando houver, senão do tipo — a
      * Verificação e o legado PESSOAL não têm subtipo.
+     *
+     * <p>O {@code complemento} dirigido a quem está lendo entra como o ÚLTIMO texto da lista, logo
+     * depois das mensagens comuns: para quem exibe a janela é um texto como os outros, e é por isso
+     * que a personalização não precisou de campo novo no payload nem de tratamento na tela.
      */
     private Map<String, Object> montarPayloadPendente(String cadastroId, boolean manter, TipoAviso tipo,
-                                                      SubtipoAviso subtipo, boolean exigeCiencia) {
+                                                      SubtipoAviso subtipo, boolean exigeCiencia,
+                                                      String complemento) {
         RotuloAviso rotulo = RotuloAviso.de(tipo, subtipo);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("cadastro_id", cadastroId);
@@ -1238,9 +1265,31 @@ public class AvisoService {
         m.put("titulo", rotulo.contextoPopup());
         m.put("exige_ciencia", exigeCiencia);
         m.put("manter_apos_ciencia", manter);
-        m.put("mensagens", mensagemRepo.findByCadastroIdOrderByOrdem(cadastroId).stream()
-                .map(this::mensagemToMap).toList());
+        List<Map<String, Object>> mensagens = new ArrayList<>(
+                mensagemRepo.findByCadastroIdOrderByOrdem(cadastroId).stream().map(this::mensagemToMap).toList());
+        if (complemento != null && !complemento.isBlank()) {
+            Map<String, Object> extra = new LinkedHashMap<>();
+            extra.put("ordem", mensagens.size() + 1);   // as gravadas ocupam 1..N
+            extra.put("texto", complemento);
+            mensagens.add(extra);
+        }
+        m.put("mensagens", mensagens);
         return m;
+    }
+
+    /**
+     * O complemento que o cadastro dirige a esta pessoa, ou nulo. Quem é alcançado apenas por um
+     * alvo coletivo nunca tem: o coletivo não personaliza ninguém.
+     */
+    private String complementoDaPessoa(String cadastroId, String pessoaId, PapelPessoa papel) {
+        AlvoTipoAviso alvoTipo = switch (papel) {
+            case OPERADOR -> AlvoTipoAviso.OPERADOR;
+            case TECNICO  -> AlvoTipoAviso.TECNICO;
+            case ADMIN    -> AlvoTipoAviso.ADMIN;
+        };
+        return alvoRepo.findComplementosDaPessoa(cadastroId, alvoTipo, pessoaId).stream()
+                .filter(c -> c != null && !c.isBlank())
+                .findFirst().orElse(null);
     }
 
     private Map<String, Object> mensagemToMap(AvisoMensagem x) {

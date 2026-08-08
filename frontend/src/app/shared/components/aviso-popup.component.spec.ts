@@ -64,10 +64,11 @@ describe('AvisoPopupComponent', () => {
 
   // ── Título, selo e cores por categoria ─────────────────────────
 
-  it('Aviso: título "categoria — contexto" do aviso do topo, selo e classe de cor; o "Você tem x avisos" não existe mais', async () => {
+  it('Aviso: o título é o contexto do aviso do topo, com selo e classe de cor; o "Você tem x avisos" não existe mais', async () => {
     pendentes = [ESCALA, PESSOAL_LEGADO];
     await montar();
-    expect(titulo()).toBe('Aviso — Escala');
+    expect(titulo()).toBe('Escala');
+    expect(titulo()).not.toContain('Aviso');   // quem diz a categoria é o selo, e uma vez só
     expect(selo()).toBe('Aviso');                      // a caixa alta é do CSS
     expect(classesDoCard()).toContain('cat-aviso');
     expect(classesDoCard()).toContain('modal-cat');    // faixa da categoria no topo
@@ -79,7 +80,7 @@ describe('AvisoPopupComponent', () => {
     pendentes = [AGENDA];
     routerUrl = '/agenda';
     await montar();
-    expect(titulo()).toBe('Comunicado — Agenda Legislativa');
+    expect(titulo()).toBe('Agenda Legislativa');
     expect(selo()).toBe('Comunicado');
     expect(classesDoCard()).toContain('cat-comunicado');
   });
@@ -96,7 +97,7 @@ describe('AvisoPopupComponent', () => {
   it('Notificação: aviso disparado pelo sistema tem selo e cor próprios', async () => {
     pendentes = [FOLHA];
     await montar();
-    expect(titulo()).toBe('Notificação — Folha semanal disponível');
+    expect(titulo()).toBe('Folha semanal disponível');
     expect(selo()).toBe('Notificação');
     expect(classesDoCard()).toContain('cat-notificacao');
   });
@@ -153,7 +154,7 @@ describe('AvisoPopupComponent', () => {
 
     expect(apiPost).toHaveBeenCalledWith('/api/avisos/pe1/ciencia', {});
     expect(apiPost).toHaveBeenCalledWith('/api/avisos/ag1/visto', {});
-    expect(titulo()).toBe('Comunicado — Agenda Legislativa');
+    expect(titulo()).toBe('Agenda Legislativa');
   });
 
   // ── GERAL sem ciência: visto na exibição, como a Agenda ────────

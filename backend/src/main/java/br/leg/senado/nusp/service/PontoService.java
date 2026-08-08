@@ -40,6 +40,7 @@ import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -313,7 +314,7 @@ public class PontoService {
         extrairDadosDasFolhas(paginas);
         paginaRepo.saveAll(paginas);
         reancorarPessoas(paginas);
-        if (emitirAviso) criarAvisosPessoais(lote, paginas);
+        criarAvisosPessoais(lote, paginas, emitirAviso);
         return detalheLote(lote, paginas, pessoas);
     }
 
@@ -637,24 +638,162 @@ public class PontoService {
         return m;
     }
 
+    /** Batida: {@code hh:mm} sem sinal — o total do dia vem com sinal, e o status do dia é texto. */
+    private static final Pattern BATIDA = Pattern.compile("^\\d{1,2}:\\d{2}$");
+
     /**
-     * Ao publicar, dispara UM aviso PESSOAL (multi-alvo) avisando cada pessoa
-     * com folha no lote — operador, técnico ou administrador. Some quando a
-     * pessoa marca ciência. Páginas pendentes (sem pessoa) são ignoradas.
+     * Onde começam as quatro células de horário na linha lida da folha, que vem como
+     * {@code [paginaId, ocorrencia, data, diaVerbatim, ENT. 1, SAÍ. 1, ENT. 2, SAÍ. 2]}.
      */
-    private void criarAvisosPessoais(PontoLote lote, List<PontoLotePagina> paginas) {
-        List<AvisoService.DestinatarioAviso> destinatarios = new ArrayList<>();
+    private static final int PRIMEIRA_CELULA = 4;
+
+    /** Como o dia é nomeado à pessoa: dia e mês bastam — o ano é o da folha que ela tem diante de si. */
+    private static final DateTimeFormatter DIA_E_MES = DateTimeFormatter.ofPattern("dd/MM");
+
+    /** O que a pessoa lê quando a folha tem dia pela metade e nem sequer foi possível nomear o dia. */
+    private static final String MENSAGEM_REGISTRO_INCOMPLETO =
+            "Sua folha tem dias com registro de entrada ou saída incompleto.";
+
+    /** Um dia sem o par de batidas fechado: a data ordena, o rótulo é como a pessoa lê o dia. */
+    private record DiaIncompleto(LocalDate data, String rotulo) {}
+
+    /**
+     * Ao publicar, avisa cada pessoa com folha no lote — operador, técnico ou administrador. Some
+     * quando a pessoa marca ciência. Páginas pendentes (sem pessoa) são ignoradas.
+     *
+     * <p>Quem tem dia com registro de entrada ou saída faltando é avisado <b>à parte</b>: recebe o
+     * aviso da folha SOMADO à relação dos dias dele que ficaram pela metade, num cadastro próprio e
+     * com subtipo próprio — é o que separa as duas linhas na tabela do administrador. Os dias são
+     * dirigidos a cada destinatário, e ninguém lê o dia do outro. Os dois grupos são disjuntos, e
+     * cada pessoa recebe um aviso só.
+     *
+     * <p>O alerta do dia incompleto <b>não depende do "Emitir aviso"</b> do administrador: ele existe
+     * para provocar a correção enquanto o prazo de retificação corre, e por isso sai mesmo na
+     * publicação feita em silêncio. Publicação silenciosa e nenhum dia incompleto: ninguém é avisado.
+     *
+     * <p>Os dois cadastros nascem marcados com o lote (ORIGEM_LOTE_ID): é por essa proveniência, e só
+     * por ela, que a exclusão do lote sabe QUAIS avisos são dele — nunca por autor, tipo ou texto.
+     */
+    private void criarAvisosPessoais(PontoLote lote, List<PontoLotePagina> paginas, boolean emitirAviso) {
+        Map<String, List<DiaIncompleto>> diasPorFolha = folhasComDiaIncompleto(lote, paginas);
+
+        // A chave é o destinatário SEM complemento: quem pertence a um grupo ou ao outro é a PESSOA, e
+        // quem tem duas folhas no lote soma os dias das duas num aviso só.
+        Map<AvisoService.DestinatarioAviso, List<DiaIncompleto>> comDiaIncompleto = new LinkedHashMap<>();
+        Set<AvisoService.DestinatarioAviso> demais = new LinkedHashSet<>();
         for (PontoLotePagina p : paginas) {
             if (p.getPessoaId() == null) continue;
             PapelPessoa papel = PapelPessoa.dePessoaTipo(p.getPessoaTipo());
-            if (papel != null) destinatarios.add(new AvisoService.DestinatarioAviso(p.getPessoaId(), papel));
+            if (papel == null) continue;
+            AvisoService.DestinatarioAviso pessoa = new AvisoService.DestinatarioAviso(p.getPessoaId(), papel);
+            List<DiaIncompleto> dias = diasPorFolha.get(p.getId());
+            if (dias == null) demais.add(pessoa);
+            else comDiaIncompleto.computeIfAbsent(pessoa, k -> new ArrayList<>()).addAll(dias);
         }
-        if (destinatarios.isEmpty()) return;
-        // O lote vai marcado no cadastro (ORIGEM_LOTE_ID): é por essa proveniência, e só por ela, que a
-        // exclusão do lote sabe QUAIS avisos são dele (F59) — nunca por autor, tipo ou texto.
-        SubtipoAviso subtipo = TIPO_SEMANAL.equals(lote.getTipo()) ? SubtipoAviso.FOLHA_SEMANAL : SubtipoAviso.FOLHA_MENSAL;
-        avisoService.criarPessoalIndividual(destinatarios, mensagemFolhaPublicada(lote),
-                lote.getCriadoPorId(), subtipo, lote.getId());
+        // Uma folha incompleta basta: quem tem duas folhas no lote, uma delas com dia pela metade,
+        // pertence ao grupo do alerta e a nenhum outro.
+        demais.removeAll(comDiaIncompleto.keySet());
+
+        boolean avisarDemais = emitirAviso && !demais.isEmpty();
+        if (!avisarDemais && comDiaIncompleto.isEmpty()) return;
+
+        String folhaPublicada = mensagemFolhaPublicada(lote);
+        if (avisarDemais) {
+            avisoService.criarPessoalIndividual(new ArrayList<>(demais), folhaPublicada,
+                    lote.getCriadoPorId(), subtipoDaFolha(lote), lote.getId());
+        }
+        if (!comDiaIncompleto.isEmpty()) {
+            List<AvisoService.DestinatarioAviso> alertados = comDiaIncompleto.entrySet().stream()
+                    .map(e -> new AvisoService.DestinatarioAviso(e.getKey().pessoaId(), e.getKey().papel(),
+                            textoDosDiasIncompletos(e.getValue())))
+                    .toList();
+            avisoService.criarPessoalIndividual(alertados, folhaPublicada,
+                    lote.getCriadoPorId(), SubtipoAviso.FOLHA_REGISTRO_INCOMPLETO, lote.getId());
+        }
+    }
+
+    /**
+     * O que a pessoa lê depois do aviso da folha: os dias DELA que ficaram sem entrada ou sem saída,
+     * em ordem cronológica e sem repetição. Um dia só é anunciado no singular — a lista de vários
+     * separa com vírgulas e fecha com "e".
+     *
+     * <p>Dia que não pôde ser nomeado não aparece na relação; se nenhum puder, a pessoa ainda é
+     * avisada de que a folha tem dia pela metade, só que sem poder apontar qual.
+     */
+    private static String textoDosDiasIncompletos(List<DiaIncompleto> dias) {
+        List<String> rotulos = dias.stream()
+                .sorted(Comparator.comparing(DiaIncompleto::data,
+                        Comparator.nullsLast(Comparator.<LocalDate>naturalOrder())))
+                .map(DiaIncompleto::rotulo)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (rotulos.isEmpty()) return MENSAGEM_REGISTRO_INCOMPLETO;
+        if (rotulos.size() == 1)
+            return "O dia " + rotulos.get(0) + " da sua folha está sem registro de entrada ou de saída.";
+        String lista = String.join(", ", rotulos.subList(0, rotulos.size() - 1))
+                + " e " + rotulos.get(rotulos.size() - 1);
+        return "Os dias " + lista + " da sua folha estão sem registro de entrada ou de saída.";
+    }
+
+    /** A folha semanal e a mensal se anunciam com subtipos diferentes — é o rótulo que o admin lê. */
+    private SubtipoAviso subtipoDaFolha(PontoLote lote) {
+        return TIPO_SEMANAL.equals(lote.getTipo()) ? SubtipoAviso.FOLHA_SEMANAL : SubtipoAviso.FOLHA_MENSAL;
+    }
+
+    /**
+     * Os dias com registro pela metade de cada folha do lote — dia de número ÍMPAR de batidas (1 ou
+     * 3): uma entrada ou uma saída não foi registrada, e o dia inteiro vira débito no banco de horas
+     * se ninguém corrigir. Dia sem batida nenhuma e dia com o par completo não são cobrados, e a
+     * regra vale igual para qualquer jornada. Folha sem nenhum dia assim fica fora do mapa.
+     *
+     * <p>A conferência é sobre a folha COMO ELA FOI PUBLICADA, lida da tabela que a publicação
+     * acabou de gravar — nunca sobre o PDF de novo, nem sobre as retificações: o aviso existe
+     * justamente para provocá-las.
+     *
+     * <p>A folha mensal DEFINITIVA fica de fora: ela fecha o mês e não aceita mais retificação, e
+     * avisar seria pedir o que já não pode ser feito.
+     */
+    private Map<String, List<DiaIncompleto>> folhasComDiaIncompleto(PontoLote lote, List<PontoLotePagina> paginas) {
+        if (PontoLote.CATEGORIA_DEFINITIVA.equals(lote.getCategoria())) return Map.of();
+        List<String> paginaIds = paginas.stream()
+                .filter(p -> p.getPessoaId() != null)
+                .map(PontoLotePagina::getId)
+                .toList();
+        if (paginaIds.isEmpty()) return Map.of();
+
+        Map<String, List<DiaIncompleto>> incompletas = new LinkedHashMap<>();
+        for (Object[] linha : folhaLinhaRepo.findCelulasDasFolhas(paginaIds)) {
+            String paginaId = (String) linha[0];
+            String ocorrencia = (String) linha[1];
+            // Dia de status (Feriado, Falta, FERNC…) não tem batida a contar.
+            if (ocorrencia != null) continue;
+            if (batidasDoDia(linha) % 2 == 0) continue;
+            incompletas.computeIfAbsent(paginaId, k -> new ArrayList<>())
+                    .add(new DiaIncompleto((LocalDate) linha[2], rotuloDoDia((LocalDate) linha[2], (String) linha[3])));
+        }
+        return incompletas;
+    }
+
+    /**
+     * Como o dia é nomeado no aviso: "dd/MM" da data do dia; sem ela, os cinco primeiros caracteres
+     * do dia como a folha o imprimiu ("14/07/26 - ter" → "14/07"). Nulo quando nem isso existe — o
+     * dia continua contando para o alerta, só não há como citá-lo.
+     */
+    private static String rotuloDoDia(LocalDate data, String diaVerbatim) {
+        if (data != null) return data.format(DIA_E_MES);
+        String impresso = diaVerbatim == null ? "" : diaVerbatim.trim();
+        return impresso.length() >= 5 ? impresso.substring(0, 5) : null;
+    }
+
+    /** Quantas das quatro células de horário do dia trazem batida de fato. */
+    private static int batidasDoDia(Object[] linha) {
+        int batidas = 0;
+        for (int i = PRIMEIRA_CELULA; i < linha.length; i++) {
+            String celula = (String) linha[i];
+            if (celula != null && BATIDA.matcher(celula.trim()).matches()) batidas++;
+        }
+        return batidas;
     }
 
     /**

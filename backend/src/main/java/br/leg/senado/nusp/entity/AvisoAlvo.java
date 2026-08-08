@@ -36,4 +36,12 @@ public class AvisoAlvo extends AuditableEntity {
 
     @Column(name = "ADMIN_ID")
     private String adminId;
+
+    /**
+     * Texto dirigido só a este destinatário, lido depois das mensagens comuns do cadastro — é como
+     * uma comunicação de público amplo diz a cada pessoa algo que só vale para ela. Nulo é o normal;
+     * alvo coletivo nunca tem.
+     */
+    @Column(name = "COMPLEMENTO", length = 1000)
+    private String complemento;
 }

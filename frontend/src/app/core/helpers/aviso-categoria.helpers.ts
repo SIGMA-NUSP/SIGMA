@@ -61,10 +61,10 @@ export function categoriaAviso(codigo: string | null | undefined): CategoriaAvis
 }
 
 /**
- * Título de uma comunicação: a categoria, seguida do contexto quando ele existir
- * ("Comunicado — Agenda Legislativa"). Mensagem não tem contexto e sai só como "Mensagem".
+ * Título de uma comunicação: o contexto, que é o que ela tem de específico ("Agenda Legislativa").
+ * Quem já diz a categoria é o selo ao lado — repeti-la no título só gastaria a linha. Sem contexto
+ * (Mensagem), o nome da categoria é tudo o que há para intitular.
  */
 export function tituloComunicacao(codigo: string | null | undefined, contexto: string | null | undefined): string {
-  const label = categoriaAviso(codigo).label;
-  return contexto ? `${label} — ${contexto}` : label;
+  return contexto ? contexto : categoriaAviso(codigo).label;
 }

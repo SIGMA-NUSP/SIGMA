@@ -1,0 +1,35 @@
+databaseChangeLog:
+  # ============================================================
+  # 051 — Avisos: subtipo FOLHA_REGISTRO_INCOMPLETO
+  #
+  # A comunicação que avisa a pessoa sobre dia com registro de entrada ou saída
+  # faltando na folha publicada ganha subtipo próprio, para o administrador
+  # distinguir as duas linhas da publicação sem abrir cada uma. O domínio do
+  # SUBTIPO é fechado por CHECK: a constraint é recriada com o domínio inteiro.
+  # ============================================================
+  - changeSet:
+      id: 051-aviso-subtipo-registro-incompleto
+      author: douglas.antunes
+      comment: "Avisos: FOLHA_REGISTRO_INCOMPLETO no domínio de CK_FRM_AVISO_CAD_SUBTIPO"
+      changes:
+        - sqlFile:
+            path: db/changelog/051-aviso-subtipo-registro-incompleto.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        # O domínio ENCOLHE na volta: sem sanear antes, a constraint antiga seria recusada por
+        # qualquer cadastro já gravado com o subtipo novo — e a tabela ficaria sem CHECK nenhum,
+        # porque o DROP de DDL já teria commitado. Os avisos afetados voltam a ser o aviso de folha
+        # que também são; o segundo texto deles é o que se perde.
+        - sql:
+            sql: >-
+              UPDATE FRM_AVISO_CADASTRO SET SUBTIPO = 'FOLHA_SEMANAL'
+              WHERE SUBTIPO = 'FOLHA_REGISTRO_INCOMPLETO'
+        - sql:
+            sql: "ALTER TABLE FRM_AVISO_CADASTRO DROP CONSTRAINT CK_FRM_AVISO_CAD_SUBTIPO"
+        - sql:
+            sql: >-
+              ALTER TABLE FRM_AVISO_CADASTRO ADD CONSTRAINT CK_FRM_AVISO_CAD_SUBTIPO CHECK (SUBTIPO IS NULL OR
+              SUBTIPO IN ('FOLHA_SEMANAL','FOLHA_MENSAL','SOLICITACAO_APROVADA','SOLICITACAO_REJEITADA',
+              'ESCALA','AGENDA','PESSOAL','GRUPO_OPERADORES','GRUPO_TECNICOS','GRUPO_TODOS',
+              'GRUPO_ADMINISTRADORES'))

@@ -116,7 +116,7 @@ export class AvisoPopupComponent implements OnInit, OnDestroy {
     return categoriaAviso(a.categoria);
   }
 
-  /** "Aviso — Verificação"; sem contexto, só o nome da categoria. */
+  /** O contexto da comunicação ("Verificação"); sem ele, o nome da categoria. */
   titulo(a: AvisoPendente): string {
     return tituloComunicacao(a.categoria, a.titulo);
   }

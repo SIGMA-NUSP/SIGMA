@@ -186,6 +186,27 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     expect(linhas[2]).toContain('(não é destinatário)');
   });
 
+  it('Pessoal com complemento: a coluna aparece e traz o que cada destinatário leu', async () => {
+    const comComplemento = pessoal();
+    comComplemento['tipo_tabela'] = 'Registros incompletos';
+    comComplemento['destinatarios'] = [
+      { nome: 'Ana', papel: 'Operador', ciente_em: null,
+        complemento: 'O dia 14/07 da sua folha está sem registro de entrada ou de saída.' },
+      { nome: 'Beto', papel: 'Técnico', ciente_em: null },
+    ];
+    resposta = ok(comComplemento);
+    const f = await render();
+
+    // A comunicação é uma só, mas o texto final de cada pessoa é diferente — o admin lê isso aqui,
+    // sem precisar abrir a folha de ninguém.
+    expect(cabecalhos(f)).toEqual(['Destinatário', 'Função', 'Complemento', 'Ciência (data)', 'Ciência (hora)']);
+    const linhas = linhasTexto(f);
+    expect(linhas[0]).toContain('Ana');
+    expect(linhas[0]).toContain('O dia 14/07 da sua folha está sem registro de entrada ou de saída.');
+    expect(linhas[1]).toContain('Beto');
+    expect(linhas[1]).not.toContain('14/07');      // quem não recebeu complemento fica com o traço
+  });
+
   // ═══ 5) Grupo (GERAL) sem ciência — tabela de exibição ═══
   it('Grupo (GERAL) sem ciência: lista quem já viu em "Exibido em" e não tem "Manter após ciência"', async () => {
     resposta = ok(grupo({

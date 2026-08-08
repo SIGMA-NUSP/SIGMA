@@ -45,4 +45,20 @@ public interface PontoFolhaLinhaRepository extends JpaRepository<PontoFolhaLinha
     List<Object[]> findOcorrenciasNoPeriodo(@Param("paginaIds") Collection<String> paginaIds,
                                             @Param("inicio") LocalDate inicio,
                                             @Param("fim") LocalDate fim);
+
+    /**
+     * As células de horário das folhas informadas, na ordem impressa — óctuplas
+     * {@code [paginaId, ocorrencia, data, diaVerbatim, ent1, sai1, ent2, sai2]}, uma por linha-dia. É
+     * a matéria-prima da conferência de dia incompleto: quem conta as batidas e decide o que é dia de
+     * status é quem chama, com as células como o PDF as imprimiu.
+     *
+     * <p>A data e o dia impresso acompanham as células porque o aviso nomeia à pessoa QUAIS dias dela
+     * ficaram pela metade: a data serve à ordem cronológica, e o verbatim é o último recurso para
+     * nomear o dia cuja data não pôde ser derivada.
+     *
+     * <p>A coleção nunca é vazia: um {@code IN ()} vazio não é SQL válido no Oracle.
+     */
+    @Query("SELECT l.paginaId, l.ocorrencia, l.data, l.diaVerbatim, l.ent1, l.sai1, l.ent2, l.sai2 " +
+           "FROM PontoFolhaLinha l WHERE l.paginaId IN :paginaIds ORDER BY l.paginaId, l.ordem")
+    List<Object[]> findCelulasDasFolhas(@Param("paginaIds") Collection<String> paginaIds);
 }

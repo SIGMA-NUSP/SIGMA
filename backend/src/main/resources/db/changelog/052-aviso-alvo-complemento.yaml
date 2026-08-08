@@ -1,0 +1,22 @@
+databaseChangeLog:
+  # ============================================================
+  # 052 — Avisos: COMPLEMENTO por destinatário
+  #
+  # Texto dirigido a um único alvo do cadastro, lido junto das mensagens comuns.
+  # Nasce para a comunicação de registros incompletos, que precisa dizer a cada
+  # pessoa quais dias da folha dela ficaram pela metade.
+  # ============================================================
+  - changeSet:
+      id: 052-aviso-alvo-complemento
+      author: douglas.antunes
+      comment: "Avisos: COMPLEMENTO em FRM_AVISO_ALVO (texto por destinatário)"
+      changes:
+        - sqlFile:
+            path: db/changelog/052-aviso-alvo-complemento.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        # A coluna é nova e ninguém depende dela fora do aviso de registros incompletos:
+        # a volta é o descarte puro e simples dos complementos gravados.
+        - sql:
+            sql: "ALTER TABLE FRM_AVISO_ALVO DROP COLUMN COMPLEMENTO"

@@ -1300,6 +1300,7 @@ class AvisoServiceTest {
             assertEquals("lote-42", ref.get().getOrigemLoteId());
         }
 
+
         @Test
         @DisplayName("a sobrecarga SEM origem (desfecho de folga) deixa ORIGEM_LOTE_ID NULO: a exclusão de um lote jamais a alcança")
         void criarPessoal_semOrigemDeixaNulo() {
@@ -1312,6 +1313,41 @@ class AvisoServiceTest {
             service.criarPessoalIndividual(List.of(operador), MSG_CRUA, ADMIN_ID, SubtipoAviso.SOLICITACAO_APROVADA);
 
             assertNull(ref.get().getOrigemLoteId());
+        }
+
+        @Test
+        @DisplayName("o complemento é gravado no alvo de quem o recebeu — e só nele")
+        void criarPessoal_complementoPorDestinatario() {
+            stubAdminExistente();
+            stubSequenciaNumero();
+            stubSaveCadastro();
+            stubSaveMensagens();
+            List<AvisoAlvo> alvos = stubSaveAllAlvos();
+
+            service.criarPessoalIndividual(List.of(
+                            new DestinatarioAviso(OPERADOR_ID, PapelPessoa.OPERADOR, "  Só o operador lê isto.  "),
+                            tecnico),
+                    MSG_CRUA, ADMIN_ID, SubtipoAviso.FOLHA_REGISTRO_INCOMPLETO, "lote-42");
+
+            // O cadastro é um só e a mensagem é comum: o que separa os dois é o texto do alvo.
+            assertEquals("Só o operador lê isto.", alvos.get(0).getComplemento(), "trimado, como as mensagens");
+            assertNull(alvos.get(1).getComplemento(), "quem não recebeu complemento não ganha um vazio");
+        }
+
+        @Test
+        @DisplayName("complemento em branco é o mesmo que nenhum")
+        void criarPessoal_complementoEmBrancoNaoEGravado() {
+            stubAdminExistente();
+            stubSequenciaNumero();
+            stubSaveCadastro();
+            stubSaveMensagens();
+            List<AvisoAlvo> alvos = stubSaveAllAlvos();
+
+            service.criarPessoalIndividual(
+                    List.of(new DestinatarioAviso(OPERADOR_ID, PapelPessoa.OPERADOR, "   ")),
+                    MSG_CRUA, ADMIN_ID, SubtipoAviso.FOLHA_SEMANAL, "lote-42");
+
+            assertNull(alvos.get(0).getComplemento());
         }
     }
 

@@ -99,3 +99,7 @@ databaseChangeLog:
       file: db/changelog/049-ponto-lote-categoria.yaml
   - include:
       file: db/changelog/050-ponto-folha-linha.yaml
+  - include:
+      file: db/changelog/051-aviso-subtipo-registro-incompleto.yaml
+  - include:
+      file: db/changelog/052-aviso-alvo-complemento.yaml

@@ -64,6 +64,10 @@ class RotuloAvisoTest {
                     "Solicitação aprovada", "Solicitação Banco");
             assertRotulo(doSubtipo(SubtipoAviso.SOLICITACAO_REJEITADA), CategoriaAviso.NOTIFICACAO,
                     "Solicitação rejeitada", "Solicitação Banco");
+            // A folha com dia pela metade se anuncia por si na tabela do admin: é o que distingue as
+            // duas linhas da mesma publicação sem precisar abrir cada uma.
+            assertRotulo(doSubtipo(SubtipoAviso.FOLHA_REGISTRO_INCOMPLETO), CategoriaAviso.NOTIFICACAO,
+                    "Folha disponível", "Registros incompletos");
         }
     }
 

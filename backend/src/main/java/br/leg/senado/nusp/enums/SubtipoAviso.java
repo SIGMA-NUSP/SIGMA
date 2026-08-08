@@ -13,6 +13,8 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 public enum SubtipoAviso {
     FOLHA_SEMANAL(CategoriaAviso.NOTIFICACAO, "Folha semanal disponível", "Folha Semanal"),
     FOLHA_MENSAL(CategoriaAviso.NOTIFICACAO, "Folha mensal disponível", "Folha Mensal"),
+    /** Folha publicada em que algum dia ficou com entrada ou saída faltando. */
+    FOLHA_REGISTRO_INCOMPLETO(CategoriaAviso.NOTIFICACAO, "Folha disponível", "Registros incompletos"),
     SOLICITACAO_APROVADA(CategoriaAviso.NOTIFICACAO, "Solicitação aprovada", "Solicitação Banco"),
     SOLICITACAO_REJEITADA(CategoriaAviso.NOTIFICACAO, "Solicitação rejeitada", "Solicitação Banco"),
     ESCALA(CategoriaAviso.AVISO, "Escala", "Escala"),

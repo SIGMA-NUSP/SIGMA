@@ -13,6 +13,7 @@ interface LinhaCiencia {
   col2: string;               // Local (Verificação) / Plenário (Escala) / Função (Agenda, Pessoal, Grupo)
   cienteEm: string | null;    // null = pendente (ainda não deu ciência / ainda não viu)
   marcador: string;           // "(fora da escala atual)" / "(não é destinatário)" — vazio quando no público
+  complemento: string;        // o que só aquele destinatário leu; vazio quando a comunicação é igual para todos
 }
 
 /**
@@ -193,6 +194,7 @@ interface LinhaCiencia {
               <thead><tr>
                 <th>Destinatário</th>
                 <th>{{ colDois() }}</th>
+                @if (temComplemento()) { <th>Complemento</th> }
                 <th>{{ colData() }}</th>
                 <th>{{ colHora() }}</th>
               </tr></thead>
@@ -201,11 +203,12 @@ interface LinhaCiencia {
                   <tr [class.fora]="l.marcador">
                     <td>{{ l.nome }}@if (l.marcador) { <span class="marca">{{ l.marcador }}</span> }</td>
                     <td>{{ l.col2 }}</td>
+                    @if (temComplemento()) { <td>{{ l.complemento || '—' }}</td> }
                     <td>{{ l.cienteEm ? (l.cienteEm | fmtDate) : '—' }}</td>
                     <td>{{ l.cienteEm ? hora(l.cienteEm) : '—' }}</td>
                   </tr>
                 } @empty {
-                  <tr><td colspan="4" class="empty-state">{{ vazioMsg() }}</td></tr>
+                  <tr><td [attr.colspan]="temComplemento() ? 5 : 4" class="empty-state">{{ vazioMsg() }}</td></tr>
                 }
               </tbody>
             </table>
@@ -302,25 +305,25 @@ export class AdminAvisoDetalheComponent implements OnInit {
     switch (this.tipo()) {
       case 'VERIFICACAO':
         raw = this.registros().map((c: any) => ({
-          nome: c['nome'], col2: c['sala_nome'] ?? '—', cienteEm: c['ciente_em'], marcador: '',
+          nome: c['nome'], col2: c['sala_nome'] ?? '—', cienteEm: c['ciente_em'], marcador: '', complemento: '',
         }));
         break;
       // Público coletivo, não enumerável: a tabela é a lista de quem registrou (ciência ou exibição).
       case 'GERAL': case 'AGENDA':
         raw = this.registros().map((c: any) => ({
-          nome: c['nome'], col2: c['papel'], cienteEm: c['ciente_em'], marcador: '',
+          nome: c['nome'], col2: c['papel'], cienteEm: c['ciente_em'], marcador: '', complemento: '',
         }));
         break;
       case 'ESCALA':
         raw = (dd['destinatarios'] ?? []).map((r: any) => ({
           nome: r['nome'], col2: (r['plenarios'] ?? []).join(', ') || '—', cienteEm: r['ciente_em'],
-          marcador: r['fora_do_publico'] ? '(fora da escala atual)' : '',
+          marcador: r['fora_do_publico'] ? '(fora da escala atual)' : '', complemento: '',
         }));
         break;
       case 'PESSOAL':
         raw = (dd['destinatarios'] ?? []).map((r: any) => ({
           nome: r['nome'], col2: r['papel'], cienteEm: r['ciente_em'],
-          marcador: r['fora_do_publico'] ? '(não é destinatário)' : '',
+          marcador: r['fora_do_publico'] ? '(não é destinatário)' : '', complemento: r['complemento'] ?? '',
         }));
         break;
       default:
@@ -328,6 +331,12 @@ export class AdminAvisoDetalheComponent implements OnInit {
     }
     return raw.sort((a, b) => this.grupo(a) - this.grupo(b) || this.desempate(a, b));
   });
+
+  /**
+   * A coluna do complemento só aparece quando alguém tem um: é o caso da comunicação de registros
+   * incompletos, em que cada pessoa lê os dias dela. Nas demais, a tabela não ganha coluna vazia.
+   */
+  temComplemento = computed<boolean>(() => this.linhas().some(l => !!l.complemento));
 
   /** 0 = pendente (topo), 1 = ciente/exibido, 2 = fora do público (fim). */
   private grupo(l: LinhaCiencia): number {
