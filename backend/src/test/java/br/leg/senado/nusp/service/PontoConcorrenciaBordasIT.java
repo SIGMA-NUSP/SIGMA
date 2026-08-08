@@ -243,7 +243,7 @@ class PontoConcorrenciaBordasIT {
 
     private Callable<String> publicar(String loteId, boolean emitirAviso) {
         return () -> {
-            pontoService.publicar(loteId, emitirAviso);
+            pontoService.publicar(loteId, emitirAviso, false);
             return "PUBLICOU";
         };
     }

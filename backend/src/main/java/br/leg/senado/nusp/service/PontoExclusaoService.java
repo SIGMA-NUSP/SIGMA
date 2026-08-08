@@ -46,6 +46,7 @@ import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -63,11 +64,13 @@ import java.util.function.Function;
  * a ser recusada, e as semanais atrasadas do mês também. A recusa mandava "remover a página e publicar
  * novamente", o que é impossível num lote publicado; só um DELETE manual no Oracle o desfazia.
  *
- * <p><b>O que este service faz.</b> Dá ao <b>admin master</b> (e só a ele — {@code app.admin.master-username},
- * o mesmo mecanismo do {@code AdminCrudService}) o poder de excluir um lote inteiro ou uma folha
- * individual dele, com um PREVIEW honesto das consequências antes do gesto. A exclusão é PROFUNDA e
- * cirúrgica ao mesmo tempo — leva tudo que aquela publicação criou, e <b>nada</b> que ela não tenha
- * criado:
+ * <p><b>O que este service faz.</b> Permite excluir um lote inteiro ou uma folha individual dele, com
+ * um PREVIEW honesto das consequências antes do gesto. Quem pode fazê-lo depende do STATUS do lote:
+ * um lote EM REVISÃO é descarte de trabalho que ainda não saiu para ninguém, e qualquer admin o
+ * desfaz; um lote PUBLICADO já gerou folha, aviso e saldo para outras pessoas, e continua sendo do
+ * <b>admin master</b> ({@code app.admin.master-username}, o mesmo mecanismo do
+ * {@code AdminCrudService}). A exclusão é PROFUNDA e cirúrgica ao mesmo tempo — leva tudo que aquela
+ * publicação criou, e <b>nada</b> que ela não tenha criado:
  *
  * <ul>
  *   <li><b>retificações</b> ancoradas nas páginas excluídas (chave = PAGINA_ID). As da mesma pessoa
@@ -124,7 +127,7 @@ public class PontoExclusaoService {
     private final SaldoAberturaService saldoAberturaService;
     private final ObjectMapper objectMapper;
 
-    /** O ÚNICO admin que exclui — mesma propriedade que autoriza criar/editar administradores. */
+    /** O único admin que exclui PUBLICAÇÃO — mesma propriedade que autoriza criar/editar administradores. */
     @Value("${app.admin.master-username}")
     private String masterUsername;
 
@@ -136,17 +139,34 @@ public class PontoExclusaoService {
     // ══════════════════════════════════════════════════════════════
 
     /**
-     * O usuário é o master? Alimenta a flag {@code pode_excluir} da listagem de lotes — o botão X só
-     * aparece para quem pode. <b>Esconder o botão não é segurança</b>: quem chamar o endpoint mesmo
-     * assim leva 403 do {@link #requireMaster}.
+     * Quem pode excluir um lote NAQUELE status. Alimenta a flag {@code pode_excluir} que a listagem
+     * traz LOTE A LOTE — o X só aparece onde o gesto é permitido:
+     *
+     * <ul>
+     *   <li><b>EM REVISÃO</b>: qualquer admin. É trabalho que ainda não saiu para ninguém — nenhuma
+     *       folha visível, nenhum aviso, nenhum saldo —, e sem isso o admin comum que envia um PDF
+     *       errado não tem como descartá-lo;</li>
+     *   <li><b>PUBLICADO</b>: só o master. Ali a exclusão desfaz o que outras pessoas já receberam.</li>
+     * </ul>
+     *
+     * <p><b>Esconder o botão não é segurança</b>: quem chamar o endpoint mesmo assim leva 403 do
+     * {@link #exigirPermissao}.
      */
-    public boolean podeExcluir(String username) {
+    public boolean podeExcluir(String statusDoLote, String callerUsername) {
+        return !STATUS_PUBLICADO.equals(statusDoLote) || ehMaster(callerUsername);
+    }
+
+    private boolean ehMaster(String username) {
         return masterUsername != null && masterUsername.equalsIgnoreCase(username);
     }
 
-    /** 403 "forbidden" para todo não-master — idioma do {@code AdminCrudService}. Nada é lido nem escrito antes. */
-    private void requireMaster(String callerUsername) {
-        if (!podeExcluir(callerUsername)) {
+    /**
+     * 403 "forbidden" para quem não pode excluir AQUELE lote — idioma do {@code AdminCrudService}.
+     * É a PRIMEIRA coisa depois de carregar o lote (a permissão depende do status dele) e antes de
+     * qualquer leitura de página, retificação ou aviso — e, na exclusão, de qualquer escrita.
+     */
+    private void exigirPermissao(PontoLote lote, String callerUsername) {
+        if (!podeExcluir(lote.getStatus(), callerUsername)) {
             throw new ServiceValidationException("forbidden", HttpStatus.FORBIDDEN);
         }
     }
@@ -155,18 +175,20 @@ public class PontoExclusaoService {
     // Preview — as consequências REAIS daquele item, antes do gesto
     // ══════════════════════════════════════════════════════════════
 
-    /** Preview da exclusão do LOTE inteiro (todas as páginas). Master-only, como a exclusão. */
+    /** Preview da exclusão do LOTE inteiro (todas as páginas). Mesma permissão da exclusão. */
     @Transactional(readOnly = true)
     public Map<String, Object> previewLote(String loteId, String callerUsername) {
-        requireMaster(callerUsername);
-        return preview(alvoLote(loteId, this::buscarLote));
+        PontoLote lote = buscarLote(loteId);
+        exigirPermissao(lote, callerUsername);
+        return preview(alvoLote(lote));
     }
 
     /** Preview da exclusão de UMA folha do lote. */
     @Transactional(readOnly = true)
     public Map<String, Object> previewPagina(String loteId, String paginaId, String callerUsername) {
-        requireMaster(callerUsername);
-        return preview(alvoPagina(loteId, paginaId, this::buscarLote));
+        PontoLote lote = buscarLote(loteId);
+        exigirPermissao(lote, callerUsername);
+        return preview(alvoPagina(lote, paginaId));
     }
 
     /**
@@ -220,15 +242,36 @@ public class PontoExclusaoService {
     }
 
     /**
-     * A competência que esta exclusão REABRE, ou {@code null}. Só uma MENSAL PUBLICADA fecha o mês
-     * (C6/F32) — e só enquanto tem gente vinculada. Nenhum mecanismo novo: a guarda consulta as
-     * mensais publicadas, e morta a mensal o mês volta a aceitar publicação sozinho.
+     * A competência que esta exclusão REABRE PARA RETIFICAÇÃO, ou {@code null}.
+     *
+     * <p>Quem fecha o mês de alguém é a folha mensal DEFINITIVA publicada: enquanto ela existe,
+     * nenhum dia daquele mês aceita retificação. Morto o lote, os dias voltam a aceitar — sozinhos,
+     * sem nenhum mecanismo de "reabertura": a regra consulta as definitivas publicadas.
+     *
+     * <p>Duas condições que a substituição de folhas trouxe: a PRÉVIA nunca fechou mês nenhum (e por
+     * isso excluí-la não reabre nada), e uma SEGUNDA definitiva do mesmo mês mantém o mês fechado —
+     * quando toda pessoa do alvo tem outra definitiva publicada da competência, a exclusão não
+     * promete reabertura alguma.
      */
     private String reabreCompetencia(Alvo alvo) {
         PontoLote lote = alvo.lote();
-        if (!TIPO_MENSAL.equals(lote.getTipo()) || !STATUS_PUBLICADO.equals(lote.getStatus())) return null;
-        boolean alguemVinculado = alvo.paginas().stream().anyMatch(p -> p.getPessoaId() != null);
-        return alguemVinculado ? YearMonth.from(lote.getDataInicio()).format(COMPETENCIA) : null;
+        if (!TIPO_MENSAL.equals(lote.getTipo()) || !STATUS_PUBLICADO.equals(lote.getStatus())
+                || !PontoLote.CATEGORIA_DEFINITIVA.equals(lote.getCategoria())) {
+            return null;
+        }
+        Set<String> pessoas = new LinkedHashSet<>();
+        for (PontoLotePagina p : alvo.paginas()) {
+            if (p.getPessoaId() != null) pessoas.add(p.getPessoaId());
+        }
+        if (pessoas.isEmpty()) return null;
+
+        YearMonth competencia = YearMonth.from(lote.getDataInicio());
+        Set<String> seguemFechados = new HashSet<>();
+        for (Object[] r : paginaRepo.findPessoasComMensalPublicadaNoPeriodo(
+                lote.getId(), pessoas, competencia.atDay(1), competencia.atEndOfMonth())) {
+            if (PontoLote.CATEGORIA_DEFINITIVA.equals((String) r[3])) seguemFechados.add((String) r[0]);
+        }
+        return seguemFechados.containsAll(pessoas) ? null : competencia.format(COMPETENCIA);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -238,8 +281,9 @@ public class PontoExclusaoService {
     /** Exclui o LOTE inteiro: páginas, retificações, avisos daquela publicação, arquivos e a âncora. */
     @Transactional
     public Map<String, Object> excluirLote(String loteId, String callerUsername, String callerId) {
-        requireMaster(callerUsername);
-        return executar(alvoLote(loteId, this::buscarLoteComLock), callerId);
+        PontoLote lote = buscarLoteComLock(loteId);
+        exigirPermissao(lote, callerUsername);
+        return executar(alvoLote(lote), callerId);
     }
 
     /**
@@ -249,8 +293,9 @@ public class PontoExclusaoService {
      */
     @Transactional
     public Map<String, Object> excluirPagina(String loteId, String paginaId, String callerUsername, String callerId) {
-        requireMaster(callerUsername);
-        return executar(alvoPagina(loteId, paginaId, this::buscarLoteComLock), callerId);
+        PontoLote lote = buscarLoteComLock(loteId);   // o lock é do LOTE mesmo quando o alvo é a página
+        exigirPermissao(lote, callerUsername);
+        return executar(alvoPagina(lote, paginaId), callerId);
     }
 
     /**
@@ -593,16 +638,14 @@ public class PontoExclusaoService {
 
     private record AvisosRemovidos(int cadastros, int alvos) {}
 
-    private Alvo alvoLote(String loteId, Function<String, PontoLote> carregarLote) {
-        PontoLote lote = carregarLote.apply(loteId);
-        return new Alvo(lote, paginaRepo.findByLoteIdOrderByNumeroPagina(loteId), true);
+    private Alvo alvoLote(PontoLote lote) {
+        return new Alvo(lote, paginaRepo.findByLoteIdOrderByNumeroPagina(lote.getId()), true);
     }
 
-    private Alvo alvoPagina(String loteId, String paginaId, Function<String, PontoLote> carregarLote) {
-        PontoLote lote = carregarLote.apply(loteId);   // o lock é do LOTE mesmo quando o alvo é a página
+    private Alvo alvoPagina(PontoLote lote, String paginaId) {
         PontoLotePagina pg = paginaRepo.findById(paginaId)
                 .orElseThrow(() -> new ServiceValidationException("Página não encontrada.", HttpStatus.NOT_FOUND));
-        if (!pg.getLoteId().equals(loteId)) {
+        if (!pg.getLoteId().equals(lote.getId())) {
             throw new ServiceValidationException("Página não pertence ao lote informado.");
         }
         return new Alvo(lote, List.of(pg), false);

@@ -340,22 +340,15 @@ public class RetificacaoService {
         }
         PontoLote lote = loteRepo.findById(pg.getLoteId())
                 .orElseThrow(() -> new ServiceValidationException("Lote não encontrado.", HttpStatus.NOT_FOUND));
-        // A prévia substituída pela definitiva do mês deixou de ser a folha do dono: some da lista
-        // dele e não abre mais para download — a retificação responde a mesma coisa.
-        if (!STATUS_PUBLICADO.equals(lote.getStatus()) || previaSubstituida(pg, lote)) {
+        // A folha substituída por outra publicada depois deixou de ser a folha do dono: some da lista
+        // dele e não abre mais para download — a retificação responde a mesma coisa. A regra mora no
+        // FolhaSubstituida, e é uma só para os três caminhos.
+        if (!STATUS_PUBLICADO.equals(lote.getStatus())
+                || FolhaSubstituida.substituida(pg.getId(),
+                        paginaRepo.findFolhasPublicadasByPessoa(pg.getPessoaId()))) {
             throw new ServiceValidationException("Folha indisponível.", HttpStatus.NOT_FOUND);
         }
         return new FolhaAlvo(pg, lote);
-    }
-
-    /** Folha prévia cuja competência já foi encerrada pela definitiva da mesma pessoa. */
-    private boolean previaSubstituida(PontoLotePagina pagina, PontoLote lote) {
-        if (!TIPO_MENSAL.equals(lote.getTipo()) || !PontoLote.CATEGORIA_PREVIA.equals(lote.getCategoria())) {
-            return false;
-        }
-        return paginaRepo.contarDefinitivasPublicadas(pagina.getPessoaId(), pagina.getPessoaTipo(),
-                YearMonth.from(lote.getDataInicio()).atDay(1),
-                YearMonth.from(lote.getDataFim()).atEndOfMonth()) > 0;
     }
 
     private LocalDate parseData(String s) {

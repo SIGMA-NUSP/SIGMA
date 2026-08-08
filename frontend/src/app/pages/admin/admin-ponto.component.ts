@@ -42,6 +42,10 @@ interface Lote {
   pendentes: number;
   criado_em?: string;
   publicado_em?: string;
+  /** Quem pode excluir ESTE lote — decisão do backend (em revisão, qualquer admin; publicado, só o master). */
+  pode_excluir?: boolean;
+  /** Quantas pessoas teriam a folha substituída se este lote fosse publicado agora (0 = nenhuma). */
+  substituicoes?: number;
   paginas?: Pagina[];
   _exp?: boolean;        // linha expandida (acordeão)
   emitirAviso?: boolean; // checkbox "Emitir aviso" (client-side; ausente = marcado)
@@ -202,8 +206,9 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
             <th style="width:110px; text-align:center">Pendentes</th>
             <th style="width:130px">Status</th>
             <th style="width:130px">Enviado em</th>
-            <!-- Coluna do X: só existe para o master (a flag vem do backend; o 403 é a segurança) -->
-            @if (podeExcluir()) { <th style="width:70px; text-align:center">Excluir</th> }
+            <!-- Coluna do X: existe se algum lote da lista é excluível por quem está logado
+                 (a permissão vem do backend, lote a lote; o 403 é a segurança) -->
+            @if (colunaExcluir()) { <th style="width:70px; text-align:center">Excluir</th> }
           </tr></thead>
           <tbody>
             @if (erroLotes()) {
@@ -228,12 +233,16 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
                     @else { <span class="badge-rev">Em revisão</span> }
                   </td>
                   <td>{{ l.criado_em | fmtDate }}</td>
-                  @if (podeExcluir()) {
+                  @if (colunaExcluir()) {
+                    <!-- A célula existe em toda linha enquanto a coluna existir (alinhamento); o X só
+                         aparece no lote que este admin pode excluir. -->
                     <td style="text-align:center">
-                      <!-- stopPropagation: a linha inteira é o acordeão — sem ele o X também expandiria o lote -->
-                      <button class="btn-x btn-x-lote" title="Excluir este lote"
-                              [disabled]="exclusaoEmVoo(chaveLote(l))"
-                              (click)="$event.stopPropagation(); abrirExclusaoLote(l)">✕</button>
+                      @if (l.pode_excluir) {
+                        <!-- stopPropagation: a linha inteira é o acordeão — sem ele o X também expandiria o lote -->
+                        <button class="btn-x btn-x-lote" title="Excluir este lote"
+                                [disabled]="exclusaoEmVoo(chaveLote(l))"
+                                (click)="$event.stopPropagation(); abrirExclusaoLote(l)">✕</button>
+                      }
                     </td>
                   }
                 </tr>
@@ -248,6 +257,14 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
                           <p class="text-muted-sm" style="margin:0 0 10px">
                             Verifique se há alguma pendência antes de publicar o lote.
                           </p>
+                          <!-- O match automático já rodou: dá para dizer, ANTES do gesto, quantas folhas
+                               publicadas este lote toma o lugar. O número acompanha os vínculos que o
+                               admin muda aqui (o PATCH devolve o lote inteiro). -->
+                          @if (l.substituicoes) {
+                            <p class="aviso-substituicao">
+                              Este lote substituirá folhas publicadas de {{ l.substituicoes }} funcionário(s).
+                            </p>
+                          }
                         } @else {
                           <p class="text-muted-sm" style="margin:0 0 10px">
                             Lote publicado em {{ l.publicado_em | fmtDate }}.
@@ -261,7 +278,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
                             <th>Operador / Técnico</th>
                             <th>Nome lido (dica)</th>
                             <th style="width:90px; text-align:center">PDF</th>
-                            @if (podeExcluir()) { <th style="width:70px; text-align:center">Excluir</th> }
+                            @if (l.pode_excluir) { <th style="width:70px; text-align:center">Excluir</th> }
                           </tr></thead>
                           <tbody>
                             @for (p of l.paginas; track p.id) {
@@ -307,7 +324,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
                                 <td style="text-align:center">
                                   <button class="btn-xs" (click)="preview(p)">Ver PDF</button>
                                 </td>
-                                @if (podeExcluir()) {
+                                @if (l.pode_excluir) {
                                   <td style="text-align:center">
                                     <button class="btn-x btn-x-pagina" title="Excluir esta folha"
                                             [disabled]="exclusaoEmVoo(chavePagina(p))"
@@ -419,7 +436,9 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
           }
 
           @if (pv.reabre_competencia) {
-            <p class="reabre">A competência <strong>{{ pv.reabre_competencia }}</strong> volta a aceitar publicação.</p>
+            <!-- O que a exclusão de uma folha definitiva devolve é a retificação: publicar sobre uma
+                 folha publicada nunca é barrado (a nova substitui a antiga). -->
+            <p class="reabre">A competência <strong>{{ pv.reabre_competencia }}</strong> volta a aceitar retificação.</p>
           }
 
           <p class="irreversivel"><strong>Esta ação é irreversível.</strong></p>
@@ -445,6 +464,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
     .radio-linha { display:flex; gap:20px; flex-wrap:wrap; }
     .pessoa-select { width:100%; max-width:360px; }
     .badge-rev { color:#b45309; font-weight:600; }
+    .aviso-substituicao { margin:0 0 10px; color:#b45309; font-weight:600; }
     .badge-manual { color:var(--primary); font-weight:600; }
     .btn-x {
       background:none; border:none; cursor:pointer; padding:2px 6px;
@@ -547,14 +567,16 @@ export class AdminPontoComponent implements OnInit {
   erroPublicacao = signal<Record<string, string>>({});
 
   /**
-   * O usuário é o admin master (F59)? Vem do BACKEND, junto da listagem de lotes — o front nunca
-   * compara username nenhum. É o que faz aparecer o X das duas tabelas; a segurança é o 403 do
-   * endpoint, que continua valendo para quem chamá-lo à mão.
+   * A coluna do X existe? Ela aparece quando ALGUM lote da lista pode ser excluído por quem está
+   * logado (F59) — a permissão vem do BACKEND, lote a lote, e o front nunca compara username nenhum.
+   * Um admin comum que só tenha lotes publicados não vê a coluna; tendo um em revisão, vê a coluna
+   * com o X apenas nas linhas em que o gesto é permitido. A segurança é o 403 do endpoint, que
+   * continua valendo para quem chamá-lo à mão.
    */
-  podeExcluir = signal(false);
+  protected colunaExcluir = computed(() => this.lotes().some(l => l.pode_excluir === true));
 
-  /** 7 colunas + a do X quando o master está logado (colspan das linhas de erro/vazio e do acordeão). */
-  protected colunasLote = computed(() => (this.podeExcluir() ? 8 : 7));
+  /** 7 colunas + a do X quando ela está visível (colspan das linhas de erro/vazio e do acordeão). */
+  protected colunasLote = computed(() => (this.colunaExcluir() ? 8 : 7));
 
   /** O preview aberto no modal (null = modal fechado) — é ele que descreve o que a exclusão vai apagar. */
   previewExclusao = signal<PreviewExclusao | null>(null);
@@ -718,7 +740,6 @@ export class AdminPontoComponent implements OnInit {
           this.lotesPager.onPage(1);   // lote novo é o mais recente (ordem desc) → garante que fique visível
         }
         this.lotes.set(list);
-        this.podeExcluir.set(res.pode_excluir === true);   // F59: quem pode excluir é o backend que diz
         this.loadingLotes.set(false);
       },
       error: err => {
@@ -922,30 +943,61 @@ export class AdminPontoComponent implements OnInit {
     const aviso = l.pendentes > 0
       ? `\n\nAtenção: Há ${l.pendentes} página(s) pendente(s).`
       : '';
-    // A mensal declara a natureza no confirm: a DEFINITIVA fecha o mês de quem está no lote.
-    const pergunta = l.tipo === 'MENSAL'
+    if (!confirm(`${this.perguntaDePublicacao(l)}${aviso}`)) return;
+
+    this.enviarPublicacao(l, false);
+  }
+
+  /** A pergunta do confirm. A mensal declara a natureza: a DEFINITIVA fecha o mês de quem está no lote. */
+  private perguntaDePublicacao(l: Lote): string {
+    return l.tipo === 'MENSAL'
       ? `Publicar folha mensal ${l.categoria === 'DEFINITIVA' ? 'DEFINITIVA' : 'PRÉVIA'} de ${this.periodoLote(l)}?`
       : 'Publicar lote e vincular as folhas aos destinatários?';
-    if (!confirm(`${pergunta}${aviso}`)) return;
+  }
+
+  /**
+   * O POST da publicação. Sem `confirmar_substituicao`, o backend NÃO publica um lote que tomaria o
+   * lugar de folhas já publicadas: devolve quantas pessoas seriam atingidas, e é essa contagem — a
+   * final, apurada sob o lock, com a lista de vínculos fechada — que vai ao segundo confirm.
+   */
+  private enviarPublicacao(l: Lote, confirmarSubstituicao: boolean): void {
+    const corpo: Record<string, unknown> = { emitir_aviso: l.emitirAviso !== false };
+    if (confirmarSubstituicao) corpo['confirmar_substituicao'] = true;
 
     this.marcarPublicando(l.id, true);
     this.definirErroPublicacao(l.id, '');   // nova tentativa: a recusa anterior sai da tela
-    this.api.post<any>(`/api/admin/ponto/lote/${l.id}/publicar`, { emitir_aviso: l.emitirAviso !== false }).subscribe({
+    this.api.post<any>(`/api/admin/ponto/lote/${l.id}/publicar`, corpo).subscribe({
       next: res => {
-        this.marcarPublicando(l.id, false);
-        if (res.ok) { this.marcarEscrita(l.id); this.aplicarLote(l, res.data); }
+        this.marcarPublicando(l.id, false);   // o botão volta antes do confirm: cancelar não o deixa travado
+        if (!res.ok) return;
+        if (res.data?.requer_confirmacao) { this.pedirConfirmacaoDaSubstituicao(l, res.data.substituicoes); return; }
+        this.marcarEscrita(l.id);
+        this.aplicarLote(l, res.data);
       },
       error: err => {
         this.marcarPublicando(l.id, false);
         // F57: a recusa do backend vem em `{ok:false, error:"<frase>"}` — a lista fixa `['message']`
-        // descartava justamente as frases que dizem O QUE FAZER ("Lote já está publicado.", as recusas
-        // da folha mensal, que NOMEIAM a pessoa em conflito). `erroCargaMsg` usa os dois campos e mantém
-        // a guia da tela na frente (em todo 500 o corpo é o genérico "Erro interno do servidor").
+        // descartava justamente as frases que dizem por que o lote não entrou. `erroCargaMsg` usa os
+        // dois campos e mantém a guia da tela na frente (em todo 500 o corpo é o genérico
+        // "Erro interno do servidor").
         const msg = erroCargaMsg(err, 'Não foi possível publicar o lote.');
-        this.definirErroPublicacao(l.id, msg);   // fica na tela: a recusa é uma TAREFA (quais páginas remover)
+        this.definirErroPublicacao(l.id, msg);   // fica na tela: o toast some em 12 s, a recusa não
         this.toast.error(msg);
       },
     });
+  }
+
+  /**
+   * O segundo passo: substituir folha de outras pessoas nunca acontece sem o admin dizer que sim,
+   * sabendo QUANTAS. Cancelar não publica nada — e o lote fica com a contagem que o backend acabou
+   * de apurar, que é a que o banner passa a mostrar.
+   */
+  private pedirConfirmacaoDaSubstituicao(l: Lote, quantas: number): void {
+    this.aplicarLote(l, { substituicoes: quantas });
+    if (!confirm(`${this.perguntaDePublicacao(l)} Substituirá as folhas publicadas de ${quantas} funcionário(s).`)) {
+      return;
+    }
+    this.enviarPublicacao(l, true);
   }
 
   /** Liga/desliga a trava de publicação daquele lote (F49) — nunca a dos outros. */

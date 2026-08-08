@@ -75,7 +75,8 @@ public class SumarioOcorrenciasService {
 
     /** Uma folha publicada candidata a representar um mês daquela pessoa. */
     private record Candidata(String loteId, String pessoaId, String pessoaTipo, String tipo, String categoria,
-                             LocalDate dataInicio, LocalDate dataFim, LocalDateTime criadoEm) {}
+                             LocalDate dataInicio, LocalDate dataFim,
+                             LocalDateTime publicadoEm, LocalDateTime criadoEm) {}
 
     /** A página vinculada, com a pessoa e o lote de onde ela veio. */
     private record Folha(ChavePessoa pessoa, String loteId) {}
@@ -83,13 +84,19 @@ public class SumarioOcorrenciasService {
     /**
      * Ordem da disputa por UM mês — vence a MAIOR. A natureza da folha decide primeiro (a definitiva
      * fecha o mês, a prévia o abre, a semanal é parcial); entre folhas de mesma natureza vence a que
-     * cobre mais dias DAQUELE mês, e o lote desempata para que a resposta não dependa da ordem de
-     * chegada.
+     * cobre mais dias DAQUELE mês.
+     *
+     * <p>Empatado tudo isso, o mês é representado pela folha <b>publicada mais recentemente</b> — o
+     * caso das duas definitivas do mesmo mês, que passaram a conviver quando publicar virou
+     * substituir: o sumário tem de contar as ocorrências da versão que vale, não da corrigida. A
+     * data do upload e o id do lote continuam depois, só para que a resposta nunca dependa da ordem
+     * de chegada das linhas.
      */
     private static Comparator<Candidata> precedenciaNo(YearMonth mes) {
         return Comparator.comparingInt((Candidata c) -> forca(c, mes))
                 .thenComparingLong(c -> diasCobertosNo(c, mes))
                 .thenComparing(Candidata::dataFim)
+                .thenComparing(Candidata::publicadoEm, Comparator.nullsFirst(Comparator.naturalOrder()))
                 .thenComparing(Candidata::criadoEm)
                 .thenComparing(Candidata::loteId);
     }
@@ -160,7 +167,8 @@ public class SumarioOcorrenciasService {
             ChavePessoa pessoa = new ChavePessoa(p.getPessoaId(), p.getPessoaTipo());
             folhaDaPagina.put(p.getId(), new Folha(pessoa, l.getId()));
             Candidata c = new Candidata(l.getId(), p.getPessoaId(), p.getPessoaTipo(),
-                    l.getTipo(), l.getCategoria(), l.getDataInicio(), l.getDataFim(), l.getCriadoEm());
+                    l.getTipo(), l.getCategoria(), l.getDataInicio(), l.getDataFim(),
+                    l.getPublicadoEm(), l.getCriadoEm());
             for (YearMonth mes : mesesTocados(l, de, ate)) {
                 Comparator<Candidata> precedencia = precedenciaNo(mes);
                 folhaDoMes.merge(new ChavePessoaMes(p.getPessoaId(), p.getPessoaTipo(), mes), c,

@@ -85,6 +85,16 @@ class SumarioOcorrenciasServiceTest {
         return lote(id, "SEMANAL", null, inicio, fim, ordemDeCriacao);
     }
 
+    /**
+     * A mesma folha, com a ordem em que foi PUBLICADA — a única coisa que separa duas folhas
+     * empatadas em natureza e cobertura, desde que publicar passou a substituir. Nos demais
+     * cenários o campo fica nulo, como num acervo anterior à substituição.
+     */
+    private static PontoLote publicadaNaOrdem(PontoLote lote, int ordemDePublicacao) {
+        lote.setPublicadoEm(LocalDateTime.of(2026, 8, 2, 9, 0).plusMinutes(ordemDePublicacao));
+        return lote;
+    }
+
     /** Par [página, lote] como a consulta das candidatas o devolve. */
     private static Object[] folhaDe(String paginaId, PontoLote lote, String pessoaId) {
         PontoLotePagina p = new PontoLotePagina();
@@ -164,6 +174,31 @@ class SumarioOcorrenciasServiceTest {
 
             assertEquals(1, celula(resposta, "Ana Lima", "FERNC"),
                     "só a definitiva conta: a prévia foi substituída, não somada");
+        }
+
+        /**
+         * O estado que a substituição de folhas criou: duas definitivas do mesmo mês convivendo no
+         * histórico. Elas empatam em tudo — natureza, cobertura, período —, e quem representa o mês é
+         * a que foi PUBLICADA por último. Contar a corrigida é o objetivo; contar as duas duplicaria
+         * os dias, e contar a antiga mostraria à chefia a versão que a Plansul já corrigiu.
+         */
+        @Test
+        @DisplayName("duas definitivas do mesmo mês: vale a publicada por último, não a enviada por último")
+        void definitivaPublicadaPorUltimoRepresentaOMes() {
+            PontoLote corrigida = publicadaNaOrdem(
+                    mensal("l-corrigida", PontoLote.CATEGORIA_DEFINITIVA, 2026, 7, 1), 2);
+            PontoLote original = publicadaNaOrdem(
+                    mensal("l-original", PontoLote.CATEGORIA_DEFINITIVA, 2026, 7, 2), 1);
+            candidatas(folhaDe("p-corrigida", corrigida, ANA), folhaDe("p-original", original, ANA));
+            dias(dia("p-original", "2026-07-10", "Falta"),
+                 dia("p-original", "2026-07-13", "Falta"),
+                 dia("p-corrigida", "2026-07-10", "Atecc"));
+
+            Map<String, Object> resposta = service.sumario(JULHO_DE, JULHO_ATE);
+
+            assertEquals(List.of("Atecc"), codigos(resposta),
+                    "a folha corrigida é a que vale — a original saiu de cena inteira");
+            assertEquals(1, celula(resposta, "Ana Lima", "Atecc"));
         }
 
         @Test

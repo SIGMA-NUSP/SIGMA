@@ -41,6 +41,7 @@ import br.leg.senado.nusp.enums.SubtipoAviso;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.it.support.CenarioFactory;
 import br.leg.senado.nusp.repository.PontoBancoSaldoRepository;
+import br.leg.senado.nusp.repository.PontoLotePaginaRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
@@ -86,6 +87,8 @@ class PontoExclusaoIT {
     @Autowired private AvisoService avisoService;
     @Autowired private SaldoAberturaService saldoAberturaService;
     @Autowired private PontoBancoSaldoRepository saldoRepo;
+    /** A pergunta do mês fechado, como a retificação a faz. */
+    @Autowired private PontoLotePaginaRepository paginaRepo;
 
     /** O contexto completo liga @EnableScheduling; estes dois fazem I/O de rede a cada poucos segundos. */
     @MockitoBean private AgendaLegislativaService agendaLegislativaService;
@@ -166,6 +169,13 @@ class PontoExclusaoIT {
     /** Lote em REVISÃO — o estado de onde a publicação (e a exclusão) parte. */
     private PontoLote loteEmRevisao(String tipo, LocalDate inicio, LocalDate fim) {
         PontoLote lote = CenarioFactory.novoLotePonto(em, tipo, inicio, fim, admin);
+        loteIds.add(lote.getId());
+        return lote;
+    }
+
+    /** Como o anterior, com a natureza da mensal escolhida (só a DEFINITIVA fecha o mês). */
+    private PontoLote loteEmRevisao(String tipo, String categoria, LocalDate inicio, LocalDate fim) {
+        PontoLote lote = CenarioFactory.novoLotePonto(em, tipo, categoria, inicio, fim, admin);
         loteIds.add(lote.getId());
         return lote;
     }
@@ -296,13 +306,16 @@ class PontoExclusaoIT {
                 // dela tem de voltar quando a folha de junho morrer.
                 folhaAnteriorDeAna = folhaAnteriorPublicada(ana, MAIO_INI, MAIO_FIM, BANCO_DE_MAIO);
 
+                // PRÉVIA: é a folha que aceita retificação, e o cenário precisa de retificações para
+                // provar o que morre com ela. Quem fecha o mês é a definitiva — e é o nested
+                // MensalReabreOMes que cuida dela.
                 alvo = loteEmRevisao("MENSAL", JUNHO_INI, JUNHO_FIM);
                 folhaDeAna = CenarioFactory.novaPaginaLote(em, alvo, 1, ana.getId(), "OPERADOR");
                 folhaDeBruno = CenarioFactory.novaPaginaLote(em, alvo, 2, bruno.getId(), "OPERADOR");
             });
             criarArquivos(alvo, folhaDeAna, folhaDeBruno);
 
-            pontoService.publicar(alvo.getId(), true);          // publicação REAL: aviso com ORIGEM + re-âncora
+            pontoService.publicar(alvo.getId(), true, false);          // publicação REAL: aviso com ORIGEM + re-âncora
             // As duas passam a ancorar na folha de junho — mas só Ana tem um passado (maio) para onde
             // voltar. É o par que exercita os dois ramos da re-âncora numa exclusão só.
             darBancoAFolha(folhaDeAna, ana, BANCO_DE_JUNHO);
@@ -373,7 +386,8 @@ class PontoExclusaoIT {
 
             // O retorno da API é o mesmo snapshot (é o que o front recebe).
             assertEquals(2, resumo.get("retificacoes_excluidas"));
-            assertEquals("06/2026", resumo.get("reabre_competencia"));
+            assertNull(resumo.get("reabre_competencia"),
+                    "a folha morta é uma PRÉVIA: ela nunca fechou o mês, e não há retificação a devolver");
         }
 
         @Test
@@ -385,7 +399,7 @@ class PontoExclusaoIT {
             assertEquals(2, preview.get("retificacoes_excluidas"));
             assertEquals(2, preview.get("avisos_removidos"), "os 2 alvos do aviso da publicação (Ana e Bruno)");
             assertEquals(3, preview.get("arquivos"), "2 páginas + o PDF original");
-            assertEquals("06/2026", preview.get("reabre_competencia"));
+            assertNull(preview.get("reabre_competencia"), "prévia não fecha mês — nada a reabrir");
 
             // ⚠️ O CenarioFactory sufixa o nome ("Ana da Folha 7") para não colidir entre execuções —
             // a chave do mapa é o nome REAL da entidade, não o rótulo do seed.
@@ -405,8 +419,8 @@ class PontoExclusaoIT {
         }
 
         @Test
-        @DisplayName("admin comum: 403 na cadeia real, e o lote continua lá com tudo (nada foi tocado)")
-        void adminComumNaoExclui() {
+        @DisplayName("lote PUBLICADO, admin comum: 403 na cadeia real, e o lote continua lá com tudo (nada foi tocado)")
+        void adminComumNaoExcluiLotePublicado() {
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                     () -> service.excluirLote(alvo.getId(), ADMIN_COMUM, admin.getId()));
 
@@ -437,7 +451,7 @@ class PontoExclusaoIT {
                 folhaDeBruno = CenarioFactory.novaPaginaLote(em, lote, 2, bruno.getId(), "OPERADOR");
             });
             criarArquivos(lote, folhaDeAna, folhaDeBruno);
-            pontoService.publicar(lote.getId(), true);
+            pontoService.publicar(lote.getId(), true, false);
             darBancoAFolha(folhaDeAna, ana, BANCO_DE_JUNHO);
             darBancoAFolha(folhaDeBruno, bruno, BANCO_DE_JUNHO);
             retificar(folhaDeAna, ana, LocalDate.of(2026, 6, 10));
@@ -501,7 +515,7 @@ class PontoExclusaoIT {
     class MensalReabreOMes {
 
         @Test
-        @DisplayName("mensal publicada por engano: a 2ª é recusada; excluída a 1ª, a 2ª PUBLICA")
+        @DisplayName("mensal publicada por engano: a 2ª substituiria; excluída a 1ª, ela publica direto")
         void mensalExcluidaLiberaACompetencia() {
             PontoLote errada = tx.execute(status -> {
                 PontoLote l = loteEmRevisao("MENSAL", JUNHO_INI, JUNHO_FIM);
@@ -514,20 +528,71 @@ class PontoExclusaoIT {
                 return l;
             });
 
-            pontoService.publicar(errada.getId(), true);
+            pontoService.publicar(errada.getId(), true, false);
 
-            // A guarda fecha o mês: a mensal CERTA não entra mais.
-            ServiceValidationException recusa = assertThrows(ServiceValidationException.class,
-                    () -> pontoService.publicar(correta.getId(), true));
-            assertTrue(recusa.getMessage().contains("já existe folha mensal prévia publicada"),
-                    () -> "a recusa da guarda: " + recusa.getMessage());
+            // Com a errada publicada, a mensal CERTA só entra substituindo — e o admin teria de confirmar.
+            Map<String, Object> pedido = pontoService.publicar(correta.getId(), true, false);
+            assertEquals(Boolean.TRUE, pedido.get("requer_confirmacao"),
+                    () -> "a folha do mês já existe: substituir é o caminho, e ele passa pela confirmação: " + pedido);
 
             service.excluirLote(errada.getId(), MASTER, admin.getId());
 
-            // Sem uma linha de código de "reabertura": morta a mensal, a guarda não acha mais conflito.
-            Map<String, Object> publicado = pontoService.publicar(correta.getId(), true);
+            // Sem uma linha de código de "reabertura": morta a mensal, não há mais nada a substituir —
+            // a folha certa publica no 1º passo, como se fosse a primeira do mês.
+            Map<String, Object> publicado = pontoService.publicar(correta.getId(), true, false);
             assertEquals("PUBLICADO", publicado.get("status"));
             assertEquals(1, avisosDe(ana), "a pessoa é avisada pela folha CERTA (a da errada morreu com ela)");
+        }
+
+        /**
+         * O que a exclusão de uma DEFINITIVA devolve é a RETIFICAÇÃO daqueles dias — publicar por cima
+         * nunca mais foi barrado. E ela só devolve quando era a última definitiva do mês da pessoa:
+         * havendo outra publicada (o histórico que a substituição criou), o mês segue fechado.
+         */
+        @Test
+        @DisplayName("excluída a única definitiva do mês, os dias voltam a aceitar retificação")
+        void definitivaExcluidaDevolveARetificacao() {
+            PontoLote definitiva = tx.execute(status -> {
+                PontoLote l = loteEmRevisao("MENSAL", PontoLote.CATEGORIA_DEFINITIVA, JUNHO_INI, JUNHO_FIM);
+                CenarioFactory.novaPaginaLote(em, l, 1, ana.getId(), "OPERADOR");
+                return l;
+            });
+            pontoService.publicar(definitiva.getId(), false, false);
+
+            assertEquals("06/2026", service.previewLote(definitiva.getId(), MASTER).get("reabre_competencia"));
+
+            Map<String, Object> resumo = service.excluirLote(definitiva.getId(), MASTER, admin.getId());
+
+            assertEquals("06/2026", resumo.get("reabre_competencia"));
+            assertEquals(0, definitivasPublicadasDe(ana, JUNHO_INI, JUNHO_FIM),
+                    "sem definitiva publicada, a guarda da retificação deixa o mês passar de novo");
+        }
+
+        @Test
+        @DisplayName("com uma SEGUNDA definitiva do mês publicada, excluir a primeira não reabre nada")
+        void segundaDefinitivaMantemOMesFechado() {
+            PontoLote primeira = tx.execute(status -> {
+                PontoLote l = loteEmRevisao("MENSAL", PontoLote.CATEGORIA_DEFINITIVA, JUNHO_INI, JUNHO_FIM);
+                CenarioFactory.novaPaginaLote(em, l, 1, ana.getId(), "OPERADOR");
+                return l;
+            });
+            PontoLote segunda = tx.execute(status -> {
+                PontoLote l = loteEmRevisao("MENSAL", PontoLote.CATEGORIA_DEFINITIVA, JUNHO_INI, JUNHO_FIM);
+                CenarioFactory.novaPaginaLote(em, l, 1, ana.getId(), "OPERADOR");
+                return l;
+            });
+            pontoService.publicar(primeira.getId(), false, false);
+            pontoService.publicar(segunda.getId(), false, true);   // substitui a primeira
+
+            assertNull(service.previewLote(primeira.getId(), MASTER).get("reabre_competencia"),
+                    "a segunda definitiva continua fechando o mês");
+            assertNull(service.excluirLote(primeira.getId(), MASTER, admin.getId()).get("reabre_competencia"));
+            assertEquals(1, definitivasPublicadasDe(ana, JUNHO_INI, JUNHO_FIM));
+        }
+
+        private long definitivasPublicadasDe(Operador pessoa, LocalDate inicio, LocalDate fim) {
+            return tx.execute(status -> paginaRepo.contarDefinitivasPublicadas(
+                    pessoa.getId(), "OPERADOR", inicio, fim));
         }
     }
 
@@ -544,7 +609,7 @@ class PontoExclusaoIT {
             PontoLote junho = tx.execute(status -> loteEmRevisao("MENSAL", JUNHO_INI, JUNHO_FIM));
             PontoLotePagina folhaDeJunho = tx.execute(status ->
                     CenarioFactory.novaPaginaLote(em, junho, 1, ana.getId(), "OPERADOR"));
-            pontoService.publicar(junho.getId(), false);
+            pontoService.publicar(junho.getId(), false, false);
             darBancoAFolha(folhaDeJunho, ana, BANCO_DE_JUNHO);
             assertEquals(BANCO_DE_JUNHO, saldoDe(ana).getSaldoAberturaMin(), "antes: ancorada em junho");
 
@@ -564,7 +629,7 @@ class PontoExclusaoIT {
             PontoLote junho = tx.execute(status -> loteEmRevisao("MENSAL", JUNHO_INI, JUNHO_FIM));
             PontoLotePagina folha = tx.execute(status ->
                     CenarioFactory.novaPaginaLote(em, junho, 1, ana.getId(), "OPERADOR"));
-            pontoService.publicar(junho.getId(), false);
+            pontoService.publicar(junho.getId(), false, false);
             darBancoAFolha(folha, ana, BANCO_DE_JUNHO);
 
             // Uma folga APROVADA depois da âncora: hoje ela já desconta do cache.
@@ -605,8 +670,8 @@ class PontoExclusaoIT {
             PontoLote loteB = tx.execute(status -> loteEmRevisao("SEMANAL", JUNHO_INI, LocalDate.of(2026, 6, 19)));
             PontoLotePagina folhaB = tx.execute(status ->
                     CenarioFactory.novaPaginaLote(em, loteB, 1, ana.getId(), "OPERADOR"));
-            pontoService.publicar(loteA.getId(), false);
-            pontoService.publicar(loteB.getId(), false);
+            pontoService.publicar(loteA.getId(), false, false);
+            pontoService.publicar(loteB.getId(), false, false);
 
             retificar(folhaA, ana, dia);   // o dia entra pela folha A (semanais cumulativas cobrem os dois)
 
@@ -662,6 +727,45 @@ class PontoExclusaoIT {
             assertEquals(0, saldo.getSaldoAberturaMin());
             assertNull(saldo.getAncoraPaginaId());
             assertEquals(1, trilhaDoLote(lote.getId()).size(), "a trilha existe mesmo na exclusão rasa");
+        }
+
+        /**
+         * O gêmeo do teste acima, pelo admin COMUM: em revisão o lote é trabalho que ainda não saiu
+         * para ninguém, e quem o enviou precisa poder descartá-lo sem depender do master. A trilha
+         * fica igual — assinada por quem excluiu.
+         */
+        @Test
+        @DisplayName("o admin comum exclui um lote em revisão — e a trilha registra o gesto dele")
+        void adminComumExcluiLoteEmRevisao() {
+            PontoLote lote = tx.execute(status -> loteEmRevisao("SEMANAL", JUNHO_INI, JUNHO_FIM));
+            PontoLotePagina folha = tx.execute(status ->
+                    CenarioFactory.novaPaginaLote(em, lote, 1, ana.getId(), "OPERADOR"));
+            criarArquivos(lote, folha);
+
+            Map<String, Object> preview = service.previewLote(lote.getId(), ADMIN_COMUM);
+            assertEquals(2, preview.get("arquivos"), "o preview também é dele");
+
+            service.excluirLote(lote.getId(), ADMIN_COMUM, admin.getId());
+
+            assertEquals(0, lotesComId(lote.getId()));
+            assertFalse(existeArquivo(folha.getArquivoPagina()));
+            assertEquals(1, trilhaDoLote(lote.getId()).size());
+        }
+
+        @Test
+        @DisplayName("a folha avulsa de um lote em revisão também é de qualquer admin")
+        void adminComumExcluiPaginaEmRevisao() {
+            PontoLote lote = tx.execute(status -> loteEmRevisao("SEMANAL", JUNHO_INI, JUNHO_FIM));
+            PontoLotePagina folha = tx.execute(status ->
+                    CenarioFactory.novaPaginaLote(em, lote, 1, ana.getId(), "OPERADOR"));
+            criarArquivos(lote, folha);
+
+            service.excluirPagina(lote.getId(), folha.getId(), ADMIN_COMUM, admin.getId());
+
+            assertEquals(1, lotesComId(lote.getId()), "o lote sobrevive à exclusão da folha");
+            assertEquals(0, paginasDoLote(lote.getId()));
+            assertFalse(existeArquivo(folha.getArquivoPagina()));
+            assertTrue(existeArquivo(lote.getArquivoOriginal()), "o PDF do lote é do lote, não da folha");
         }
     }
 }

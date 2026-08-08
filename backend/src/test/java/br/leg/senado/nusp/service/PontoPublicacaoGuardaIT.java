@@ -1,6 +1,7 @@
 package br.leg.senado.nusp.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -9,6 +10,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -124,42 +126,41 @@ class PontoPublicacaoGuardaIT {
     }
 
     @Test
-    @DisplayName("2ª folha MENSAL da pessoa no mesmo mês: 400 nomeando a pessoa e lote intacto (REVISAO)")
-    void segundaMensalDoMesmoMesRecusada() {
+    @DisplayName("2ª folha MENSAL da pessoa no mesmo mês: o 1º passo conta a substituição e não publica")
+    void segundaMensalDoMesmoMesSubstitui() {
         PontoLote junho = loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
-        service.publicar(junho.getId(), false);
+        service.publicar(junho.getId(), false, false);
         assertEquals("PUBLICADO", statusNoBanco(junho));
 
         PontoLote junhoDeNovo = loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
 
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.publicar(junhoDeNovo.getId(), true));
+        Map<String, Object> pedido = service.publicar(junhoDeNovo.getId(), true, false);
 
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        String msg = mensagemDoAdmin(ex);
-        assertEquals(ex.getMessage(), msg, "a frase tem de estar nos dois campos do erro");
-        assertTrue(msg.contains(operador.getNomeCompleto()),
-                () -> "a recusa precisa nomear quem está em conflito (é por ele que o admin acha a página): " + msg);
-        assertTrue(msg.contains("06/2026"), () -> "e dizer a competência já ocupada: " + msg);
-
-        assertEquals("REVISAO", statusNoBanco(junhoDeNovo), "o lote recusado não pode ter sido publicado");
+        assertEquals(Boolean.TRUE, pedido.get("requer_confirmacao"));
+        assertEquals(1, pedido.get("substituicoes"), "uma pessoa tem folha do mês para ser substituída");
+        assertEquals("REVISAO", statusNoBanco(junhoDeNovo), "o 1º passo não publica nada");
         verifyNoInteractions(avisoService);
+
+        service.publicar(junhoDeNovo.getId(), false, true);
+
+        assertEquals("PUBLICADO", statusNoBanco(junhoDeNovo), "confirmada, a folha nova entra");
+        assertEquals("PUBLICADO", statusNoBanco(junho), "a substituída continua no histórico do admin");
     }
 
     @Test
-    @DisplayName("SEMANAL atrasada de mês já fechado pela MENSAL publicada: 400 e lote intacto (REVISAO)")
+    @DisplayName("SEMANAL atrasada de mês já ocupado pela MENSAL publicada: 400 e lote intacto (REVISAO)")
     void semanalDeMesFechadoRecusada() {
-        service.publicar(loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)).getId(), false);
+        service.publicar(loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)).getId(), false, false);
 
         PontoLote semanalAtrasada = loteDoOperador("SEMANAL", LocalDate.of(2026, 6, 22), LocalDate.of(2026, 6, 28));
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.publicar(semanalAtrasada.getId(), true));
+                () -> service.publicar(semanalAtrasada.getId(), true, false));
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertTrue(mensagemDoAdmin(ex).contains("já foi fechado por folha mensal prévia publicada"),
+        assertEquals(ex.getMessage(), mensagemDoAdmin(ex), "a frase tem de estar nos dois campos do erro");
+        assertTrue(mensagemDoAdmin(ex).contains("Já existe folha prévia de Junho/2026 publicada."),
                 mensagemDoAdmin(ex));
-        assertTrue(mensagemDoAdmin(ex).contains("06/2026"), mensagemDoAdmin(ex));
         assertEquals("REVISAO", statusNoBanco(semanalAtrasada));
         verifyNoInteractions(avisoService);
     }
@@ -173,10 +174,11 @@ class PontoPublicacaoGuardaIT {
         CenarioFactory.novaPaginaLote(emReal(), lote, 2, operador.getId(), "OPERADOR");
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.publicar(lote.getId(), true));
+                () -> service.publicar(lote.getId(), true, false));
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertTrue(mensagemDoAdmin(ex).contains("mais de uma folha mensal"), mensagemDoAdmin(ex));
+        // Uma página não substitui a outra: aqui o nome fica, porque é ele que diz qual vínculo desfazer.
+        assertTrue(mensagemDoAdmin(ex).contains("mais de uma folha"), mensagemDoAdmin(ex));
         assertTrue(mensagemDoAdmin(ex).contains(operador.getNomeCompleto()), mensagemDoAdmin(ex));
         assertEquals("REVISAO", statusNoBanco(lote), "o lote recusado não pode ter sido publicado");
         verifyNoInteractions(avisoService);
@@ -189,10 +191,10 @@ class PontoPublicacaoGuardaIT {
         PontoLote junhoDoColega = CenarioFactory.novoLotePonto(emReal(), "MENSAL",
                 LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30), admin);
         CenarioFactory.novaPaginaLote(emReal(), junhoDoColega, 1, colega.getId(), "OPERADOR");
-        service.publicar(junhoDoColega.getId(), false);
+        service.publicar(junhoDoColega.getId(), false, false);
 
         PontoLote junhoDoOperador = loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
-        service.publicar(junhoDoOperador.getId(), false);
+        service.publicar(junhoDoOperador.getId(), false, false);
 
         assertEquals("PUBLICADO", statusNoBanco(junhoDoOperador));
     }
@@ -200,10 +202,10 @@ class PontoPublicacaoGuardaIT {
     @Test
     @DisplayName("SEMANAIS cumulativas do mesmo mês (01–05, 01–12) publicam: sobrepor período é o normal")
     void semanaisCumulativasPublicam() {
-        service.publicar(loteDoOperador("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5)).getId(), false);
+        service.publicar(loteDoOperador("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5)).getId(), false, false);
         PontoLote ate12 = loteDoOperador("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 12));
 
-        service.publicar(ate12.getId(), false);
+        service.publicar(ate12.getId(), false, false);
 
         assertEquals("PUBLICADO", statusNoBanco(ate12),
                 "a 2ª semanal reengloba os dias da 1ª — é assim que as folhas semanais funcionam");
@@ -212,10 +214,10 @@ class PontoPublicacaoGuardaIT {
     @Test
     @DisplayName("a MENSAL de junho não impede a MENSAL de julho da mesma pessoa")
     void mensalDeOutroMesPublica() {
-        service.publicar(loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)).getId(), false);
+        service.publicar(loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)).getId(), false, false);
         PontoLote julho = loteDoOperador("MENSAL", LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31));
 
-        service.publicar(julho.getId(), false);
+        service.publicar(julho.getId(), false, false);
 
         assertEquals("PUBLICADO", statusNoBanco(julho));
     }
@@ -225,7 +227,7 @@ class PontoPublicacaoGuardaIT {
     void primeiraMensalPublica() {
         PontoLote junho = loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
 
-        service.publicar(junho.getId(), false);
+        service.publicar(junho.getId(), false, false);
 
         assertEquals("PUBLICADO", statusNoBanco(junho));
         List<Object[]> pessoasComFolha = paginaRepo.findPessoasComFolhaPublicada();
@@ -234,29 +236,27 @@ class PontoPublicacaoGuardaIT {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // Prévia × definitiva — a única folha que entra por cima de outra
+    // A matriz da substituição contra o banco real
     // ══════════════════════════════════════════════════════════════
 
     /**
-     * A matriz do que NÃO passa, por [natureza já publicada no mês, tipo do lote novo, natureza dele,
-     * natureza que a recusa precisa citar]. De todas as combinações possíveis sobra uma só publicável
-     * — a definitiva sobre a prévia —, e ela tem teste próprio.
+     * O que NÃO passa, por [natureza já publicada no mês, tipo do lote novo, natureza dele, natureza
+     * que a recusa precisa citar]. Sobraram duas famílias: a semanal atrasada de mês que uma mensal
+     * já ocupa (seja ela prévia ou definitiva) e a prévia tentando entrar depois da definitiva.
      */
     private static Stream<Arguments> combinacoesRecusadas() {
         return Stream.of(
-                Arguments.of(PontoLote.CATEGORIA_PREVIA, "SEMANAL", null, " prévia"),
-                Arguments.of(PontoLote.CATEGORIA_DEFINITIVA, "SEMANAL", null, " definitiva"),
-                Arguments.of(PontoLote.CATEGORIA_PREVIA, "MENSAL", PontoLote.CATEGORIA_PREVIA, " prévia"),
-                Arguments.of(PontoLote.CATEGORIA_DEFINITIVA, "MENSAL", PontoLote.CATEGORIA_PREVIA, " definitiva"),
-                Arguments.of(PontoLote.CATEGORIA_DEFINITIVA, "MENSAL", PontoLote.CATEGORIA_DEFINITIVA, " definitiva"));
+                Arguments.of(PontoLote.CATEGORIA_PREVIA, "SEMANAL", null, "prévia"),
+                Arguments.of(PontoLote.CATEGORIA_DEFINITIVA, "SEMANAL", null, "definitiva"),
+                Arguments.of(PontoLote.CATEGORIA_DEFINITIVA, "MENSAL", PontoLote.CATEGORIA_PREVIA, "definitiva"));
     }
 
     @ParameterizedTest(name = "{1} {2} contra mensal {0} publicada")
     @MethodSource("combinacoesRecusadas")
-    @DisplayName("matriz da recusa: 400 dizendo a pessoa, a competência ocupada e a natureza que a ocupa")
+    @DisplayName("matriz da recusa: 400 dizendo a competência ocupada e a natureza que a ocupa")
     void matrizDeRecusaPorNatureza(String jaPublicada, String tipoNovo, String categoriaNova, String natureza) {
         service.publicar(loteDoOperador("MENSAL", jaPublicada,
-                LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)).getId(), false);
+                LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)).getId(), false, false);
 
         // A semanal atrasada cai DENTRO do mês já ocupado; a mensal disputa a competência inteira.
         PontoLote candidato = "SEMANAL".equals(tipoNovo)
@@ -264,19 +264,68 @@ class PontoPublicacaoGuardaIT {
                 : loteDoOperador(tipoNovo, categoriaNova, LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.publicar(candidato.getId(), true));
+                () -> service.publicar(candidato.getId(), true, false));
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         String msg = mensagemDoAdmin(ex);
-        String esperado = "MENSAL".equals(tipoNovo)
-                ? "já existe folha mensal" + natureza + " publicada de "
-                : "já foi fechado por folha mensal" + natureza + " publicada";
-        assertTrue(msg.contains(esperado),
-                () -> "a recusa tem de dizer a natureza do que ocupa o mês (" + natureza.trim() + "): " + msg);
-        assertTrue(msg.contains(operador.getNomeCompleto() + " (06/2026)"),
-                () -> "e nomear a pessoa junto da competência ocupada: " + msg);
+        assertTrue(msg.contains("Já existe folha " + natureza + " de Junho/2026 publicada."),
+                () -> "a recusa tem de dizer a natureza do que ocupa o mês (" + natureza + "): " + msg);
+        assertFalse(msg.contains(operador.getNomeCompleto()),
+                () -> "e não nomeia ninguém: a ação do admin é descartar o lote: " + msg);
         assertEquals("REVISAO", statusNoBanco(candidato), "o lote recusado não pode ter sido publicado");
         verifyNoInteractions(avisoService);
+    }
+
+    /** O que SUBSTITUI, por [natureza já publicada no mês, natureza do lote mensal novo]. */
+    private static Stream<Arguments> combinacoesSubstituidas() {
+        return Stream.of(
+                Arguments.of(PontoLote.CATEGORIA_PREVIA, PontoLote.CATEGORIA_PREVIA),
+                Arguments.of(PontoLote.CATEGORIA_PREVIA, PontoLote.CATEGORIA_DEFINITIVA),
+                Arguments.of(PontoLote.CATEGORIA_DEFINITIVA, PontoLote.CATEGORIA_DEFINITIVA));
+    }
+
+    @ParameterizedTest(name = "mensal {1} sobre mensal {0} publicada")
+    @MethodSource("combinacoesSubstituidas")
+    @DisplayName("matriz da substituição: o 1º passo conta a pessoa, o 2º publica e a antiga fica no histórico")
+    void matrizDeSubstituicaoPorNatureza(String jaPublicada, String categoriaNova) {
+        PontoLote publicada = loteDoOperador("MENSAL", jaPublicada,
+                LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
+        service.publicar(publicada.getId(), false, false);
+
+        PontoLote candidato = loteDoOperador("MENSAL", categoriaNova,
+                LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
+
+        Map<String, Object> pedido = service.publicar(candidato.getId(), true, false);
+        assertEquals(Boolean.TRUE, pedido.get("requer_confirmacao"));
+        assertEquals(1, pedido.get("substituicoes"));
+        assertEquals("REVISAO", statusNoBanco(candidato));
+        verifyNoInteractions(avisoService);
+
+        service.publicar(candidato.getId(), false, true);
+
+        assertEquals("PUBLICADO", statusNoBanco(candidato));
+        assertEquals("PUBLICADO", statusNoBanco(publicada),
+                "a folha substituída não é apagada nem despublicada: ela só some da vista do dono");
+    }
+
+    @Test
+    @DisplayName("SEMANAL do período EXATAMENTE igual substitui; a de período diferente convive")
+    void semanalSobreSemanalDoMesmoPeriodo() {
+        LocalDate inicio = LocalDate.of(2026, 6, 1);
+        LocalDate fim = LocalDate.of(2026, 6, 5);
+        service.publicar(loteDoOperador("SEMANAL", inicio, fim).getId(), false, false);
+
+        PontoLote outroPeriodo = loteDoOperador("SEMANAL", inicio, LocalDate.of(2026, 6, 12));
+        service.publicar(outroPeriodo.getId(), false, false);
+        assertEquals("PUBLICADO", statusNoBanco(outroPeriodo), "01–12 reengloba 01–05, e as duas convivem");
+
+        PontoLote mesmoPeriodo = loteDoOperador("SEMANAL", inicio, fim);
+
+        Map<String, Object> pedido = service.publicar(mesmoPeriodo.getId(), true, false);
+
+        assertEquals(Boolean.TRUE, pedido.get("requer_confirmacao"), () -> "período idêntico substitui: " + pedido);
+        assertEquals(1, pedido.get("substituicoes"));
+        assertEquals("REVISAO", statusNoBanco(mesmoPeriodo));
     }
 
     @Test
@@ -284,12 +333,12 @@ class PontoPublicacaoGuardaIT {
     void definitivaEntraPorCimaDaPrevia() {
         PontoLote previa = loteDoOperador("MENSAL", PontoLote.CATEGORIA_PREVIA,
                 LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
-        service.publicar(previa.getId(), false);
+        service.publicar(previa.getId(), false, false);
 
         PontoLote definitiva = loteDoOperador("MENSAL", PontoLote.CATEGORIA_DEFINITIVA,
                 LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
 
-        service.publicar(definitiva.getId(), false);
+        service.publicar(definitiva.getId(), false, true);
 
         assertEquals("PUBLICADO", statusNoBanco(definitiva));
         assertEquals("PUBLICADO", statusNoBanco(previa),

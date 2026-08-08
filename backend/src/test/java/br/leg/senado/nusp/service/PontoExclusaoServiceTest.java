@@ -66,8 +66,9 @@ import static org.mockito.Mockito.when;
  * Unitários da exclusão de publicações do Ponto — o que se prova SEM banco:
  *
  * <ul>
- *   <li>a PERMISSÃO: só o master (a propriedade {@code app.admin.master-username}, nunca um nome
- *       hardcoded) passa; para todos os outros é 403 e <b>nada é tocado</b> — nem lido;</li>
+ *   <li>a PERMISSÃO, que sai do STATUS do lote: em revisão passa qualquer admin; publicado, só o
+ *       master (a propriedade {@code app.admin.master-username}, nunca um nome hardcoded) — e para
+ *       os outros é 403 com <b>nada além do lote</b> tocado;</li>
  *   <li>os alvos inexistentes (404) e a página de outro lote (400);</li>
  *   <li>a ORDEM das deleções: retificações → flush → avisos → linhas da folha → páginas → flush →
  *       re-âncora. Trocar dois passos aqui é ORA-02292 ou uma âncora que volta para a folha que
@@ -124,10 +125,15 @@ class PontoExclusaoServiceTest {
 
     // ── fixtures ──
 
+    /**
+     * O lote dos cenários. A mensal nasce DEFINITIVA porque é ela que fecha o mês — a única cuja
+     * exclusão devolve os dias à retificação (a prévia não fecha nada).
+     */
     private static PontoLote lote(String tipo, String status) {
         PontoLote l = new PontoLote();
         l.setId(LOTE);
         l.setTipo(tipo);
+        if ("MENSAL".equals(tipo)) l.setCategoria(PontoLote.CATEGORIA_DEFINITIVA);
         l.setDataInicio(LocalDate.of(2026, 6, 1));
         l.setDataFim(LocalDate.of(2026, 6, 30));
         l.setStatus(status);
@@ -188,7 +194,12 @@ class PontoExclusaoServiceTest {
 
     /** Lote publicado + 1 página do OP, sem retificação, sem aviso, sem saldo — o cenário mais simples. */
     private PontoLote cenarioMinimo(String tipo) {
-        PontoLote l = lote(tipo, "PUBLICADO");
+        return cenarioMinimo(tipo, "PUBLICADO");
+    }
+
+    /** O mesmo cenário mínimo, num lote de status escolhido (é o status que define quem pode excluir). */
+    private PontoLote cenarioMinimo(String tipo, String status) {
+        PontoLote l = lote(tipo, status);
         when(loteRepo.lockPorId(LOTE)).thenReturn(Optional.of(l));
         when(paginaRepo.findByLoteIdOrderByNumeroPagina(LOTE)).thenReturn(List.of(pagina(PAGINA, OP)));
         when(retificacaoRepo.findByPaginaIdIn(List.of(PAGINA))).thenReturn(List.of());
@@ -200,18 +211,23 @@ class PontoExclusaoServiceTest {
 
     // ══════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("permissão — só o master, e o resto nem lê o banco")
+    @DisplayName("permissão — o status do lote diz quem exclui")
     class Permissao {
 
         /**
-         * A recusa vem ANTES de qualquer leitura. Não é preciosismo: o preview conta retificações e
-         * NOMEIA os destinatários dos avisos de outras pessoas — um admin comum não pode extrair isso
-         * nem "de leve", e um DELETE que já leu o lote antes de recusar é um DELETE a um refactor de
-         * distância de acontecer.
+         * A recusa do lote PUBLICADO vem logo depois de ler o lote (é o status dele que define a
+         * permissão) e ANTES de qualquer outra leitura. Não é preciosismo: o preview conta
+         * retificações e NOMEIA os destinatários dos avisos de outras pessoas — um admin comum não
+         * pode extrair isso nem "de leve", e um DELETE que já levantou os fatos antes de recusar é
+         * um DELETE a um refactor de distância de acontecer.
          */
         @Test
-        @DisplayName("admin comum: 403 nas QUATRO rotas, e nenhum repositório é tocado")
-        void naoMasterRecebe403SemTocarNada() {
+        @DisplayName("lote publicado, admin comum: 403 nas QUATRO rotas, e nada além do lote é lido")
+        void naoMasterRecebe403EmLotePublicado() {
+            PontoLote publicado = lote("MENSAL", "PUBLICADO");
+            when(loteRepo.findById(LOTE)).thenReturn(Optional.of(publicado));
+            when(loteRepo.lockPorId(LOTE)).thenReturn(Optional.of(publicado));
+
             List<ServiceValidationException> recusas = List.of(
                     assertThrows(ServiceValidationException.class,
                             () -> service.previewLote(LOTE, OUTRO_ADMIN)),
@@ -226,30 +242,84 @@ class PontoExclusaoServiceTest {
                 assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
                 assertEquals("forbidden", ex.getMessage());
             }
-            verifyNoInteractions(loteRepo, paginaRepo, folhaLinhaRepo, retificacaoRepo, saldoRepo,
+            verifyNoInteractions(paginaRepo, folhaLinhaRepo, retificacaoRepo, saldoRepo,
                     exclusaoLogRepo, cadastroRepo, alvoRepo, cienciaRepo, saldoAberturaService);
+            verify(loteRepo, never()).delete(any(PontoLote.class));
         }
 
         @Test
-        @DisplayName("usuário nulo/anônimo também leva 403 (nada de master por omissão)")
+        @DisplayName("usuário nulo/anônimo também leva 403 no lote publicado (nada de master por omissão)")
         void usuarioNuloRecebe403() {
+            when(loteRepo.lockPorId(LOTE)).thenReturn(Optional.of(lote("MENSAL", "PUBLICADO")));
+
             assertEquals(HttpStatus.FORBIDDEN,
                     assertThrows(ServiceValidationException.class,
                             () -> service.excluirLote(LOTE, null, CALLER_ID)).getStatus());
-            verifyNoInteractions(loteRepo);
+            verifyNoInteractions(paginaRepo, exclusaoLogRepo);
+        }
+
+        /**
+         * O lote em revisão é o PDF que o admin acabou de enviar e ainda não saiu para ninguém —
+         * sem ele poder descartá-lo, um envio errado ficaria para sempre na tela esperando o master.
+         */
+        @Test
+        @DisplayName("lote em revisão: o admin comum exclui o lote inteiro, com trilha")
+        void adminComumExcluiLoteEmRevisao() {
+            cenarioMinimo("MENSAL", "REVISAO");
+
+            service.excluirLote(LOTE, OUTRO_ADMIN, CALLER_ID);
+
+            verify(loteRepo).delete(any(PontoLote.class));
+            verify(exclusaoLogRepo).save(any(PontoExclusaoLog.class));   // a trilha é a mesma para todos
         }
 
         @Test
-        @DisplayName("podeExcluir — a flag do front sai da MESMA regra do 403 (case-insensitive, como o AdminCrudService)")
+        @DisplayName("lote em revisão: o admin comum também exclui uma folha avulsa (o lote sobrevive)")
+        void adminComumExcluiPaginaEmRevisao() {
+            when(loteRepo.lockPorId(LOTE)).thenReturn(Optional.of(lote("SEMANAL", "REVISAO")));
+            when(paginaRepo.findById(PAGINA)).thenReturn(Optional.of(pagina(PAGINA, OP)));
+            when(retificacaoRepo.findByPaginaIdIn(List.of(PAGINA))).thenReturn(List.of());
+            when(cadastroRepo.findByOrigemLoteId(LOTE)).thenReturn(List.of());
+            when(saldoRepo.findByPessoaIdAndPessoaTipo(OP, "OPERADOR")).thenReturn(Optional.empty());
+            stubOperador(OP, NOME_OP);
+
+            service.excluirPagina(LOTE, PAGINA, OUTRO_ADMIN, CALLER_ID);
+
+            verify(paginaRepo).deleteAll(anyList());
+            verify(loteRepo, never()).delete(any(PontoLote.class));
+            verify(exclusaoLogRepo).save(any(PontoExclusaoLog.class));
+        }
+
+        @Test
+        @DisplayName("lote em revisão: o preview é de qualquer admin — e não reabre competência nenhuma")
+        void previewEmRevisaoParaAdminComum() {
+            when(loteRepo.findById(LOTE)).thenReturn(Optional.of(lote("MENSAL", "REVISAO")));
+            when(paginaRepo.findByLoteIdOrderByNumeroPagina(LOTE)).thenReturn(List.of(pagina(PAGINA, OP)));
+            when(retificacaoRepo.findByPaginaIdIn(List.of(PAGINA))).thenReturn(List.of());
+            when(cadastroRepo.findByOrigemLoteId(LOTE)).thenReturn(List.of());
+            when(saldoRepo.findByPessoaIdAndPessoaTipo(OP, "OPERADOR")).thenReturn(Optional.empty());
+            stubOperador(OP, NOME_OP);
+
+            Map<String, Object> pv = service.previewLote(LOTE, OUTRO_ADMIN);
+
+            assertEquals(1, pv.get("paginas_excluidas"));
+            assertNull(pv.get("reabre_competencia"));   // lote não publicado não fechou mês nenhum
+        }
+
+        @Test
+        @DisplayName("podeExcluir — a flag POR LOTE sai da MESMA regra do 403 (case-insensitive, como o AdminCrudService)")
         void flagPodeExcluir() {
-            assertTrue(service.podeExcluir(MASTER));
-            assertTrue(service.podeExcluir("MASTER.TESTE"));
-            assertFalse(service.podeExcluir(OUTRO_ADMIN));
-            assertFalse(service.podeExcluir(null));
+            assertTrue(service.podeExcluir("PUBLICADO", MASTER));
+            assertTrue(service.podeExcluir("PUBLICADO", "MASTER.TESTE"));
+            assertFalse(service.podeExcluir("PUBLICADO", OUTRO_ADMIN));
+            assertFalse(service.podeExcluir("PUBLICADO", null));
+            assertTrue(service.podeExcluir("REVISAO", OUTRO_ADMIN));
+            assertTrue(service.podeExcluir("REVISAO", null));
+            assertTrue(service.podeExcluir("REVISAO", MASTER));
         }
 
         @Test
-        @DisplayName("o master passa: a exclusão do lote acontece")
+        @DisplayName("o master passa: a exclusão do lote publicado acontece")
         void masterPassa() {
             cenarioMinimo("SEMANAL");
 
@@ -536,7 +606,8 @@ class PontoExclusaoServiceTest {
             assertEquals(2, pv.get("retificacoes_excluidas"));
             assertEquals(1, pv.get("avisos_removidos"));
             assertEquals(List.of(NOME_OP), pv.get("avisos_destinatarios"));
-            assertEquals("06/2026", pv.get("reabre_competencia"), "mensal publicada: o mês reabre");
+            assertEquals("06/2026", pv.get("reabre_competencia"),
+                    "era a única definitiva do mês: os dias voltam a aceitar retificação");
             assertEquals(2, pv.get("arquivos"), "o PDF da página + o PDF original do lote");
 
             Map<String, Object> lote = (Map<String, Object>) pv.get("lote");
@@ -606,6 +677,41 @@ class PontoExclusaoServiceTest {
             assertEquals(0, pv.get("avisos_removidos"));
             assertNull(pv.get("reabre_competencia"), "lote não publicado nunca fechou mês nenhum");
             assertEquals(2, pv.get("arquivos"), "os PDFs existem desde o upload — e vão embora");
+        }
+
+        /**
+         * Publicar passou a substituir, e o mês de uma pessoa pode ter mais de uma definitiva no
+         * histórico. Excluir uma delas não devolve nada à retificação: a outra continua fechando o mês
+         * — prometer a reabertura seria mentir para quem está prestes a apagar folhas.
+         */
+        @Test
+        @DisplayName("com OUTRA definitiva do mês publicada, a exclusão não promete reabertura")
+        void previewNaoReabreQuandoOutraDefinitivaFecha() {
+            when(paginaRepo.findByLoteIdOrderByNumeroPagina(LOTE)).thenReturn(List.of(pagina(PAGINA, OP)));
+            when(retificacaoRepo.findByPaginaIdIn(List.of(PAGINA))).thenReturn(List.of());
+            when(cadastroRepo.findByOrigemLoteId(LOTE)).thenReturn(List.of());
+            when(saldoRepo.findByPessoaIdAndPessoaTipo(OP, "OPERADOR")).thenReturn(Optional.empty());
+            when(paginaRepo.findPessoasComMensalPublicadaNoPeriodo(eq(LOTE), anyCollection(), any(), any()))
+                    .thenReturn(List.<Object[]>of(new Object[] {
+                            OP, "OPERADOR", LocalDate.of(2026, 6, 1), PontoLote.CATEGORIA_DEFINITIVA }));
+            stubOperador(OP, NOME_OP);
+
+            assertNull(service.previewLote(LOTE, MASTER).get("reabre_competencia"));
+        }
+
+        @Test
+        @DisplayName("prévia publicada: excluí-la não reabre nada — ela nunca fechou o mês")
+        void previewDePreviaNaoReabre() {
+            PontoLote previa = lote("MENSAL", "PUBLICADO");
+            previa.setCategoria(PontoLote.CATEGORIA_PREVIA);
+            when(loteRepo.findById(LOTE)).thenReturn(Optional.of(previa));
+            when(paginaRepo.findByLoteIdOrderByNumeroPagina(LOTE)).thenReturn(List.of(pagina(PAGINA, OP)));
+            when(retificacaoRepo.findByPaginaIdIn(List.of(PAGINA))).thenReturn(List.of());
+            when(cadastroRepo.findByOrigemLoteId(LOTE)).thenReturn(List.of());
+            when(saldoRepo.findByPessoaIdAndPessoaTipo(OP, "OPERADOR")).thenReturn(Optional.empty());
+            stubOperador(OP, NOME_OP);
+
+            assertNull(service.previewLote(LOTE, MASTER).get("reabre_competencia"));
         }
 
         @Test

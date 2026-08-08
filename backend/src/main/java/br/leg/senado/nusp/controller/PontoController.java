@@ -28,6 +28,8 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -80,23 +82,39 @@ public class PontoController {
     }
 
     /**
-     * Lotes enviados. A resposta carrega {@code pode_excluir} — o backend comparando o principal ao
-     * {@code app.admin.master-username} (F59). É essa flag, e nunca o username no front, que decide se
-     * o X de exclusão aparece; a SEGURANÇA continua sendo o 403 do service.
+     * Lotes enviados. Cada lote carrega o seu {@code pode_excluir} — a permissão depende do STATUS
+     * dele (em revisão, qualquer admin; publicado, só o master), e por isso a flag é por LOTE, não do
+     * usuário. É ela, e nunca o username no front, que decide se o X de exclusão aparece naquela
+     * linha; a SEGURANÇA continua sendo o 403 do service.
      */
     @AdminOnly
     @GetMapping("/api/admin/ponto/lotes")
     public ResponseEntity<?> lotes(@AuthenticationPrincipal UserPrincipal principal) {
-        return ResponseEntity.ok(Map.of(
-                "ok", true,
-                "data", pontoService.listarLotes(),
-                "pode_excluir", pontoExclusaoService.podeExcluir(principal.getUsername())));
+        List<Map<String, Object>> lotes = new ArrayList<>();
+        for (Map<String, Object> lote : pontoService.listarLotes()) {
+            lotes.add(comPermissaoDeExcluir(lote, principal));
+        }
+        return ResponseEntity.ok(Map.of("ok", true, "data", lotes));
     }
 
     @AdminOnly
     @GetMapping("/api/admin/ponto/lote/{id}")
-    public ResponseEntity<?> lote(@PathVariable String id) {
-        return ResponseEntity.ok(Map.of("ok", true, "data", pontoService.obterLote(id)));
+    public ResponseEntity<?> lote(@PathVariable String id, @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(Map.of("ok", true, "data",
+                comPermissaoDeExcluir(pontoService.obterLote(id), principal)));
+    }
+
+    /**
+     * O lote como a tela precisa dele: o payload do service mais a permissão de exclusão DESTE
+     * usuário sobre ELE. A permissão sai do status, então acompanha o lote em toda resposta que o
+     * descreve — inclusive a da publicação, que é justamente quando o status muda e o X tem de sumir
+     * para quem não é master. Vai numa CÓPIA: o mapa do service não é reescrito por quem o consome.
+     */
+    private Map<String, Object> comPermissaoDeExcluir(Map<String, Object> lote, UserPrincipal principal) {
+        Map<String, Object> out = new LinkedHashMap<>(lote);
+        out.put("pode_excluir",
+                pontoExclusaoService.podeExcluir((String) lote.get("status"), principal.getUsername()));
+        return out;
     }
 
     @AdminOnly
@@ -126,13 +144,24 @@ public class PontoController {
      * {@code false} o desliga, e um {@code emitir_aviso} de outro tipo é 400 nomeando o campo — a
      * string {@code "false"} publicava COM aviso, disparando um aviso pessoal por pessoa da folha
      * exatamente quando o cliente pediu silêncio (F35).
+     *
+     * <p>{@code confirmar_substituicao} é o SEGUNDO passo: sem ele, um lote que substituiria folhas
+     * já publicadas não publica nada — a resposta volta com {@code requer_confirmacao} e a contagem
+     * de pessoas atingidas, para o admin decidir. O default é {@code false} de propósito: substituir
+     * folha de outras pessoas nunca acontece por omissão do cliente.
      */
     @AdminOnly
     @PostMapping("/api/admin/ponto/lote/{id}/publicar")
     public ResponseEntity<?> publicar(@PathVariable String id,
-                                      @RequestBody(required = false) Map<String, Object> body) {
+                                      @RequestBody(required = false) Map<String, Object> body,
+                                      @AuthenticationPrincipal UserPrincipal principal) {
         boolean emitirAviso = optBooleano(body, "emitir_aviso", true);
-        return ResponseEntity.ok(Map.of("ok", true, "data", pontoService.publicar(id, emitirAviso)));
+        boolean confirmar = optBooleano(body, "confirmar_substituicao", false);
+        Map<String, Object> data = pontoService.publicar(id, emitirAviso, confirmar);
+        // O 1º passo não devolve lote nenhum — só o pedido de confirmação, que não tem permissão a levar.
+        boolean publicou = !data.containsKey("requer_confirmacao");
+        return ResponseEntity.ok(Map.of("ok", true, "data",
+                publicou ? comPermissaoDeExcluir(data, principal) : data));
     }
 
     @AdminOnly
@@ -141,11 +170,12 @@ public class PontoController {
         return streamPdf(pontoService.previewPagina(id), false);
     }
 
-    // ══ Exclusão de publicações (F59) — SOMENTE o admin master ═══
+    // ══ Exclusão de lotes e folhas (F59) ════════════════════════
     //
-    // O @AdminOnly barra o não-admin; o master é conferido no service (403 "forbidden"), que é onde a
-    // permissão pode ser provada. As quatro rotas são master-only, preview inclusive: o preview conta
-    // retificações e nomeia destinatários de aviso — não é informação de qualquer admin.
+    // O @AdminOnly barra o não-admin; a permissão do gesto é conferida no service (403 "forbidden"),
+    // que é onde ela pode ser provada: lote em revisão, qualquer admin; lote publicado, só o master.
+    // O preview segue a regra da exclusão que ele descreve — num lote publicado ele conta retificações
+    // e nomeia destinatários de aviso, e essa não é informação de qualquer admin.
 
     /** O que a exclusão do LOTE vai destruir (consultivo — a verdade é a da transação de exclusão). */
     @AdminOnly

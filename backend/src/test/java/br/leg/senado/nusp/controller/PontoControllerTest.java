@@ -91,6 +91,9 @@ class PontoControllerTest {
     private static final String PAGINA_ID = "c9f0f895-fb98-4b1e-a5d2-1b0ab1e2c3d4";
     private static final String SOLICITACAO_ID = "45c48cce-2e2d-4d1f-b8f9-fbcd8b1d5a11";
 
+    /** O username que o token carrega ({@code teste.<perfil>}) — é ele que o controller repassa. */
+    private static final String USERNAME_DO_TOKEN = "teste." + TokenFactory.ADMIN;
+
     /** Mensagem única do handler de requisição malformada. */
     private static final String MSG_BINDING_INVALIDO = "Requisição inválida. Verifique os dados enviados.";
 
@@ -215,15 +218,16 @@ class PontoControllerTest {
         verify(pontoService).listarLotes();
     }
 
-    // ══ 3) Exclusão de publicações — master-only ════════════════════════════
+    // ══ 3) Exclusão de lote/página ═════════════════════════════════════════
 
     /**
-     * A permissão de excluir viaja como FLAG na listagem, computada pelo backend a partir do
-     * {@code username} do principal (o front nunca compara nome de usuário). É ela que faz o X
-     * aparecer — e é só um controle de UI: quem chamar o DELETE mesmo assim leva o 403 do service.
+     * A permissão de excluir viaja como FLAG de CADA LOTE da listagem, computada pelo backend a
+     * partir do status do lote e do {@code username} do principal (o front nunca compara nome de
+     * usuário). É ela que faz o X aparecer naquela linha — e é só um controle de UI: quem chamar o
+     * DELETE mesmo assim leva o 403 do service.
      */
     @Nested
-    @DisplayName("exclusão de lote/página pelo admin master")
+    @DisplayName("exclusão de lote/página (em revisão, qualquer admin; publicado, o master)")
     class ExclusaoDePublicacoes {
 
         private static final String PREVIEW_LOTE = "/api/admin/ponto/lote/" + LOTE_ID + "/exclusao/preview";
@@ -232,27 +236,50 @@ class PontoControllerTest {
         private static final String DELETE_LOTE = "/api/admin/ponto/lote/" + LOTE_ID;
         private static final String DELETE_PAGINA = "/api/admin/ponto/lote/" + LOTE_ID + "/pagina/" + PAGINA_ID;
 
-        /** O username que o token carrega ({@code teste.<perfil>}) — é ele que o controller repassa. */
-        private static final String USERNAME_DO_TOKEN = "teste." + TokenFactory.ADMIN;
-
+        /**
+         * A flag é decidida LOTE A LOTE, pelo status daquele lote e pelo username do principal — e o
+         * lote do service chega intacto: a permissão é acrescentada numa cópia, nunca escrita por
+         * cima do payload que ele montou.
+         */
         @Test
-        @DisplayName("GET /lotes carrega pode_excluir, computado pelo backend a partir do username do principal")
-        void listagemCarregaAFlagDoMaster() throws Exception {
-            when(pontoExclusaoService.podeExcluir(USERNAME_DO_TOKEN)).thenReturn(true);
+        @DisplayName("GET /lotes: o pode_excluir vem em CADA lote, decidido pelo status e pelo principal")
+        void listagemCarregaAFlagPorLote() throws Exception {
+            when(pontoService.listarLotes()).thenReturn(List.of(
+                    Map.of("id", LOTE_ID, "status", "REVISAO"),
+                    Map.of("id", PAGINA_ID, "status", "PUBLICADO")));
+            when(pontoExclusaoService.podeExcluir("REVISAO", USERNAME_DO_TOKEN)).thenReturn(true);
+            when(pontoExclusaoService.podeExcluir("PUBLICADO", USERNAME_DO_TOKEN)).thenReturn(false);
 
             mockMvc.perform(Requests.get("/api/admin/ponto/lotes").header("Authorization", admin))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.pode_excluir").value(true));
-
-            verify(pontoExclusaoService).podeExcluir(USERNAME_DO_TOKEN);
+                    .andExpect(jsonPath("$.data[0].id").value(LOTE_ID))
+                    .andExpect(jsonPath("$.data[0].pode_excluir").value(true))
+                    .andExpect(jsonPath("$.data[1].pode_excluir").value(false))
+                    // A flag saiu da raiz: quem lê o envelope não decide mais nada por ela.
+                    .andExpect(jsonPath("$.pode_excluir").doesNotExist());
         }
 
+        /**
+         * A permissão acompanha o lote em toda resposta que o descreve — e a publicação é o momento
+         * exato em que ela muda: o lote que qualquer admin podia descartar vira publicado, e o X tem
+         * de sumir ali, sem esperar uma nova carga da listagem.
+         */
         @Test
-        @DisplayName("admin não-master: a flag vem FALSE (e o X não é renderizado)")
-        void listagemSemAFlagParaAdminComum() throws Exception {
-            mockMvc.perform(Requests.get("/api/admin/ponto/lotes").header("Authorization", admin))
+        @DisplayName("a publicação e o detalhe devolvem o lote com o pode_excluir do status ATUAL")
+        void permissaoAcompanhaOLotePublicado() throws Exception {
+            when(pontoService.publicar(LOTE_ID, true, false))
+                    .thenReturn(Map.of("id", LOTE_ID, "status", "PUBLICADO"));
+            when(pontoService.obterLote(LOTE_ID)).thenReturn(Map.of("id", LOTE_ID, "status", "PUBLICADO"));
+            when(pontoExclusaoService.podeExcluir("PUBLICADO", USERNAME_DO_TOKEN)).thenReturn(false);
+
+            mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
+                            .header("Authorization", admin))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.pode_excluir").value(false));
+                    .andExpect(jsonPath("$.data.pode_excluir").value(false));
+
+            mockMvc.perform(Requests.get("/api/admin/ponto/lote/" + LOTE_ID).header("Authorization", admin))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.pode_excluir").value(false));
         }
 
         @Test
@@ -808,7 +835,7 @@ class PontoControllerTest {
         @Test
         @DisplayName("POST /api/admin/ponto/lote/{id}/publicar — sem corpo, emite aviso (é o default: só um false explícito o desliga)")
         void publicar_semCorpo_emiteAviso() throws Exception {
-            when(pontoService.publicar(LOTE_ID, true)).thenReturn(Map.of("publicado", true, "avisos", 12));
+            when(pontoService.publicar(LOTE_ID, true, false)).thenReturn(Map.of("publicado", true, "avisos", 12));
 
             mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
                             .header("Authorization", admin))
@@ -816,13 +843,13 @@ class PontoControllerTest {
                     .andExpect(jsonPath("$.ok").value(true))
                     .andExpect(jsonPath("$.data.avisos").value(12));
 
-            verify(pontoService).publicar(LOTE_ID, true);
+            verify(pontoService).publicar(LOTE_ID, true, false);
         }
 
         @Test
         @DisplayName("POST /api/admin/ponto/lote/{id}/publicar — corpo {emitir_aviso:false} publica calado")
         void publicar_emitirAvisoFalse_naoEmite() throws Exception {
-            when(pontoService.publicar(LOTE_ID, false)).thenReturn(Map.of("publicado", true, "avisos", 0));
+            when(pontoService.publicar(LOTE_ID, false, false)).thenReturn(Map.of("publicado", true, "avisos", 0));
 
             mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
                             .header("Authorization", admin)
@@ -831,7 +858,7 @@ class PontoControllerTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data.avisos").value(0));
 
-            verify(pontoService).publicar(LOTE_ID, false);
+            verify(pontoService).publicar(LOTE_ID, false, false);
         }
 
         /**
@@ -876,7 +903,7 @@ class PontoControllerTest {
         @Test
         @DisplayName("corpo sem o campo emitir_aviso mantém o default (publica COM aviso)")
         void publicar_corpoSemOCampo_emiteAviso() throws Exception {
-            when(pontoService.publicar(LOTE_ID, true)).thenReturn(Map.of("publicado", true, "avisos", 12));
+            when(pontoService.publicar(LOTE_ID, true, false)).thenReturn(Map.of("publicado", true, "avisos", 12));
 
             mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
                             .header("Authorization", admin)
@@ -885,13 +912,63 @@ class PontoControllerTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data.avisos").value(12));
 
-            verify(pontoService).publicar(LOTE_ID, true);
+            verify(pontoService).publicar(LOTE_ID, true, false);
+        }
+
+        /**
+         * Os dois passos da substituição, do lado do contrato: o 1º POST não manda o campo e recebe o
+         * pedido de confirmação — nada publicado; o 2º manda {@code confirmar_substituicao} e publica.
+         * Substituir folha de outras pessoas nunca acontece por omissão do cliente.
+         */
+        @Test
+        @DisplayName("sem confirmar_substituicao o service recebe false, e a resposta de confirmação passa inteira")
+        void publicar_semConfirmacao_repassaFalseEDevolveOPedido() throws Exception {
+            when(pontoService.publicar(LOTE_ID, true, false))
+                    .thenReturn(Map.of("requer_confirmacao", true, "substituicoes", 7));
+
+            mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
+                            .header("Authorization", admin))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.ok").value(true))
+                    .andExpect(jsonPath("$.data.requer_confirmacao").value(true))
+                    .andExpect(jsonPath("$.data.substituicoes").value(7))
+                    // Não é um lote: não há status, e nenhuma permissão de exclusão a carregar.
+                    .andExpect(jsonPath("$.data.pode_excluir").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("corpo {confirmar_substituicao:true} autoriza a substituição no service")
+        void publicar_comConfirmacao_repassaTrue() throws Exception {
+            when(pontoService.publicar(LOTE_ID, true, true))
+                    .thenReturn(Map.of("id", LOTE_ID, "status", "PUBLICADO"));
+
+            mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
+                            .header("Authorization", admin)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"confirmar_substituicao\":true}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.status").value("PUBLICADO"));
+
+            verify(pontoService).publicar(LOTE_ID, true, true);
+        }
+
+        @Test
+        @DisplayName("{confirmar_substituicao:\"true\"} (string) → 400 nomeando o campo, sem publicar")
+        void publicar_confirmarSubstituicaoString_400() throws Exception {
+            mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
+                            .header("Authorization", admin)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"confirmar_substituicao\":\"true\"}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value(containsString("confirmar_substituicao")));
+
+            verifyNoInteractions(pontoService);
         }
 
         @Test
         @DisplayName("POST /api/admin/ponto/lote/{id}/publicar — lote já publicado vira 400 com a mensagem do service")
         void publicar_loteJaPublicado_400() throws Exception {
-            when(pontoService.publicar(eq(LOTE_ID), anyBoolean()))
+            when(pontoService.publicar(eq(LOTE_ID), anyBoolean(), anyBoolean()))
                     .thenThrow(new ServiceValidationException("Lote já está publicado."));
 
             mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")

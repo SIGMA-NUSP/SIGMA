@@ -130,7 +130,7 @@ class PontoPublicacaoConcorrenteIT {
         Callable<String> publicar = () -> {
             largada.await(10, TimeUnit.SECONDS);
             try {
-                pontoService.publicar(loteId, true);   // proxy @Transactional: uma transação por thread
+                pontoService.publicar(loteId, true, false);   // proxy @Transactional: uma transação por thread
                 return "PUBLICOU";
             } catch (ServiceValidationException e) {
                 return "RECUSOU: " + e.getMessage();

@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -258,10 +259,14 @@ class PontoSubstituicaoDefinitivaIT {
             gravarPdf(folhaPrevia.getArquivoPagina());
             gravarPdf(folhaDefinitiva.getArquivoPagina());
 
-            pontoService.publicar(previa.getId(), false);
-            // A definitiva é a ÚNICA folha que passa pela guarda com uma mensal da pessoa já publicada
-            // no mês: ela não colide com a prévia, substitui.
-            Map<String, Object> publicada = pontoService.publicar(definitiva.getId(), false);
+            pontoService.publicar(previa.getId(), false, false);
+            // A definitiva substitui a prévia da pessoa — e substituição é gesto de dois passos: sem a
+            // confirmação, o 1º só diz quantas pessoas seriam atingidas e não publica nada.
+            Map<String, Object> pedido = pontoService.publicar(definitiva.getId(), false, false);
+            assertEquals(Boolean.TRUE, pedido.get("requer_confirmacao"));
+            assertEquals(1, pedido.get("substituicoes"));
+
+            Map<String, Object> publicada = pontoService.publicar(definitiva.getId(), false, true);
             assertEquals("PUBLICADO", publicada.get("status"));
         }
 
@@ -312,6 +317,114 @@ class PontoSubstituicaoDefinitivaIT {
                     pontoService.dadosFolha(folhaPrevia.getId(), admin.getId(), "administrador").get("categoria"));
             assertEquals(PontoLote.CATEGORIA_DEFINITIVA,
                     pontoService.dadosFolha(folhaDefinitiva.getId(), admin.getId(), "administrador").get("categoria"));
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * A Plansul reenvia a folha corrigida do MESMO tipo — outra definitiva do mês, outra semanal do
+     * mesmo período. As duas ficam publicadas no histórico do admin, e para o dono vale a que chegou
+     * por último: é o que estes cenários provam, do lado do dono e do lado do banco de horas.
+     */
+    @Nested
+    @DisplayName("folha corrigida do mesmo tipo: a publicada por último é a que vale")
+    class SubstituicaoEntreIguais {
+
+        @Test
+        @DisplayName("duas DEFINITIVAS do mês: o dono vê só a nova (404 na antiga) e o admin vê as duas")
+        void definitivaSubstituiDefinitiva() {
+            PontoLote velha = tx.execute(status ->
+                    loteEmRevisao("MENSAL", PontoLote.CATEGORIA_DEFINITIVA, JULHO_INI, JULHO_FIM));
+            PontoLotePagina folhaVelha = tx.execute(status -> folhaDeAna(velha));
+            PontoLote nova = tx.execute(status ->
+                    loteEmRevisao("MENSAL", PontoLote.CATEGORIA_DEFINITIVA, JULHO_INI, JULHO_FIM));
+            PontoLotePagina folhaNova = tx.execute(status -> folhaDeAna(nova));
+            gravarPdf(folhaVelha.getArquivoPagina());
+            gravarPdf(folhaNova.getArquivoPagina());
+
+            pontoService.publicar(velha.getId(), false, false);
+            pontoService.publicar(nova.getId(), false, true);   // substitui, confirmada
+
+            assertEquals(List.of(folhaNova.getId()), idsDasFolhasDeAna(),
+                    "duas definitivas do mesmo mês na lista seriam duas versões da mesma folha");
+
+            ServiceValidationException download = recusaDe(
+                    () -> pontoService.baixarFolha(folhaVelha.getId(), ana.getId(), "operador"));
+            assertEquals(HttpStatus.NOT_FOUND, download.getStatus());
+            assertEquals("Folha indisponível.", download.getMessage());
+
+            // Para o admin nada some: a folha corrigida não apaga a corrigida.
+            assertTrue(pontoService.baixarFolha(folhaVelha.getId(), admin.getId(), "administrador")
+                    .conteudo().length > 0);
+        }
+
+        @Test
+        @DisplayName("duas SEMANAIS do mesmo período: idem — e a semanal de OUTRO período fica")
+        void semanalSubstituiSemanalDoMesmoPeriodo() {
+            PontoLote velha = tx.execute(status -> loteEmRevisao("SEMANAL", null, SEMANA_INI, SEMANA_FIM));
+            PontoLotePagina folhaVelha = tx.execute(status -> folhaDeAna(velha));
+            PontoLote outroPeriodo = tx.execute(status ->
+                    loteEmRevisao("SEMANAL", null, SEMANA_INI, SEMANA_FIM.plusWeeks(1)));
+            PontoLotePagina folhaOutroPeriodo = tx.execute(status -> folhaDeAna(outroPeriodo));
+            PontoLote nova = tx.execute(status -> loteEmRevisao("SEMANAL", null, SEMANA_INI, SEMANA_FIM));
+            PontoLotePagina folhaNova = tx.execute(status -> folhaDeAna(nova));
+
+            pontoService.publicar(velha.getId(), false, false);
+            pontoService.publicar(outroPeriodo.getId(), false, false);
+            pontoService.publicar(nova.getId(), false, true);
+
+            assertEquals(Set.of(folhaOutroPeriodo.getId(), folhaNova.getId()),
+                    Set.copyOf(idsDasFolhasDeAna()),
+                    "só a semanal do período IDÊNTICO sai de cena — as cumulativas convivem");
+            assertFalse(idsDasFolhasDeAna().contains(folhaVelha.getId()));
+        }
+
+        /**
+         * A âncora do banco de horas tem de seguir a folha que VALE. As duas definitivas do mês
+         * empatam em cobertura (o mês inteiro), e o desempate não pode ser a data do upload: o admin
+         * pode ter recebido a correção antes e publicado depois, e aí o saldo viria do PDF errado.
+         */
+        @Test
+        @DisplayName("a âncora é a PUBLICADA por último, mesmo que ela tenha sido enviada primeiro")
+        void ancoraSegueAPublicacaoNaoOUpload() {
+            tx.executeWithoutResult(status -> {
+                PontoLote publicadaDepois = lotePublicado("MENSAL", PontoLote.CATEGORIA_DEFINITIVA,
+                        JULHO_INI, JULHO_FIM);
+                folhaDeAna(publicadaDepois, BANCO_DA_PREVIA);
+                // Enviada há duas horas, publicada agora: o upload é o mais VELHO dos dois.
+                CenarioFactory.fixarTimestamp(em, "PNT_LOTE", "CRIADO_EM", publicadaDepois.getId(), 2 * UMA_HORA);
+
+                PontoLote publicadaAntes = lotePublicado("MENSAL", PontoLote.CATEGORIA_DEFINITIVA,
+                        JULHO_INI, JULHO_FIM);
+                folhaDeAna(publicadaAntes, BANCO_DA_DEFINITIVA);
+                CenarioFactory.fixarTimestamp(em, "PNT_LOTE", "PUBLICADO_EM", publicadaAntes.getId(), UMA_HORA);
+
+                saldoAberturaService.reancorar(ana.getId(), "OPERADOR");
+            });
+
+            assertEquals(BANCO_DA_PREVIA, saldoDeAna().getSaldoAberturaMin(),
+                    "o saldo abre pelo BANCO da folha publicada por último, não pela enviada por último");
+        }
+
+        @Test
+        @DisplayName("definitiva sobre definitiva NÃO reabre o mês: a retificação segue recusada")
+        void mesSegueFechadoDepoisDaSubstituicao() {
+            PontoLote velha = tx.execute(status ->
+                    loteEmRevisao("MENSAL", PontoLote.CATEGORIA_DEFINITIVA, JULHO_INI, JULHO_FIM));
+            PontoLotePagina folhaVelha = tx.execute(status -> folhaDeAna(velha));
+            PontoLote nova = tx.execute(status ->
+                    loteEmRevisao("MENSAL", PontoLote.CATEGORIA_DEFINITIVA, JULHO_INI, JULHO_FIM));
+            PontoLotePagina folhaNova = tx.execute(status -> folhaDeAna(nova));
+            gravarPdf(folhaNova.getArquivoPagina());
+
+            pontoService.publicar(velha.getId(), false, false);
+            pontoService.publicar(nova.getId(), false, true);
+
+            ServiceValidationException recusa = recusaDe(() -> retificar(folhaNova, DIA_RECUSADO));
+            assertEquals("Não é possível retificar. Folha definitiva já publicada.", recusa.getMessage());
+            // E nem pela folha antiga, que o dono nem alcança mais.
+            assertEquals(HttpStatus.NOT_FOUND, recusaDe(() -> retificar(folhaVelha, DIA_RECUSADO)).getStatus());
         }
     }
 
@@ -380,7 +493,7 @@ class PontoSubstituicaoDefinitivaIT {
                 semanal = loteEmRevisao("SEMANAL", null, SEMANA_INI, SEMANA_FIM);
                 folhaSemanal = folhaDeAna(semanal);
             });
-            pontoService.publicar(semanal.getId(), false);
+            pontoService.publicar(semanal.getId(), false, false);
             retificacaoDoDiaAberto = String.valueOf(
                     itens(retificar(folhaSemanal, DIA_RETIFICADO)).get(0).get("id"));
         }
@@ -391,7 +504,7 @@ class PontoSubstituicaoDefinitivaIT {
                 definitiva = loteEmRevisao("MENSAL", PontoLote.CATEGORIA_DEFINITIVA, JULHO_INI, JULHO_FIM);
                 folhaDefinitiva = folhaDeAna(definitiva);
             });
-            pontoService.publicar(definitiva.getId(), false);
+            pontoService.publicar(definitiva.getId(), false, false);
         }
 
         @Test

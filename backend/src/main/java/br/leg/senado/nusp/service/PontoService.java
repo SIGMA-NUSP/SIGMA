@@ -80,9 +80,6 @@ public class PontoService {
     private static final String MATCH_MANUAL     = "MANUAL";
     private static final String MATCH_PENDENTE   = "PENDENTE";
 
-    /** Rótulo da competência nas recusas de publicação (F32). */
-    private static final DateTimeFormatter COMPETENCIA = DateTimeFormatter.ofPattern("MM/yyyy");
-
     // ══════════════════════════════════════════════════════════════
     // Upload + separação + vínculo automático (lote em REVISÃO)
     // ══════════════════════════════════════════════════════════════
@@ -279,15 +276,21 @@ public class PontoService {
      * Publica o lote: as folhas ficam visíveis para os donos, o BANCO de cada página é extraído, as
      * pessoas são re-ancoradas e (opcionalmente) avisadas.
      *
+     * <p><b>Publicar pode SUBSTITUIR folhas já publicadas</b> — é o caminho da correção que a Plansul
+     * reenvia. Quando o lote atinge folhas de alguém (a matriz do {@link #levantarSubstituicoes}), a
+     * primeira chamada não publica nada: devolve quantas PESSOAS seriam substituídas, para o admin
+     * confirmar sabendo o tamanho do gesto. É a segunda chamada, com {@code confirmarSubstituicao},
+     * que publica. Lote sem nada a substituir publica direto, como sempre.
+     *
      * <p>O lote é lido com LOCK PESSIMISTA de linha (F49): duas publicações concorrentes do MESMO
      * lote — o admin reclicando "Publicar" — serializam aqui. A segunda só entra depois do commit da
      * primeira, relê o status já PUBLICADO e é recusada, em vez de duplicar avisos e re-âncoras.
      *
-     * <p>A guarda da folha mensal (F32) roda depois do lock e ANTES de qualquer escrita: recusa é
-     * lote inteiro recusado, nada gravado.
+     * <p>O levantamento roda SOB O LOCK e ANTES de qualquer escrita — a contagem que o admin
+     * confirmou é cortesia, a verdade é esta. Recusa é lote inteiro recusado, nada gravado.
      */
     @Transactional
-    public Map<String, Object> publicar(String loteId, boolean emitirAviso) {
+    public Map<String, Object> publicar(String loteId, boolean emitirAviso, boolean confirmarSubstituicao) {
         PontoLote lote = buscarLoteComLock(loteId);
         if (STATUS_PUBLICADO.equals(lote.getStatus())) {
             // É esta a recusa que a 2ª transação concorrente recebe depois de esperar o lock — e ela
@@ -296,7 +299,12 @@ public class PontoService {
         }
         List<PontoLotePagina> paginas = paginaRepo.findByLoteIdOrderByNumeroPagina(loteId);
         List<Pessoa> pessoas = carregarPessoas();
-        exigirMensalUnica(lote, paginas, nomePorId(pessoas));
+        List<PontoLotePagina> vinculadas = paginas.stream().filter(p -> p.getPessoaId() != null).toList();
+
+        exigirUmaFolhaMensalPorPessoa(lote, vinculadas, nomePorId(pessoas));
+        Substituicoes substituicoes = levantarSubstituicoes(lote, vinculadas);
+        if (!substituicoes.recusas().isEmpty()) throw recusarPublicacao(substituicoes.recusas());
+        if (substituicoes.substitui() && !confirmarSubstituicao) return pedidoDeConfirmacao(substituicoes);
 
         lote.setStatus(STATUS_PUBLICADO);
         lote.setPublicadoEm(LocalDateTime.now());
@@ -310,118 +318,110 @@ public class PontoService {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // Guarda da folha MENSAL (F32) — unicidade por pessoa+competência
+    // Guarda da publicação (F32) — o que SUBSTITUI e o que recusa
     // ══════════════════════════════════════════════════════════════
 
     /**
-     * Recusa o lote INTEIRO se alguma pessoa dele colide com a regra da folha mensal: a MENSAL é
-     * única por pessoa+competência e FECHA o mês — publicada, nem uma segunda mensal da pessoa nem
-     * uma SEMANAL atrasada daquele mês podem ser publicadas depois. O conflito é procurado no banco
-     * (mensais já publicadas) e, para um lote mensal, também DENTRO do próprio lote — duas páginas
-     * da mesma pessoa. O admin remove a(s) página(s) nomeada(s) e republica.
+     * O que a publicação deste lote encontra pela frente, folha por folha das pessoas dele:
      *
-     * <p>A ÚNICA folha que entra por cima de outra é a mensal DEFINITIVA sobre a PRÉVIA do mesmo mês:
-     * é assim que o mês fecha. Todo o resto colide — inclusive uma segunda prévia, e inclusive uma
-     * semanal atrasada de mês que a prévia já abriu.
+     * <ul>
+     *   <li><b>substituídas</b> — a folha nova ocupa o lugar da publicada: mensal sobre mensal da
+     *       mesma competência (prévia sobre prévia, definitiva sobre prévia, definitiva sobre
+     *       definitiva) e semanal sobre semanal do período <b>exatamente</b> igual. Cada pessoa
+     *       conta uma vez; é esse número que o admin confirma;</li>
+     *   <li><b>recusas</b> — o que não se substitui de jeito nenhum: uma PRÉVIA por cima da
+     *       DEFINITIVA que já fechou o mês, e uma SEMANAL atrasada de mês que uma mensal publicada
+     *       já ocupa. Uma recusa derruba o lote INTEIRO.</li>
+     * </ul>
      *
-     * <p>SEMANAIS entre si continuam livres para se sobrepor: elas são CUMULATIVAS por desenho
-     * (01–05, 01–12, 01–19…), e sobreposição de período é o funcionamento normal — não existe, e não
-     * deve existir, validação genérica de sobreposição.
+     * <p>O que <b>não</b> é conflito, e por isso não aparece aqui nem gera aviso: a mensal que chega
+     * onde só há semanais do mês (as folhas convivem — a hierarquia do sumário resolve o mês) e
+     * semanais de períodos diferentes entre si, que são CUMULATIVAS por desenho (01–05, 01–12,
+     * 01–19…). Não existe, e não deve existir, validação genérica de sobreposição de período.
      */
-    private void exigirMensalUnica(PontoLote lote, List<PontoLotePagina> paginas, Map<String, String> nomePorId) {
-        List<PontoLotePagina> vinculadas = paginas.stream().filter(p -> p.getPessoaId() != null).toList();
-        if (vinculadas.isEmpty()) return;
+    private Substituicoes levantarSubstituicoes(PontoLote lote, List<PontoLotePagina> vinculadas) {
+        if (vinculadas.isEmpty()) return Substituicoes.NENHUMA;
 
-        boolean mensal = TIPO_MENSAL.equals(lote.getTipo());
-        if (mensal) {
-            List<String> repetidas = pessoasRepetidas(vinculadas);
-            if (!repetidas.isEmpty()) {
-                throw recusarPublicacao("Há mais de uma folha mensal de "
-                        + nomes(repetidas, nomePorId) + " na competência " + competencia(lote) + ".");
-            }
-        }
-
-        List<ConflitoMensal> conflitos = umPorPessoaECompetencia(conflitosComMensalPublicada(lote, vinculadas));
-        if (conflitos.isEmpty()) return;
-        // A competência citada é a da MENSAL que já está publicada — não a janela consultada, que pode
-        // abranger dois meses (lote que cruza a virada) e faria a frase mentir sobre o mês ainda aberto.
-        String quem = nomesComCompetencia(conflitos, nomePorId);
-        String natureza = naturezaEmConflito(conflitos);
-        throw recusarPublicacao(mensal
-                ? "já existe folha mensal" + natureza + " publicada de " + quem + "."
-                : "o mês de " + quem + " já foi fechado por folha mensal" + natureza + " publicada.");
-    }
-
-    /** Pessoa do lote que já tem MENSAL publicada, com a competência (mês) e a natureza dessa mensal. */
-    private record ConflitoMensal(String pessoaId, YearMonth competencia, String categoria) {}
-
-    /**
-     * Pessoas do lote que já têm MENSAL publicada (em outro lote) tocando a competência dele.
-     *
-     * <p>A prévia é ignorada quando o lote sendo publicado é a DEFINITIVA da mesma competência: aí
-     * não há conflito, e sim a substituição pretendida.
-     */
-    private List<ConflitoMensal> conflitosComMensalPublicada(PontoLote lote, List<PontoLotePagina> vinculadas) {
         Set<String> pares = new HashSet<>();
         Set<String> ids = new LinkedHashSet<>();
         for (PontoLotePagina p : vinculadas) {
             pares.add(chavePessoa(p.getPessoaId(), p.getPessoaTipo()));
             ids.add(p.getPessoaId());
         }
+
+        boolean mensal = TIPO_MENSAL.equals(lote.getTipo());
         boolean definitiva = PontoLote.CATEGORIA_DEFINITIVA.equals(lote.getCategoria());
-        List<ConflitoMensal> conflitos = new ArrayList<>();
+        Set<String> substituidas = new LinkedHashSet<>();
+        List<FolhaPublicada> recusas = new ArrayList<>();
+
         for (Object[] r : paginaRepo.findPessoasComMensalPublicadaNoPeriodo(
                 lote.getId(), ids, inicioCompetencia(lote), fimCompetencia(lote))) {
-            String categoriaPublicada = (String) r[3];
-            if (definitiva && PontoLote.CATEGORIA_PREVIA.equals(categoriaPublicada)) continue;
             // A query casa por PESSOA_ID; a chave real do vínculo polimórfico é o par com PESSOA_TIPO.
-            if (pares.contains(chavePessoa((String) r[0], (String) r[1]))) {
-                conflitos.add(new ConflitoMensal((String) r[0], YearMonth.from((LocalDate) r[2]), categoriaPublicada));
+            String chave = chavePessoa((String) r[0], (String) r[1]);
+            if (!pares.contains(chave)) continue;
+            String categoriaPublicada = (String) r[3];
+            // A competência é a da MENSAL publicada — não a janela consultada, que pode abranger dois
+            // meses (lote que cruza a virada) e faria a frase mentir sobre o mês ainda aberto.
+            FolhaPublicada publicada = new FolhaPublicada(YearMonth.from((LocalDate) r[2]), categoriaPublicada);
+            if (!mensal) {
+                // A mensal ocupa o mês inteiro: uma semanal atrasada dele não tem mais onde entrar.
+                recusas.add(publicada);
+            } else if (!definitiva && PontoLote.CATEGORIA_DEFINITIVA.equals(categoriaPublicada)) {
+                recusas.add(publicada);   // prévia por cima da definitiva: o mês já está fechado
+            } else {
+                substituidas.add(chave);
             }
         }
-        return conflitos;
-    }
 
-    /**
-     * Um conflito por pessoa+competência, sob a folha que REALMENTE ocupa o mês.
-     *
-     * <p>A prévia substituída não some do histórico: a pessoa que teve o mês fechado tem as duas
-     * mensais publicadas e aparecia duas vezes na mesma recusa — com o nome repetido e sem a palavra
-     * da natureza (duas categorias no conjunto). Quem fechou o mês foi a definitiva, e é ela que a
-     * frase deve citar.
-     */
-    private static List<ConflitoMensal> umPorPessoaECompetencia(List<ConflitoMensal> conflitos) {
-        Map<String, ConflitoMensal> unicos = new LinkedHashMap<>();
-        for (ConflitoMensal c : conflitos) {
-            unicos.merge(c.pessoaId() + "|" + c.competencia(), c,
-                    (atual, nova) -> PontoLote.CATEGORIA_DEFINITIVA.equals(atual.categoria()) ? atual : nova);
+        if (!mensal) {
+            for (Object[] r : paginaRepo.findPessoasComSemanalPublicadaNoPeriodoExato(
+                    lote.getId(), ids, lote.getDataInicio(), lote.getDataFim())) {
+                String chave = chavePessoa((String) r[0], (String) r[1]);
+                if (pares.contains(chave)) substituidas.add(chave);
+            }
         }
-        return List.copyOf(unicos.values());
+        return new Substituicoes(substituidas, recusas);
+    }
+
+    /** Uma folha já publicada que barra este lote: de que mês ela é e de que natureza. */
+    private record FolhaPublicada(YearMonth competencia, String categoria) {}
+
+    /** O resultado do levantamento: quem será substituído e o que impede a publicação. */
+    private record Substituicoes(Set<String> pessoas, List<FolhaPublicada> recusas) {
+
+        static final Substituicoes NENHUMA = new Substituicoes(Set.of(), List.of());
+
+        boolean substitui() {
+            return !pessoas.isEmpty();
+        }
     }
 
     /**
-     * " prévia" / " definitiva" para a recusa nomear o que ocupa o mês — é a diferença entre um mês
-     * que a definitiva ainda pode fechar e um que já está fechado. Fica vazio quando o lote esbarra
-     * nas duas naturezas ao mesmo tempo (pessoas diferentes), caso em que nenhuma delas representa
-     * o conjunto.
+     * A resposta do 1º passo: o lote NÃO foi publicado, e o admin precisa dizer se aceita substituir
+     * as folhas de tantas pessoas. Só isso — a lista de nomes está na tela de revisão, na frente dele.
      */
-    private static String naturezaEmConflito(List<ConflitoMensal> conflitos) {
-        Set<String> categorias = conflitos.stream().map(ConflitoMensal::categoria).collect(Collectors.toSet());
-        if (categorias.size() != 1) return "";
-        String unica = categorias.iterator().next();
-        if (PontoLote.CATEGORIA_PREVIA.equals(unica)) return " prévia";
-        if (PontoLote.CATEGORIA_DEFINITIVA.equals(unica)) return " definitiva";
-        return "";
+    private static Map<String, Object> pedidoDeConfirmacao(Substituicoes substituicoes) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("requer_confirmacao", true);
+        out.put("substituicoes", substituicoes.pessoas().size());
+        return out;
     }
 
-    /** Pessoas presentes em mais de uma página vinculada do MESMO lote (conflito intra-lote). */
-    private static List<String> pessoasRepetidas(List<PontoLotePagina> vinculadas) {
+    /**
+     * Duas folhas MENSAIS da mesma pessoa no MESMO lote: não há como saber qual delas vale, e nenhuma
+     * pode substituir a outra. O admin desfaz o vínculo de uma das páginas (ou exclui o lote). Num
+     * lote SEMANAL isso é legítimo — a folha da pessoa pode ocupar duas páginas do PDF.
+     */
+    private static void exigirUmaFolhaMensalPorPessoa(PontoLote lote, List<PontoLotePagina> vinculadas,
+                                                      Map<String, String> nomePorId) {
+        if (!TIPO_MENSAL.equals(lote.getTipo())) return;
         Set<String> vistas = new HashSet<>();
         Set<String> repetidas = new LinkedHashSet<>();
         for (PontoLotePagina p : vinculadas) {
             if (!vistas.add(chavePessoa(p.getPessoaId(), p.getPessoaTipo()))) repetidas.add(p.getPessoaId());
         }
-        return List.copyOf(repetidas);
+        if (repetidas.isEmpty()) return;
+        throw recusarPublicacao("Há mais de uma folha de " + nomes(repetidas, nomePorId) + " no lote.");
     }
 
     private static String chavePessoa(String pessoaId, String pessoaTipo) {
@@ -442,37 +442,44 @@ public class PontoService {
         return YearMonth.from(lote.getDataFim()).atEndOfMonth();
     }
 
-    private static String competencia(PontoLote lote) {
-        String ini = YearMonth.from(lote.getDataInicio()).format(COMPETENCIA);
-        String fim = YearMonth.from(lote.getDataFim()).format(COMPETENCIA);
-        return ini.equals(fim) ? ini : ini + " a " + fim;
-    }
-
-    /** Nomes das pessoas em conflito — é por eles que o admin acha a página a remover do lote. */
-    private static String nomes(List<String> pessoaIds, Map<String, String> nomePorId) {
+    /** Nomes das pessoas em conflito — é por eles que o admin acha a página a desvincular. */
+    private static String nomes(Collection<String> pessoaIds, Map<String, String> nomePorId) {
         return pessoaIds.stream()
                 .map(id -> nomePorId.getOrDefault(id, id))
                 .sorted(Comparator.comparing(n -> n.toUpperCase(Locale.ROOT)))
                 .collect(Collectors.joining(", "));
     }
 
-    /** "Maria Silva (06/2026)" — o nome e o mês que a folha mensal dela já ocupa. */
-    private static String nomesComCompetencia(List<ConflitoMensal> conflitos, Map<String, String> nomePorId) {
-        return conflitos.stream()
-                .map(c -> nomePorId.getOrDefault(c.pessoaId(), c.pessoaId())
-                        + " (" + c.competencia().format(COMPETENCIA) + ")")
-                .sorted(Comparator.comparing(n -> n.toUpperCase(Locale.ROOT)))
-                .collect(Collectors.joining(", "));
+    /**
+     * A recusa nomeia UMA folha publicada: a que mais pesa contra este lote — a definitiva antes da
+     * prévia e, entre iguais, o mês mais antigo. Citar todas seria a lista quilométrica que esta
+     * mensagem existe para eliminar; o admin não precisa dela para agir (a ação é desfazer o lote).
+     */
+    private static ServiceValidationException recusarPublicacao(List<FolhaPublicada> recusas) {
+        FolhaPublicada folha = recusas.stream().min(RECUSA_MAIS_FORTE).orElseThrow();
+        return recusarPublicacao("Já existe folha " + naturezaPorExtenso(folha.categoria())
+                + " de " + ReportConfig.fmtCompetencia(folha.competencia().atDay(1)) + " publicada.");
+    }
+
+    private static final Comparator<FolhaPublicada> RECUSA_MAIS_FORTE = Comparator
+            .comparingInt((FolhaPublicada f) -> PontoLote.CATEGORIA_DEFINITIVA.equals(f.categoria()) ? 0 : 1)
+            .thenComparing(FolhaPublicada::competencia);
+
+    /** A natureza como o admin a lê. Folha mensal antiga, sem natureza gravada, é só "mensal". */
+    private static String naturezaPorExtenso(String categoria) {
+        if (PontoLote.CATEGORIA_PREVIA.equals(categoria)) return "prévia";
+        if (PontoLote.CATEGORIA_DEFINITIVA.equals(categoria)) return "definitiva";
+        return "mensal";
     }
 
     /**
      * Recusa de publicação: 400 com a frase em {@code error} (o contrato de erro da API) E em
      * {@code message}. A duplicação não é decorativa: o botão "Publicar" do admin lê SÓ {@code message}
-     * do corpo do erro (F57) — sem essa chave, a tela mostraria o genérico "Erro ao publicar." e os
-     * nomes se perderiam justamente no erro que existe para nomeá-los.
+     * do corpo do erro (F57) — sem essa chave, a tela mostraria o genérico "Erro ao publicar." e o
+     * motivo se perderia justamente no erro que existe para explicá-lo.
      */
-    private static ServiceValidationException recusarPublicacao(String detalhe) {
-        return recusa("Publicação recusada: " + detalhe);
+    private static ServiceValidationException recusarPublicacao(String fato) {
+        return recusa("Não foi possível publicar o lote. " + fato);
     }
 
     /** Recusa 400 visível nos dois campos do corpo de erro ({@code error} e {@code message}) — ver F57. */
@@ -678,11 +685,13 @@ public class PontoService {
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> minhasFolhas(String pessoaId) {
+        List<Object[]> publicadas = paginaRepo.findFolhasPublicadasByPessoa(pessoaId);
+        Set<String> substituidas = FolhaSubstituida.paginasSubstituidas(publicadas);
         List<Map<String, Object>> out = new ArrayList<>();
-        for (Object[] row : paginaRepo.findFolhasPublicadasByPessoa(pessoaId)) {
+        for (Object[] row : publicadas) {
             PontoLotePagina p = (PontoLotePagina) row[0];
             PontoLote l = (PontoLote) row[1];
-            if (previaSubstituida(p, l)) continue;
+            if (substituidas.contains(p.getId())) continue;
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", p.getId());
             m.put("tipo", l.getTipo());
@@ -696,17 +705,14 @@ public class PontoService {
     }
 
     /**
-     * A folha prévia foi substituída pela definitiva do mesmo mês daquela pessoa?
+     * A folha foi substituída por outra publicada depois (a regra do {@link FolhaSubstituida})?
      *
-     * <p>Publicada a definitiva, a prévia deixa de ser a folha do mês: sai da lista do dono e o
-     * acesso direto a ela acompanha. Para o admin nada some — o histórico de lotes continua inteiro.
+     * <p>Substituída, ela deixa de ser a folha daquele período: sai da lista do dono e o acesso
+     * direto a ela acompanha. Para o admin nada some — o histórico de lotes continua inteiro.
      */
-    private boolean previaSubstituida(PontoLotePagina pagina, PontoLote lote) {
-        if (!TIPO_MENSAL.equals(lote.getTipo()) || !PontoLote.CATEGORIA_PREVIA.equals(lote.getCategoria())) {
-            return false;
-        }
-        return paginaRepo.contarDefinitivasPublicadas(pagina.getPessoaId(), pagina.getPessoaTipo(),
-                inicioCompetencia(lote), fimCompetencia(lote)) > 0;
+    private boolean substituidaParaODono(PontoLotePagina pagina) {
+        return FolhaSubstituida.substituida(pagina.getId(),
+                paginaRepo.findFolhasPublicadasByPessoa(pagina.getPessoaId()));
     }
 
     /** Download da folha por um operador/técnico (só a própria) ou admin (qualquer). */
@@ -786,7 +792,7 @@ public class PontoService {
             if (pg.getPessoaId() == null || !pg.getPessoaId().equals(solicitanteId)) {
                 throw new ServiceValidationException("Acesso negado a esta folha.", HttpStatus.FORBIDDEN);
             }
-            if (!STATUS_PUBLICADO.equals(lote.getStatus()) || previaSubstituida(pg, lote)) {
+            if (!STATUS_PUBLICADO.equals(lote.getStatus()) || substituidaParaODono(pg)) {
                 throw new ServiceValidationException("Folha indisponível.", HttpStatus.NOT_FOUND);
             }
         }
@@ -927,6 +933,7 @@ public class PontoService {
 
         long pendentes = contarPendentes(paginas);
         Map<String, Object> m = cabecalho(lote, pendentes);
+        m.put("substituicoes", substituicoesPrevistas(lote, paginas));
 
         List<Map<String, Object>> pgs = new ArrayList<>();
         for (PontoLotePagina p : paginas) {
@@ -961,6 +968,20 @@ public class PontoService {
 
     private long contarPendentes(List<PontoLotePagina> paginas) {
         return paginas.stream().filter(p -> MATCH_PENDENTE.equals(p.getStatusMatch())).count();
+    }
+
+    /**
+     * Quantas pessoas este lote substituiria se fosse publicado AGORA — o aviso que a tela de revisão
+     * mostra antes do gesto. É consultivo, e por isso acompanha o detalhe do lote: cada vínculo que o
+     * admin muda devolve o lote inteiro, e o número anda junto. A palavra final continua sendo a da
+     * publicação, que refaz a conta sob o lock.
+     *
+     * <p>Lote já publicado substituiu o que tinha de substituir: a pergunta não se aplica a ele.
+     */
+    private int substituicoesPrevistas(PontoLote lote, List<PontoLotePagina> paginas) {
+        if (!STATUS_REVISAO.equals(lote.getStatus())) return 0;
+        List<PontoLotePagina> vinculadas = paginas.stream().filter(p -> p.getPessoaId() != null).toList();
+        return levantarSubstituicoes(lote, vinculadas).pessoas().size();
     }
 
     private static Map<String, String> nomePorId(List<Pessoa> pessoas) {

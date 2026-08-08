@@ -36,12 +36,19 @@ public interface PontoLotePaginaRepository extends JpaRepository<PontoLotePagina
      * a mais antiga (l.dataFim DESC; desempates para determinismo). Pares
      * [PontoLotePagina, PontoLote] — o SaldoAberturaService usa a primeira,
      * com {@code Limit.of(1)} (o histórico da pessoa cresce sem parar).
+     *
+     * <p>⚠️ O desempate por {@code publicadoEm} não é decorativo: duas folhas do MESMO período
+     * convivem desde que a publicação passou a substituir (a antiga fica no histórico), e elas
+     * empatam em {@code dataFim}. Sem ele decidiria o {@code criadoEm} — a data do UPLOAD —, e o
+     * saldo da pessoa passaria a vir do BANCO da folha ANTIGA sempre que a correção tivesse sido
+     * enviada antes de ser publicada. Lote publicado sem data (só por escrita manual no banco) fica
+     * por último, e não por primeiro.
      */
     @Query("SELECT p, l FROM PontoLotePagina p, PontoLote l " +
            "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' " +
            "AND p.pessoaId = :pessoaId AND p.pessoaTipo = :pessoaTipo " +
            "AND p.bancoFinalMin IS NOT NULL " +
-           "ORDER BY l.dataFim DESC, l.criadoEm DESC, p.numeroPagina DESC")
+           "ORDER BY l.dataFim DESC, l.publicadoEm DESC NULLS LAST, l.criadoEm DESC, p.numeroPagina DESC")
     List<Object[]> findCandidatasAncora(@Param("pessoaId") String pessoaId,
                                         @Param("pessoaTipo") String pessoaTipo,
                                         Limit limit);
@@ -59,7 +66,7 @@ public interface PontoLotePaginaRepository extends JpaRepository<PontoLotePagina
            "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' " +
            "AND p.pessoaId = :pessoaId AND p.pessoaTipo = :pessoaTipo " +
            "AND p.bancoFinalMin IS NOT NULL AND p.id NOT IN :excluidas " +
-           "ORDER BY l.dataFim DESC, l.criadoEm DESC, p.numeroPagina DESC")
+           "ORDER BY l.dataFim DESC, l.publicadoEm DESC NULLS LAST, l.criadoEm DESC, p.numeroPagina DESC")
     List<Object[]> findCandidatasAncoraExcluindo(@Param("pessoaId") String pessoaId,
                                                  @Param("pessoaTipo") String pessoaTipo,
                                                  @Param("excluidas") Collection<String> excluidas,
@@ -77,18 +84,19 @@ public interface PontoLotePaginaRepository extends JpaRepository<PontoLotePagina
     List<Object[]> findPessoasComFolhaPublicada();
 
     /**
-     * Guarda da folha mensal (F32): quádruplas distintas [pessoaId, pessoaTipo, dataInicio da mensal,
+     * Guarda da publicação (F32): quádruplas distintas [pessoaId, pessoaTipo, dataInicio da mensal,
      * categoria da mensal] do conjunto informado que JÁ TÊM folha MENSAL publicada tocando a janela de
      * competência — em OUTRO lote. É a mesma pergunta para os dois lados da regra: uma segunda MENSAL
-     * da pessoa no mês é proibida, e uma MENSAL publicada FECHA o mês para SEMANAIS atrasadas da mesma
-     * pessoa.
+     * da pessoa no mês SUBSTITUI a anterior, e uma MENSAL publicada FECHA o mês para SEMANAIS
+     * atrasadas da mesma pessoa.
      *
-     * <p>A {@code dataInicio} volta junto porque é dela que sai a competência REALMENTE fechada, que
+     * <p>A {@code dataInicio} volta junto porque é dela que sai a competência REALMENTE ocupada, que
      * a recusa cita ao admin — a janela consultada pode abranger dois meses (lote que cruza a virada),
      * e nomear a janela em vez do mês da mensal conflitante seria mentir sobre o mês que está aberto.
-     * A {@code categoria} volta porque só ela distingue o conflito que barra (prévia contra prévia,
-     * qualquer coisa contra definitiva) daquele que é a própria substituição pretendida (definitiva
-     * entrando por cima da prévia) — a decisão é do serviço, que conhece o lote sendo publicado.
+     * A {@code categoria} volta porque só ela distingue a substituição (prévia sobre prévia,
+     * definitiva sobre qualquer uma) do único bloqueio que resta entre mensais: a PRÉVIA tentando
+     * entrar por cima da DEFINITIVA que fechou o mês — a decisão é do serviço, que conhece o lote
+     * sendo publicado.
      *
      * <p>O filtro é só de tipo MENSAL: a sobreposição entre SEMANAIS é o funcionamento normal (elas
      * são cumulativas — 01–05, 01–12, 01–19…) e não pode ser barrada aqui.
@@ -101,6 +109,23 @@ public interface PontoLotePaginaRepository extends JpaRepository<PontoLotePagina
                                                           @Param("pessoaIds") Collection<String> pessoaIds,
                                                           @Param("inicio") LocalDate inicio,
                                                           @Param("fim") LocalDate fim);
+
+    /**
+     * Pares distintos [pessoaId, pessoaTipo] do conjunto informado que já têm folha SEMANAL publicada
+     * do período <b>exatamente</b> igual — em outro lote. É o conflito da semanal: a folha reenviada
+     * cobre o mesmo intervalo que a anterior, e uma substitui a outra.
+     *
+     * <p>Período apenas SOBREPOSTO não conta, e é por isso que a comparação é de igualdade: semanais
+     * são cumulativas por desenho (01–05, 01–12, 01–19…) e conviver é o funcionamento normal delas.
+     */
+    @Query("SELECT DISTINCT p.pessoaId, p.pessoaTipo FROM PontoLotePagina p, PontoLote l " +
+           "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' AND l.tipo = 'SEMANAL' " +
+           "AND l.id <> :loteId AND p.pessoaId IN :pessoaIds " +
+           "AND l.dataInicio = :inicio AND l.dataFim = :fim")
+    List<Object[]> findPessoasComSemanalPublicadaNoPeriodoExato(@Param("loteId") String loteId,
+                                                               @Param("pessoaIds") Collection<String> pessoaIds,
+                                                               @Param("inicio") LocalDate inicio,
+                                                               @Param("fim") LocalDate fim);
 
     /**
      * Páginas vinculadas de lotes PUBLICADOS cujo período toca a janela informada, com o lote junto

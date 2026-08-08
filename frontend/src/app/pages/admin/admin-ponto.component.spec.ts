@@ -47,7 +47,11 @@ const OP1 = { id: 'op-1', tipo: 'OPERADOR', nome: 'Maria Souza' };
 const OP2 = { id: 'op-2', tipo: 'OPERADOR', nome: 'João Lima' };
 const TEC1 = { id: 'tec-1', tipo: 'TECNICO', nome: 'Carlos Téc' };
 
-/** Lote em revisão (o detalhe traz `paginas`; a listagem, não) — coerente com PAGINAS: 3 páginas, 2 pendentes. */
+/**
+ * Lote em revisão (o detalhe traz `paginas`; a listagem, não) — coerente com PAGINAS: 3 páginas,
+ * 2 pendentes. `pode_excluir` é a permissão DAQUELE lote para quem pediu a lista, decidida pelo
+ * backend; ausente (o default aqui) = sem X.
+ */
 function lote(over: Record<string, unknown> = {}) {
   return {
     id: 'lote-1',
@@ -138,8 +142,6 @@ describe('AdminPontoComponent', () => {
 
   /** Lista de lotes devolvida pelo GET /lotes (recriada a cada chamada — o SUT muta os objetos). */
   let lotesResposta: () => any[];
-  /** A flag `pode_excluir` do envelope da listagem — quem manda no X é o backend. */
-  let podeExcluirResposta: boolean;
   /** Resposta do GET de preview da exclusão. */
   let previewResposta: () => any;
 
@@ -153,14 +155,12 @@ describe('AdminPontoComponent', () => {
 
   beforeEach(async () => {
     lotesResposta = () => [lote()];
-    podeExcluirResposta = false;
     previewResposta = () => preview();
 
     apiGet = vi.fn().mockImplementation((url: string) => {
       if (url === '/api/admin/ponto/pessoas') return of({ ok: true, data: structuredClone(PESSOAS) });
-      if (url === '/api/admin/ponto/lotes') {
-        return of({ ok: true, data: lotesResposta(), pode_excluir: podeExcluirResposta });
-      }
+      // A permissão de excluir vem DENTRO de cada lote (`pode_excluir`), não no envelope.
+      if (url === '/api/admin/ponto/lotes') return of({ ok: true, data: lotesResposta() });
       // Antes do startsWith do detalhe: as duas rotas partilham o prefixo /lote/{id}.
       if (url.includes('/exclusao/preview')) return of(previewResposta());
       if (url.startsWith('/api/admin/ponto/lote/')) return of(respostaLote(PAGINAS));
@@ -1276,6 +1276,73 @@ describe('AdminPontoComponent', () => {
       expect(comp.publicando('lote-1')).toBe(false);
     });
 
+    // ── Substituição de folhas publicadas: o gesto tem DOIS passos ──
+    //
+    // O 1º POST não publica nada quando o lote toma o lugar de folhas já publicadas: o backend
+    // devolve quantas PESSOAS seriam atingidas, e é essa contagem — a final, apurada sob o lock —
+    // que vai ao segundo confirm. Sem o sim do admin, nenhuma folha de ninguém é substituída.
+
+    /** Faz o 1º POST responder com o pedido de confirmação; o 2º publica normalmente. */
+    function exigirConfirmacao(quantas: number): void {
+      apiPost.mockReturnValueOnce(of({ ok: true, data: { requer_confirmacao: true, substituicoes: quantas } }));
+    }
+
+    it('resposta com requer_confirmacao: 2º confirm traz a contagem e o 2º POST leva a flag', () => {
+      exigirConfirmacao(3);
+      const comp = criarCarregado();
+      const l: any = comp.lotes()[0];
+      l.pendentes = 0;
+
+      comp.publicar(l);
+
+      expect(confirmSpy).toHaveBeenNthCalledWith(1, 'Publicar folha mensal PRÉVIA de Junho/2026?');
+      expect(confirmSpy).toHaveBeenNthCalledWith(2,
+        'Publicar folha mensal PRÉVIA de Junho/2026? Substituirá as folhas publicadas de 3 funcionário(s).');
+      expect(apiPost).toHaveBeenNthCalledWith(1,
+        '/api/admin/ponto/lote/lote-1/publicar', { emitir_aviso: true });
+      expect(apiPost).toHaveBeenNthCalledWith(2,
+        '/api/admin/ponto/lote/lote-1/publicar', { emitir_aviso: true, confirmar_substituicao: true });
+      expect(l.status).toBe('PUBLICADO');
+      expect(comp.publicando('lote-1')).toBe(false);
+    });
+
+    it('cancelar o 2º confirm: NADA é publicado e o botão volta a ficar clicável', () => {
+      exigirConfirmacao(2);
+      confirmSpy.mockReturnValueOnce(true).mockReturnValueOnce(false);   // aceita publicar, recusa substituir
+      const comp = criarCarregado();
+      const l: any = comp.lotes()[0];
+
+      comp.publicar(l);
+
+      expect(apiPost).toHaveBeenCalledTimes(1);   // só o 1º passo, que não grava nada
+      expect(l.status).toBe('REVISAO');
+      expect(comp.publicando('lote-1')).toBe(false);
+    });
+
+    it('a contagem que o backend apurou passa a ser a do banner do lote', () => {
+      exigirConfirmacao(5);
+      confirmSpy.mockReturnValueOnce(true).mockReturnValueOnce(false);
+      const comp = criarCarregado();
+      const l: any = comp.lotes()[0];
+
+      comp.publicar(l);
+
+      // O banner da revisão vinha do detalhe; depois da tentativa, quem manda é a conta do publicar.
+      expect(l.substituicoes).toBe(5);
+    });
+
+    it('o aviso NÃO é emitido de novo no 2º POST quando o admin desligou o checkbox', () => {
+      exigirConfirmacao(1);
+      const comp = criarCarregado();
+      const l: any = comp.lotes()[0];
+      l.emitirAviso = false;
+
+      comp.publicar(l);
+
+      expect(apiPost).toHaveBeenNthCalledWith(2,
+        '/api/admin/ponto/lote/lote-1/publicar', { emitir_aviso: false, confirmar_substituicao: true });
+    });
+
     it('checkbox "Emitir aviso" desmarcado publica sem aviso', () => {
       const comp = criarCarregado();
       const l: any = comp.lotes()[0];
@@ -1447,7 +1514,10 @@ describe('AdminPontoComponent', () => {
         // ids de página ÚNICOS por lote (como no backend): `valorEmVoo`/`seqPagina` são chaveados só
         // pelo id da página — uma fixture com ids repetidos entre lotes inventaria cross-talk.
         const id = url.substring(url.lastIndexOf('/') + 1);
-        return of(respostaLote(PAGINAS.map(p => ({ ...p, id: `${id}-${p.id}` })), { id }));
+        // O detalhe descreve o MESMO lote da listagem (status, natureza, substituições): um mock que
+        // devolvesse o lote-padrão faria o acordeão contradizer a linha que o abriu.
+        const daListagem = lista.find((l: any) => l.id === id) ?? {};
+        return of(respostaLote(PAGINAS.map(p => ({ ...p, id: `${id}-${p.id}` })), { ...daListagem, id }));
       });
       TestBed.configureTestingModule({
         imports: [AdminPontoComponent],
@@ -1609,6 +1679,30 @@ describe('AdminPontoComponent', () => {
       const caixa = fixture.debugElement.query(By.css('.accordion-row .error-box'));
       expect(caixa).not.toBeNull();
       expect(caixa.nativeElement.textContent).toContain('Maria Souza');   // a lista de trabalho fica legível
+    });
+
+    /**
+     * O banner da revisão é o aviso que chega ANTES do gesto: o match automático já rodou, e o
+     * backend sabe dizer de quantas pessoas este lote tomaria a folha. Sem substituição nenhuma, não
+     * há banner — um aviso que aparece sempre deixa de ser aviso.
+     */
+    it('o banner anuncia a substituição na revisão, e some quando não há nenhuma', async () => {
+      const comBanner = await renderizarAberto({ lotes: [lote({ substituicoes: 4 })] });
+      const banner = comBanner.debugElement.query(By.css('.aviso-substituicao'));
+      expect(banner).not.toBeNull();
+      expect(banner.nativeElement.textContent.trim())
+        .toBe('Este lote substituirá folhas publicadas de 4 funcionário(s).');
+
+      const semBanner = await renderizarAberto({ lotes: [lote({ substituicoes: 0 })] });
+      expect(semBanner.debugElement.query(By.css('.aviso-substituicao'))).toBeNull();
+    });
+
+    it('lote já publicado não mostra banner de substituição (ele já substituiu o que tinha de substituir)', async () => {
+      const fixture = await renderizarAberto({
+        lotes: [lote({ status: 'PUBLICADO', pendentes: 0, substituicoes: 4 })],
+      });
+
+      expect(fixture.debugElement.query(By.css('.aviso-substituicao'))).toBeNull();
     });
   });
 
@@ -1864,18 +1958,18 @@ describe('AdminPontoComponent', () => {
   // ═══════════════════════════════════════════════════════════════════
   describe('exclusão de publicações', () => {
 
-    /** Componente carregado COM a flag do master (o backend a manda no envelope da listagem). */
+    /** Componente carregado com um lote que ESTE usuário pode excluir (quem decide é o backend). */
     function criarComoMaster(): AdminPontoComponent {
-      podeExcluirResposta = true;
+      lotesResposta = () => [lote({ pode_excluir: true })];
       return criarCarregado();
     }
 
-    it('a permissão de excluir vem do BACKEND (flag da listagem), nunca de um username no front', () => {
+    it('a permissão de excluir vem do BACKEND lote a lote, nunca de um username no front', () => {
       const comum = criarCarregado();
-      expect(comum.podeExcluir()).toBe(false);   // flag ausente/false → sem X
+      expect((comum.lotes()[0] as any).pode_excluir).toBeUndefined();   // sem permissão → sem X
 
       const master = criarComoMaster();
-      expect(master.podeExcluir()).toBe(true);
+      expect((master.lotes()[0] as any).pode_excluir).toBe(true);
     });
 
     it('X do lote: busca o preview daquele lote e abre o modal com as consequências REAIS', () => {
@@ -1914,7 +2008,7 @@ describe('AdminPontoComponent', () => {
       apiGet.mockImplementation((url: string) => {
         if (url.includes('/exclusao/preview')) return throwError(() => ({ status: 500, error: { ok: false, error: 'Erro interno do servidor' } }));
         if (url === '/api/admin/ponto/pessoas') return of({ ok: true, data: PESSOAS });
-        return of({ ok: true, data: lotesResposta(), pode_excluir: true });
+        return of({ ok: true, data: [lote({ pode_excluir: true })] });
       });
       const comp = criarCarregado();
 
@@ -1986,9 +2080,9 @@ describe('AdminPontoComponent', () => {
     });
 
     it('trava POR ITEM: o X de um lote em voo não trava o do outro, e o reclique não redispara', () => {
-      lotesResposta = () => [lote({ id: 'lote-A' }), lote({ id: 'lote-B' })];
+      lotesResposta = () =>
+        [lote({ id: 'lote-A', pode_excluir: true }), lote({ id: 'lote-B', pode_excluir: true })];
       const previewEmVoo = new Subject<any>();
-      podeExcluirResposta = true;
       const comp = criarCarregado();
       const [a, b]: any[] = comp.lotes();
 
@@ -2030,12 +2124,13 @@ describe('AdminPontoComponent', () => {
   // ═══════════════════════════════════════════════════════════════════
   describe('render da exclusão (X e modal dinâmico)', () => {
     // O X é o gesto mais destrutivo da tela e o modal é a ÚNICA barreira antes dele. Os dois vivem só
-    // no template: sem estes testes, apagar o `@if (podeExcluir())` daria o X a qualquer admin (com o
-    // 403 aparecendo como erro misterioso), e um modal que não consumisse o preview viraria de novo o
-    // "tem certeza?" genérico que a feature existe para eliminar.
+    // no template: sem estes testes, apagar o `@if` da permissão daria o X em lotes que o backend
+    // recusa (com o 403 aparecendo como erro misterioso), e um modal que não consumisse o preview
+    // viraria de novo o "tem certeza?" genérico que a feature existe para eliminar.
 
-    async function renderizarComExclusao(opts: { master?: boolean } = {}) {
-      podeExcluirResposta = opts.master !== false;
+    async function renderizarComExclusao(
+      opts: { excluivel?: boolean; lotes?: () => any[]; expandir?: boolean } = {}) {
+      lotesResposta = opts.lotes ?? (() => [lote({ pode_excluir: opts.excluivel !== false })]);
       TestBed.resetTestingModule();
       TestBed.configureTestingModule({
         imports: [AdminPontoComponent],
@@ -2052,7 +2147,9 @@ describe('AdminPontoComponent', () => {
       fixture.detectChanges();
       const comp = fixture.componentInstance;
       comp.selectCard('folhas');
-      comp.lotes().forEach(l => comp.toggleLote(l));   // expande (traz as páginas)
+      // O detalhe mockado é sempre o do lote-1: com mais de um lote na lista, expandir misturaria os
+      // dois (o Object.assign do detalhe traria o id do lote-1 para dentro do outro).
+      if (opts.expandir !== false) comp.lotes().forEach(l => comp.toggleLote(l));
       fixture.detectChanges();
       await fixture.whenStable();
       fixture.detectChanges();
@@ -2065,19 +2162,47 @@ describe('AdminPontoComponent', () => {
       f.debugElement.queryAll(By.css('button.btn-x-pagina')).map(de => de.nativeElement as HTMLButtonElement);
     const modal = (f: ComponentFixture<AdminPontoComponent>) =>
       f.debugElement.query(By.css('.modal-card'));
+    const cabecalhosDaTabelaDeLotes = (f: ComponentFixture<AdminPontoComponent>) =>
+      f.debugElement.queryAll(By.css('table.data-table > thead th'))
+        .map(de => (de.nativeElement as HTMLElement).textContent?.trim());
 
-    it('sem a flag do backend, NENHUM X é renderizado (nem no lote, nem nas folhas)', async () => {
-      const fixture = await renderizarComExclusao({ master: false });
+    it('sem a permissão do backend, NENHUM X é renderizado (nem no lote, nem nas folhas)', async () => {
+      const fixture = await renderizarComExclusao({ excluivel: false });
 
       expect(xDeLote(fixture)).toHaveLength(0);
       expect(xDePagina(fixture)).toHaveLength(0);
+      // Sem X em lote nenhum, a coluna "Excluir" também não existe.
+      expect(cabecalhosDaTabelaDeLotes(fixture)).not.toContain('Excluir');
     });
 
-    it('com a flag, o X aparece nas DUAS tabelas (o lote e cada folha dele)', async () => {
+    it('com a permissão, o X aparece nas DUAS tabelas (o lote e cada folha dele)', async () => {
       const fixture = await renderizarComExclusao();
 
       expect(xDeLote(fixture)).toHaveLength(1);       // 1 lote
       expect(xDePagina(fixture)).toHaveLength(3);     // 3 páginas
+    });
+
+    /**
+     * O caso que a permissão por lote criou: o admin comum vê lotes que pode excluir (em revisão) e
+     * lotes que não pode (publicados) na MESMA tabela. A coluna existe por causa do primeiro, e o
+     * segundo precisa da célula vazia — sem ela, a linha inteira desliza uma coluna para a esquerda.
+     */
+    it('lista mista: o X só no lote permitido, e a linha do outro mantém a célula vazia', async () => {
+      const fixture = await renderizarComExclusao({
+        expandir: false,
+        lotes: () => [
+          lote({ pode_excluir: true }),
+          lote({ id: 'lote-2', status: 'PUBLICADO', pendentes: 0, pode_excluir: false }),
+        ],
+      });
+
+      expect(xDeLote(fixture)).toHaveLength(1);
+      expect(cabecalhosDaTabelaDeLotes(fixture)).toContain('Excluir');
+
+      const colunas = fixture.debugElement
+        .queryAll(By.css('table.data-table > tbody > tr.row-clickable'))
+        .map(tr => tr.queryAll(By.css('td')).length);
+      expect(colunas).toEqual([8, 8]);   // as duas linhas com o mesmo número de células do cabeçalho
     });
 
     it('o X do lote NÃO expande/contrai a linha (stopPropagation): ele abre o modal', async () => {
@@ -2133,7 +2258,7 @@ describe('AdminPontoComponent', () => {
       expect(texto).toContain('Página 1 — Maria Souza');
       expect(texto).toContain('1 folha(s) e 1 arquivo(s) PDF');
       expect(texto).toContain('não muda');
-      expect(texto).not.toContain('volta a aceitar publicação');   // nenhuma competência reabre aqui
+      expect(texto).not.toContain('volta a aceitar retificação');   // nenhuma competência reabre aqui
     });
 
     it('durante o DELETE em voo, "Excluir definitivamente" e "Cancelar" ficam DESABILITADOS', async () => {
