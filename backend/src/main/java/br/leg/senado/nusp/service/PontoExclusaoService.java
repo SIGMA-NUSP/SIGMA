@@ -166,6 +166,11 @@ public class PontoExclusaoService {
      * qualquer leitura de página, retificação ou aviso — e, na exclusão, de qualquer escrita.
      */
     private void exigirPermissao(PontoLote lote, String callerUsername) {
+        // Lote oculto não existe para quem não é master — 404 (e não 403) para não revelar que há
+        // algo ali; a checagem vem antes da permissão de excluir pelo mesmo motivo.
+        if (Boolean.TRUE.equals(lote.getOculto()) && !ehMaster(callerUsername)) {
+            throw new ServiceValidationException("Lote não encontrado.", HttpStatus.NOT_FOUND);
+        }
         if (!podeExcluir(lote.getStatus(), callerUsername)) {
             throw new ServiceValidationException("forbidden", HttpStatus.FORBIDDEN);
         }

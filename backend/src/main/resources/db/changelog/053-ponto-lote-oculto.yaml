@@ -1,0 +1,21 @@
+databaseChangeLog:
+  # ============================================================
+  # 053 — Ponto: lote oculto (acervo histórico)
+  #
+  # O lote marcado como oculto alimenta o sumário de ocorrências e o BI,
+  # mas só o admin master o vê; a folha oculta nunca ancora o banco de horas.
+  # ============================================================
+  - changeSet:
+      id: 053-ponto-lote-oculto
+      author: douglas.antunes
+      comment: "Adiciona PNT_LOTE.OCULTO (lote do acervo histórico, visível só ao admin master)"
+      changes:
+        - sqlFile:
+            path: db/changelog/053-ponto-lote-oculto.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "ALTER TABLE PNT_LOTE DROP CONSTRAINT CK_PNT_LOTE_OCULTO"
+        - sql:
+            sql: "ALTER TABLE PNT_LOTE DROP COLUMN OCULTO"

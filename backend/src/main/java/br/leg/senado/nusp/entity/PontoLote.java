@@ -50,6 +50,13 @@ public class PontoLote extends AuditableEntity {
     @Column(name = "STATUS", nullable = false)
     private String status = "REVISAO";
 
+    /**
+     * Lote do acervo histórico: as folhas dele alimentam o sumário de ocorrências e o BI como as de
+     * qualquer lote publicado, mas só o admin master o vê — e elas nunca ancoram o banco de horas.
+     */
+    @Column(name = "OCULTO", nullable = false)
+    private Boolean oculto = false;
+
     @Column(name = "CRIADO_POR_ID", nullable = false)
     private String criadoPorId;
 

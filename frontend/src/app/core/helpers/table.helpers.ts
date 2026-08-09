@@ -48,6 +48,12 @@ export function buildReportParams(
 /** Ano de implantação do módulo de ponto — piso de qualquer seleção de período da feature. */
 export const ANO_MINIMO_PONTO = 2026;
 
+/**
+ * Piso próprio do Sumário de ocorrências: o acervo de folhas históricas importadas começa em 2025,
+ * antes da implantação do módulo — só o sumário consulta esse período.
+ */
+export const ANO_MINIMO_SUMARIO = 2025;
+
 /** Nomes dos meses em pt-BR (índice 1-12; o índice 0 é vazio). */
 export const MESES = ['', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
   'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];

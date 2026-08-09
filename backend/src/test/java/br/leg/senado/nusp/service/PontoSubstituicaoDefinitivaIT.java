@@ -259,14 +259,14 @@ class PontoSubstituicaoDefinitivaIT {
             gravarPdf(folhaPrevia.getArquivoPagina());
             gravarPdf(folhaDefinitiva.getArquivoPagina());
 
-            pontoService.publicar(previa.getId(), false, false);
+            pontoService.publicar(previa.getId(), false, false, "master.teste");
             // A definitiva substitui a prévia da pessoa — e substituição é gesto de dois passos: sem a
             // confirmação, o 1º só diz quantas pessoas seriam atingidas e não publica nada.
-            Map<String, Object> pedido = pontoService.publicar(definitiva.getId(), false, false);
+            Map<String, Object> pedido = pontoService.publicar(definitiva.getId(), false, false, "master.teste");
             assertEquals(Boolean.TRUE, pedido.get("requer_confirmacao"));
             assertEquals(1, pedido.get("substituicoes"));
 
-            Map<String, Object> publicada = pontoService.publicar(definitiva.getId(), false, true);
+            Map<String, Object> publicada = pontoService.publicar(definitiva.getId(), false, true, "master.teste");
             assertEquals("PUBLICADO", publicada.get("status"));
         }
 
@@ -287,36 +287,36 @@ class PontoSubstituicaoDefinitivaIT {
         @DisplayName("o acesso direto do dono à prévia vira 404; a definitiva continua abrindo")
         void donoNaoAlcancaMaisAPrevia() {
             ServiceValidationException download = recusaDe(
-                    () -> pontoService.baixarFolha(folhaPrevia.getId(), ana.getId(), "operador"));
+                    () -> pontoService.baixarFolha(folhaPrevia.getId(), ana.getId(), "operador", "ana.operadora"));
             assertEquals(HttpStatus.NOT_FOUND, download.getStatus(),
                     "sumir da lista sem fechar o link deixaria a folha velha viva para quem guardou a URL");
             assertEquals("Folha indisponível.", download.getMessage());
 
             ServiceValidationException dados = recusaDe(
-                    () -> pontoService.dadosFolha(folhaPrevia.getId(), ana.getId(), "operador"));
+                    () -> pontoService.dadosFolha(folhaPrevia.getId(), ana.getId(), "operador", "ana.operadora"));
             assertEquals(HttpStatus.NOT_FOUND, dados.getStatus());
             assertEquals("Folha indisponível.", dados.getMessage());
 
             // E a folha que passou a valer segue acessível pelos dois caminhos.
-            assertTrue(pontoService.baixarFolha(folhaDefinitiva.getId(), ana.getId(), "operador")
+            assertTrue(pontoService.baixarFolha(folhaDefinitiva.getId(), ana.getId(), "operador", "ana.operadora")
                     .conteudo().length > 0);
             assertEquals(PontoLote.CATEGORIA_DEFINITIVA,
-                    pontoService.dadosFolha(folhaDefinitiva.getId(), ana.getId(), "operador").get("categoria"));
+                    pontoService.dadosFolha(folhaDefinitiva.getId(), ana.getId(), "operador", "ana.operadora").get("categoria"));
         }
 
         @Test
         @DisplayName("o admin continua baixando e lendo as DUAS folhas do mês")
         void adminEnxergaAsDuas() {
             // O histórico de lotes é do admin: a substituição é o que o DONO vê, não uma exclusão.
-            assertTrue(pontoService.baixarFolha(folhaPrevia.getId(), admin.getId(), "administrador")
+            assertTrue(pontoService.baixarFolha(folhaPrevia.getId(), admin.getId(), "administrador", "admin.comum")
                     .conteudo().length > 0, "a prévia continua baixável pelo admin");
-            assertTrue(pontoService.baixarFolha(folhaDefinitiva.getId(), admin.getId(), "administrador")
+            assertTrue(pontoService.baixarFolha(folhaDefinitiva.getId(), admin.getId(), "administrador", "admin.comum")
                     .conteudo().length > 0);
 
             assertEquals(PontoLote.CATEGORIA_PREVIA,
-                    pontoService.dadosFolha(folhaPrevia.getId(), admin.getId(), "administrador").get("categoria"));
+                    pontoService.dadosFolha(folhaPrevia.getId(), admin.getId(), "administrador", "admin.comum").get("categoria"));
             assertEquals(PontoLote.CATEGORIA_DEFINITIVA,
-                    pontoService.dadosFolha(folhaDefinitiva.getId(), admin.getId(), "administrador").get("categoria"));
+                    pontoService.dadosFolha(folhaDefinitiva.getId(), admin.getId(), "administrador", "admin.comum").get("categoria"));
         }
     }
 
@@ -343,19 +343,19 @@ class PontoSubstituicaoDefinitivaIT {
             gravarPdf(folhaVelha.getArquivoPagina());
             gravarPdf(folhaNova.getArquivoPagina());
 
-            pontoService.publicar(velha.getId(), false, false);
-            pontoService.publicar(nova.getId(), false, true);   // substitui, confirmada
+            pontoService.publicar(velha.getId(), false, false, "master.teste");
+            pontoService.publicar(nova.getId(), false, true, "master.teste");   // substitui, confirmada
 
             assertEquals(List.of(folhaNova.getId()), idsDasFolhasDeAna(),
                     "duas definitivas do mesmo mês na lista seriam duas versões da mesma folha");
 
             ServiceValidationException download = recusaDe(
-                    () -> pontoService.baixarFolha(folhaVelha.getId(), ana.getId(), "operador"));
+                    () -> pontoService.baixarFolha(folhaVelha.getId(), ana.getId(), "operador", "ana.operadora"));
             assertEquals(HttpStatus.NOT_FOUND, download.getStatus());
             assertEquals("Folha indisponível.", download.getMessage());
 
             // Para o admin nada some: a folha corrigida não apaga a corrigida.
-            assertTrue(pontoService.baixarFolha(folhaVelha.getId(), admin.getId(), "administrador")
+            assertTrue(pontoService.baixarFolha(folhaVelha.getId(), admin.getId(), "administrador", "admin.comum")
                     .conteudo().length > 0);
         }
 
@@ -370,9 +370,9 @@ class PontoSubstituicaoDefinitivaIT {
             PontoLote nova = tx.execute(status -> loteEmRevisao("SEMANAL", null, SEMANA_INI, SEMANA_FIM));
             PontoLotePagina folhaNova = tx.execute(status -> folhaDeAna(nova));
 
-            pontoService.publicar(velha.getId(), false, false);
-            pontoService.publicar(outroPeriodo.getId(), false, false);
-            pontoService.publicar(nova.getId(), false, true);
+            pontoService.publicar(velha.getId(), false, false, "master.teste");
+            pontoService.publicar(outroPeriodo.getId(), false, false, "master.teste");
+            pontoService.publicar(nova.getId(), false, true, "master.teste");
 
             assertEquals(Set.of(folhaOutroPeriodo.getId(), folhaNova.getId()),
                     Set.copyOf(idsDasFolhasDeAna()),
@@ -418,8 +418,8 @@ class PontoSubstituicaoDefinitivaIT {
             PontoLotePagina folhaNova = tx.execute(status -> folhaDeAna(nova));
             gravarPdf(folhaNova.getArquivoPagina());
 
-            pontoService.publicar(velha.getId(), false, false);
-            pontoService.publicar(nova.getId(), false, true);
+            pontoService.publicar(velha.getId(), false, false, "master.teste");
+            pontoService.publicar(nova.getId(), false, true, "master.teste");
 
             ServiceValidationException recusa = recusaDe(() -> retificar(folhaNova, DIA_RECUSADO));
             assertEquals("Não é possível retificar. Folha definitiva já publicada.", recusa.getMessage());
@@ -493,7 +493,7 @@ class PontoSubstituicaoDefinitivaIT {
                 semanal = loteEmRevisao("SEMANAL", null, SEMANA_INI, SEMANA_FIM);
                 folhaSemanal = folhaDeAna(semanal);
             });
-            pontoService.publicar(semanal.getId(), false, false);
+            pontoService.publicar(semanal.getId(), false, false, "master.teste");
             retificacaoDoDiaAberto = String.valueOf(
                     itens(retificar(folhaSemanal, DIA_RETIFICADO)).get(0).get("id"));
         }
@@ -504,7 +504,7 @@ class PontoSubstituicaoDefinitivaIT {
                 definitiva = loteEmRevisao("MENSAL", PontoLote.CATEGORIA_DEFINITIVA, JULHO_INI, JULHO_FIM);
                 folhaDefinitiva = folhaDeAna(definitiva);
             });
-            pontoService.publicar(definitiva.getId(), false, false);
+            pontoService.publicar(definitiva.getId(), false, false, "master.teste");
         }
 
         @Test

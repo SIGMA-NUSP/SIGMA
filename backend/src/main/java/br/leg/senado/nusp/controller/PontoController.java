@@ -76,8 +76,12 @@ public class PontoController {
             @RequestParam(value = "categoria", required = false) String categoria,
             @RequestParam("data_inicio") String dataInicio,
             @RequestParam("data_fim") String dataFim,
+            // Lote do acervo histórico: alimenta o sumário e o BI sem aparecer para ninguém além do
+            // master. Não há checkbox na tela — o envio oculto é feito direto pela API.
+            @RequestParam(value = "oculto", required = false, defaultValue = "false") boolean oculto,
             @AuthenticationPrincipal UserPrincipal principal) {
-        Map<String, Object> data = pontoService.upload(arquivo, tipo, categoria, dataInicio, dataFim, principal.getId());
+        Map<String, Object> data = pontoService.upload(arquivo, tipo, categoria, dataInicio, dataFim,
+                principal.getId(), oculto, principal.getUsername());
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("ok", true, "data", data));
     }
 
@@ -91,7 +95,7 @@ public class PontoController {
     @GetMapping("/api/admin/ponto/lotes")
     public ResponseEntity<?> lotes(@AuthenticationPrincipal UserPrincipal principal) {
         List<Map<String, Object>> lotes = new ArrayList<>();
-        for (Map<String, Object> lote : pontoService.listarLotes()) {
+        for (Map<String, Object> lote : pontoService.listarLotes(principal.getUsername())) {
             lotes.add(comPermissaoDeExcluir(lote, principal));
         }
         return ResponseEntity.ok(Map.of("ok", true, "data", lotes));
@@ -101,7 +105,7 @@ public class PontoController {
     @GetMapping("/api/admin/ponto/lote/{id}")
     public ResponseEntity<?> lote(@PathVariable String id, @AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(Map.of("ok", true, "data",
-                comPermissaoDeExcluir(pontoService.obterLote(id), principal)));
+                comPermissaoDeExcluir(pontoService.obterLote(id, principal.getUsername()), principal)));
     }
 
     /**
@@ -133,9 +137,10 @@ public class PontoController {
     public ResponseEntity<?> vincular(
             @PathVariable String loteId,
             @PathVariable String paginaId,
-            @RequestBody(required = false) Map<String, Object> body) {
+            @RequestBody(required = false) Map<String, Object> body,
+            @AuthenticationPrincipal UserPrincipal principal) {
         Map<String, Object> data = pontoService.atualizarVinculo(loteId, paginaId,
-                optTexto(body, "pessoa_id"), optTexto(body, "pessoa_tipo"));
+                optTexto(body, "pessoa_id"), optTexto(body, "pessoa_tipo"), principal.getUsername());
         return ResponseEntity.ok(Map.of("ok", true, "data", data));
     }
 
@@ -157,7 +162,7 @@ public class PontoController {
                                       @AuthenticationPrincipal UserPrincipal principal) {
         boolean emitirAviso = optBooleano(body, "emitir_aviso", true);
         boolean confirmar = optBooleano(body, "confirmar_substituicao", false);
-        Map<String, Object> data = pontoService.publicar(id, emitirAviso, confirmar);
+        Map<String, Object> data = pontoService.publicar(id, emitirAviso, confirmar, principal.getUsername());
         // O 1º passo não devolve lote nenhum — só o pedido de confirmação, que não tem permissão a levar.
         boolean publicou = !data.containsKey("requer_confirmacao");
         return ResponseEntity.ok(Map.of("ok", true, "data",
@@ -166,8 +171,8 @@ public class PontoController {
 
     @AdminOnly
     @GetMapping("/api/admin/ponto/pagina/{id}/preview")
-    public ResponseEntity<?> preview(@PathVariable String id) {
-        return streamPdf(pontoService.previewPagina(id), false);
+    public ResponseEntity<?> preview(@PathVariable String id, @AuthenticationPrincipal UserPrincipal principal) {
+        return streamPdf(pontoService.previewPagina(id, principal.getUsername()), false);
     }
 
     // ══ Exclusão de lotes e folhas (F59) ════════════════════════
@@ -336,14 +341,16 @@ public class PontoController {
     @GetMapping("/api/ponto/folha/{paginaId}/download")
     public ResponseEntity<?> download(@PathVariable String paginaId,
                                       @AuthenticationPrincipal UserPrincipal principal) {
-        return streamPdf(pontoService.baixarFolha(paginaId, principal.getId(), principal.getRole()), true);
+        return streamPdf(pontoService.baixarFolha(paginaId, principal.getId(), principal.getRole(),
+                principal.getUsername()), true);
     }
 
     /** Dados parseados da folha (7 colunas por dia) para a tela de retificação. */
     @GetMapping("/api/ponto/folha/{paginaId}/dados")
     public ResponseEntity<?> dadosFolha(@PathVariable String paginaId,
                                         @AuthenticationPrincipal UserPrincipal principal) {
-        Map<String, Object> data = pontoService.dadosFolha(paginaId, principal.getId(), principal.getRole());
+        Map<String, Object> data = pontoService.dadosFolha(paginaId, principal.getId(), principal.getRole(),
+                principal.getUsername());
         return ResponseEntity.ok(Map.of("ok", true, "data", data));
     }
 

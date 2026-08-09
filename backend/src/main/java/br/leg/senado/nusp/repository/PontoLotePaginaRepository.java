@@ -24,9 +24,13 @@ public interface PontoLotePaginaRepository extends JpaRepository<PontoLotePagina
     /**
      * Folhas (páginas) de lotes PUBLICADOS pertencentes à pessoa, mais recentes primeiro.
      * Retorna pares [PontoLotePagina, PontoLote].
+     *
+     * <p>Lote OCULTO fica fora: para o dono ele não existe — a folha não aparece na lista, não se
+     * baixa, não se retifica e não entra na regra de substituição que decide o que o dono vê.
      */
     @Query("SELECT p, l FROM PontoLotePagina p, PontoLote l " +
-           "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' AND p.pessoaId = :pessoaId " +
+           "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' AND l.oculto = false " +
+           "AND p.pessoaId = :pessoaId " +
            "ORDER BY l.dataInicio DESC, l.criadoEm DESC")
     List<Object[]> findFolhasPublicadasByPessoa(@Param("pessoaId") String pessoaId);
 
@@ -43,9 +47,12 @@ public interface PontoLotePaginaRepository extends JpaRepository<PontoLotePagina
      * saldo da pessoa passaria a vir do BANCO da folha ANTIGA sempre que a correção tivesse sido
      * enviada antes de ser publicada. Lote publicado sem data (só por escrita manual no banco) fica
      * por último, e não por primeiro.
+     *
+     * <p>Folha de lote OCULTO nunca ancora: o saldo que a pessoa vê tem de nascer de uma folha que
+     * ela pode abrir, e a oculta não existe para ela. Sem folha visível, o saldo fica zerado.
      */
     @Query("SELECT p, l FROM PontoLotePagina p, PontoLote l " +
-           "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' " +
+           "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' AND l.oculto = false " +
            "AND p.pessoaId = :pessoaId AND p.pessoaTipo = :pessoaTipo " +
            "AND p.bancoFinalMin IS NOT NULL " +
            "ORDER BY l.dataFim DESC, l.publicadoEm DESC NULLS LAST, l.criadoEm DESC, p.numeroPagina DESC")
@@ -63,7 +70,7 @@ public interface PontoLotePaginaRepository extends JpaRepository<PontoLotePagina
      * {@code NOT IN ()} vazio não é SQL válido no Oracle.
      */
     @Query("SELECT p, l FROM PontoLotePagina p, PontoLote l " +
-           "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' " +
+           "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' AND l.oculto = false " +
            "AND p.pessoaId = :pessoaId AND p.pessoaTipo = :pessoaTipo " +
            "AND p.bancoFinalMin IS NOT NULL AND p.id NOT IN :excluidas " +
            "ORDER BY l.dataFim DESC, l.publicadoEm DESC NULLS LAST, l.criadoEm DESC, p.numeroPagina DESC")
@@ -149,10 +156,13 @@ public interface PontoLotePaginaRepository extends JpaRepository<PontoLotePagina
      *
      * <p>Diferente da guarda da publicação, aqui o par polimórfico (id, tipo) já é filtrado na própria
      * consulta: o chamador tem os dois em mãos.
+     *
+     * <p>A definitiva de lote OCULTO fica fora: todos os chamadores fazem a pergunta na visão do
+     * DONO, e para ele a folha oculta não existe — ela não pode fechar o mês de uma folha que ele vê.
      */
     @Query("SELECT COUNT(p) FROM PontoLotePagina p, PontoLote l " +
-           "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' AND l.tipo = 'MENSAL' " +
-           "AND l.categoria = 'DEFINITIVA' " +
+           "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' AND l.oculto = false " +
+           "AND l.tipo = 'MENSAL' AND l.categoria = 'DEFINITIVA' " +
            "AND p.pessoaId = :pessoaId AND p.pessoaTipo = :pessoaTipo " +
            "AND l.dataInicio <= :fim AND l.dataFim >= :inicio")
     long contarDefinitivasPublicadas(@Param("pessoaId") String pessoaId,

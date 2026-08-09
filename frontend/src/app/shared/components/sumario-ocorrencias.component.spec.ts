@@ -90,6 +90,12 @@ describe('SumarioOcorrenciasComponent', () => {
       expect(fixture.componentInstance.ateMes()).toBe(12);
     });
 
+    it('os selects de ano alcançam o acervo histórico: a lista começa em 2025', () => {
+      const fixture = renderizar();
+
+      expect(fixture.componentInstance.anos).toEqual([2025, 2026]);
+    });
+
     it('trocar o mês final consulta o novo período', () => {
       const fixture = renderizar();
       apiGet.mockClear();

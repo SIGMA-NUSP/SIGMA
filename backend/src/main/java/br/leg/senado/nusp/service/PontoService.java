@@ -69,6 +69,10 @@ public class PontoService {
     @Value("${app.files.dir}")
     private String filesDir;
 
+    /** Só o master envia e enxerga lotes ocultos — mesma propriedade que autoriza gerir administradores. */
+    @Value("${app.admin.master-username}")
+    private String masterUsername;
+
     /** Subpasta (sob app.files.dir) dos arquivos de ponto. NÃO é servida em /files/ (ver SecurityConfig). */
     private static final String PONTO_DIR = "ponto";
     private static final DateTimeFormatter ISO = DateTimeFormatter.ISO_LOCAL_DATE;
@@ -87,7 +91,13 @@ public class PontoService {
 
     @Transactional
     public Map<String, Object> upload(MultipartFile arquivo, String tipoRaw, String categoriaRaw,
-                                      String dataInicioRaw, String dataFimRaw, String adminId) {
+                                      String dataInicioRaw, String dataFimRaw, String adminId,
+                                      boolean oculto, String username) {
+        // Quem não vê lote oculto também não o cria: um admin comum enviaria algo que ele mesmo
+        // nunca mais encontraria na lista.
+        if (oculto && !ehMaster(username)) {
+            throw new ServiceValidationException("forbidden", HttpStatus.FORBIDDEN);
+        }
         String tipo = normalizeTipo(tipoRaw);
         String categoria = normalizeCategoria(categoriaRaw, tipo);
         LocalDate dataInicio = parseData(dataInicioRaw, "data_inicio");
@@ -108,7 +118,7 @@ public class PontoService {
 
         PdfReader reader = abrirPdfValido(pdfBytes);
         int totalPaginas = reader.getNumberOfPages();
-        PontoLote lote = criarLote(tipo, categoria, dataInicio, dataFim, totalPaginas, adminId, pdfBytes);
+        PontoLote lote = criarLote(tipo, categoria, dataInicio, dataFim, totalPaginas, adminId, pdfBytes, oculto);
         List<Pessoa> pessoas = carregarPessoas();
         PdfTextExtractor extractor = new PdfTextExtractor(reader);
         List<PontoLotePagina> paginas = new ArrayList<>();
@@ -138,7 +148,7 @@ public class PontoService {
     }
 
     private PontoLote criarLote(String tipo, String categoria, LocalDate dataInicio, LocalDate dataFim,
-                                int totalPaginas, String adminId, byte[] pdfBytes) {
+                                int totalPaginas, String adminId, byte[] pdfBytes, boolean oculto) {
         PontoLote lote = new PontoLote();
         lote.setTipo(tipo);
         lote.setCategoria(categoria);
@@ -146,6 +156,7 @@ public class PontoService {
         lote.setDataFim(dataFim);
         lote.setTotalPaginas(totalPaginas);
         lote.setStatus(STATUS_REVISAO);
+        lote.setOculto(oculto);
         lote.setCriadoPorId(adminId);
         String originalRel = PONTO_DIR + "/originais/" + UUID.randomUUID() + ".pdf";
         lote.setArquivoOriginal(originalRel);
@@ -186,7 +197,7 @@ public class PontoService {
     // ══════════════════════════════════════════════════════════════
 
     @Transactional(readOnly = true)
-    public List<Map<String, Object>> listarLotes() {
+    public List<Map<String, Object>> listarLotes(String username) {
         // Pendentes por lote em 1 agregação (COUNT GROUP BY), no lugar de carregar todas as
         // páginas de cada lote só para contar (Q18). Lote sem página pendente não aparece → 0.
         Map<String, Long> pendentesPorLote = new HashMap<>();
@@ -195,14 +206,17 @@ public class PontoService {
         }
         List<Map<String, Object>> out = new ArrayList<>();
         for (PontoLote l : loteRepo.findAllByOrderByCriadoEmDesc()) {
+            // O lote oculto só existe na lista do master; para os demais admins é como se não houvesse.
+            if (Boolean.TRUE.equals(l.getOculto()) && !ehMaster(username)) continue;
             out.add(cabecalho(l, pendentesPorLote.getOrDefault(l.getId(), 0L)));
         }
         return out;
     }
 
     @Transactional(readOnly = true)
-    public Map<String, Object> obterLote(String loteId) {
+    public Map<String, Object> obterLote(String loteId, String username) {
         PontoLote lote = buscarLote(loteId);
+        exigirLoteVisivel(lote, username);
         List<PontoLotePagina> paginas = paginaRepo.findByLoteIdOrderByNumeroPagina(loteId);
         return detalheLote(lote, paginas, carregarPessoas());
     }
@@ -243,8 +257,9 @@ public class PontoService {
      */
     @Transactional
     public Map<String, Object> atualizarVinculo(String loteId, String paginaId,
-                                                 String pessoaId, String pessoaTipo) {
+                                                 String pessoaId, String pessoaTipo, String username) {
         PontoLote lote = buscarLoteComLock(loteId);
+        exigirLoteVisivel(lote, username);
         if (STATUS_PUBLICADO.equals(lote.getStatus())) {
             throw new ServiceValidationException("Lote já publicado não pode ser alterado.");
         }
@@ -291,8 +306,10 @@ public class PontoService {
      * confirmou é cortesia, a verdade é esta. Recusa é lote inteiro recusado, nada gravado.
      */
     @Transactional
-    public Map<String, Object> publicar(String loteId, boolean emitirAviso, boolean confirmarSubstituicao) {
+    public Map<String, Object> publicar(String loteId, boolean emitirAviso, boolean confirmarSubstituicao,
+                                        String username) {
         PontoLote lote = buscarLoteComLock(loteId);
+        exigirLoteVisivel(lote, username);
         if (STATUS_PUBLICADO.equals(lote.getStatus())) {
             // É esta a recusa que a 2ª transação concorrente recebe depois de esperar o lock — e ela
             // precisa chegar à TELA do admin, não só ao corpo do erro (daí o `message`; ver F57).
@@ -314,7 +331,11 @@ public class PontoService {
         extrairDadosDasFolhas(paginas);
         paginaRepo.saveAll(paginas);
         reancorarPessoas(paginas);
-        criarAvisosPessoais(lote, paginas, emitirAviso);
+        // O lote oculto publica em silêncio absoluto: folha que ninguém vê não anuncia nada — nem o
+        // aviso da publicação, nem o alerta de dia incompleto (não há retificação a provocar).
+        if (!Boolean.TRUE.equals(lote.getOculto())) {
+            criarAvisosPessoais(lote, paginas, emitirAviso);
+        }
         return detalheLote(lote, paginas, pessoas);
     }
 
@@ -339,6 +360,11 @@ public class PontoService {
      * onde só há semanais do mês (as folhas convivem — a hierarquia do sumário resolve o mês) e
      * semanais de períodos diferentes entre si, que são CUMULATIVAS por desenho (01–05, 01–12,
      * 01–19…). Não existe, e não deve existir, validação genérica de sobreposição de período.
+     *
+     * <p>Folha de lote OCULTO conta aqui como qualquer outra, nas duas direções: retirá-la deixaria
+     * duas folhas do mesmo mês convivendo sem regra de qual vale. O preço é a mensagem citar uma
+     * competência que o admin comum não encontra em lote nenhum — o acervo cobre meses anteriores à
+     * operação, então a colisão só existe se alguém publicar retroativo por cima dele.
      */
     private Substituicoes levantarSubstituicoes(PontoLote lote, List<PontoLotePagina> vinculadas) {
         if (vinculadas.isEmpty()) return Substituicoes.NENHUMA;
@@ -856,8 +882,8 @@ public class PontoService {
 
     /** Download da folha por um operador/técnico (só a própria) ou admin (qualquer). */
     @Transactional(readOnly = true)
-    public ArquivoPonto baixarFolha(String paginaId, String solicitanteId, String role) {
-        FolhaAcesso fa = checarAcessoFolha(paginaId, solicitanteId, role);
+    public ArquivoPonto baixarFolha(String paginaId, String solicitanteId, String role, String username) {
+        FolhaAcesso fa = checarAcessoFolha(paginaId, solicitanteId, role, username);
         PontoLotePagina pg = fa.pagina();
         PontoLote lote = fa.lote();
         String nome = "ponto-" + lote.getTipo().toLowerCase(Locale.ROOT)
@@ -871,8 +897,8 @@ public class PontoService {
      * dono do download.
      */
     @Transactional(readOnly = true)
-    public Map<String, Object> dadosFolha(String paginaId, String solicitanteId, String role) {
-        FolhaAcesso fa = checarAcessoFolha(paginaId, solicitanteId, role);
+    public Map<String, Object> dadosFolha(String paginaId, String solicitanteId, String role, String username) {
+        FolhaAcesso fa = checarAcessoFolha(paginaId, solicitanteId, role, username);
         PontoLotePagina pg = fa.pagina();
         PontoLote lote = fa.lote();
 
@@ -923,7 +949,7 @@ public class PontoService {
     private record FolhaAcesso(PontoLotePagina pagina, PontoLote lote) {}
 
     /** Localiza página + lote garantindo o acesso do solicitante (dono de lote publicado, ou admin). */
-    private FolhaAcesso checarAcessoFolha(String paginaId, String solicitanteId, String role) {
+    private FolhaAcesso checarAcessoFolha(String paginaId, String solicitanteId, String role, String username) {
         PontoLotePagina pg = paginaRepo.findById(paginaId)
                 .orElseThrow(() -> new ServiceValidationException("Folha não encontrada.", HttpStatus.NOT_FOUND));
         PontoLote lote = buscarLote(pg.getLoteId());
@@ -931,18 +957,24 @@ public class PontoService {
             if (pg.getPessoaId() == null || !pg.getPessoaId().equals(solicitanteId)) {
                 throw new ServiceValidationException("Acesso negado a esta folha.", HttpStatus.FORBIDDEN);
             }
-            if (!STATUS_PUBLICADO.equals(lote.getStatus()) || substituidaParaODono(pg)) {
+            // A folha de lote oculto não existe para o dono — mesma resposta da substituída.
+            if (!STATUS_PUBLICADO.equals(lote.getStatus()) || Boolean.TRUE.equals(lote.getOculto())
+                    || substituidaParaODono(pg)) {
                 throw new ServiceValidationException("Folha indisponível.", HttpStatus.NOT_FOUND);
             }
+        } else if (Boolean.TRUE.equals(lote.getOculto()) && !ehMaster(username)) {
+            // Para o admin comum a folha oculta também não existe — mesma resposta da inexistente.
+            throw new ServiceValidationException("Folha não encontrada.", HttpStatus.NOT_FOUND);
         }
         return new FolhaAcesso(pg, lote);
     }
 
     /** Preview de uma página (admin, durante a revisão). */
     @Transactional(readOnly = true)
-    public ArquivoPonto previewPagina(String paginaId) {
+    public ArquivoPonto previewPagina(String paginaId, String username) {
         PontoLotePagina pg = paginaRepo.findById(paginaId)
                 .orElseThrow(() -> new ServiceValidationException("Página não encontrada.", HttpStatus.NOT_FOUND));
+        exigirLoteVisivel(buscarLote(pg.getLoteId()), username);
         return new ArquivoPonto(lerArquivo(pg.getArquivoPagina()), "pagina-" + pg.getNumeroPagina() + ".pdf");
     }
 
@@ -1098,6 +1130,7 @@ public class PontoService {
         m.put("data_inicio", l.getDataInicio().toString());
         m.put("data_fim", l.getDataFim().toString());
         m.put("status", l.getStatus());
+        m.put("oculto", Boolean.TRUE.equals(l.getOculto()));
         m.put("total_paginas", l.getTotalPaginas());
         m.put("pendentes", pendentes);
         m.put("criado_em", l.getCriadoEm() != null ? l.getCriadoEm().toString() : null);
@@ -1132,6 +1165,17 @@ public class PontoService {
     private PontoLote buscarLote(String loteId) {
         return loteRepo.findById(loteId)
                 .orElseThrow(() -> new ServiceValidationException("Lote não encontrado.", HttpStatus.NOT_FOUND));
+    }
+
+    /** Lote oculto só existe para o admin master; para qualquer outro é como se não existisse. */
+    private void exigirLoteVisivel(PontoLote lote, String username) {
+        if (Boolean.TRUE.equals(lote.getOculto()) && !ehMaster(username)) {
+            throw new ServiceValidationException("Lote não encontrado.", HttpStatus.NOT_FOUND);
+        }
+    }
+
+    private boolean ehMaster(String username) {
+        return masterUsername != null && masterUsername.equalsIgnoreCase(username);
     }
 
     /**

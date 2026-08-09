@@ -243,7 +243,7 @@ class PontoConcorrenciaBordasIT {
 
     private Callable<String> publicar(String loteId, boolean emitirAviso) {
         return () -> {
-            pontoService.publicar(loteId, emitirAviso, false);
+            pontoService.publicar(loteId, emitirAviso, false, "master.teste");
             return "PUBLICOU";
         };
     }
@@ -257,7 +257,7 @@ class PontoConcorrenciaBordasIT {
 
     private Callable<String> vincular(String loteId, String paginaId, String pessoaId) {
         return () -> {
-            pontoService.atualizarVinculo(loteId, paginaId, pessoaId, "OPERADOR");
+            pontoService.atualizarVinculo(loteId, paginaId, pessoaId, "OPERADOR", "master.teste");
             return "VINCULOU";
         };
     }

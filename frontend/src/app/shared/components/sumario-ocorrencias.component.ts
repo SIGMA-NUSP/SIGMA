@@ -2,7 +2,7 @@ import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { Subscription } from 'rxjs';
 import { ApiService } from '../../core/services/api.service';
 import { httpErrorMsg } from '../../core/helpers/http.helpers';
-import { MESES } from '../../core/helpers/table.helpers';
+import { ANO_MINIMO_SUMARIO, MESES } from '../../core/helpers/table.helpers';
 import { ColumnFilterComponent, ColumnFilterDef, ColumnFilterState } from './column-filter.component';
 import { anosNavegaveis } from './mes-ano-selector.component';
 
@@ -167,7 +167,8 @@ export class SumarioOcorrenciasComponent implements OnInit {
   /** MESES é 1-based (índice 0 = ''); aqui itera a lista 0-based. */
   readonly meses = MESES.slice(1);
   private readonly hoje = new Date();
-  readonly anos = anosNavegaveis(this.hoje);
+  /** O sumário navega até o acervo histórico — piso próprio, anterior à implantação do módulo. */
+  readonly anos = anosNavegaveis(this.hoje, ANO_MINIMO_SUMARIO);
 
   // Período default: o ano corrente inteiro — o recorte que o admin mais pede.
   deMes = signal(1);

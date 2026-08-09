@@ -103,3 +103,5 @@ databaseChangeLog:
       file: db/changelog/051-aviso-subtipo-registro-incompleto.yaml
   - include:
       file: db/changelog/052-aviso-alvo-complemento.yaml
+  - include:
+      file: db/changelog/053-ponto-lote-oculto.yaml

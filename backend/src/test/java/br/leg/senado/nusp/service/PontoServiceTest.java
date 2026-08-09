@@ -260,7 +260,7 @@ class PontoServiceTest {
                 pagina(1, OP, "OPERADOR"));
         nenhumaMensalPublicada();
 
-        service.publicar(LOTE, false, false);
+        service.publicar(LOTE, false, false, "master.teste");
 
         verify(loteRepo).lockPorId(LOTE);
         // O findById NÃO é usado aqui: ele lê sem segurar a linha, e é por essa fresta que duas
@@ -287,7 +287,7 @@ class PontoServiceTest {
                 .thenReturn(Optional.of(lote("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30), "PUBLICADO")));
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.publicar(LOTE, true, false));
+                () -> service.publicar(LOTE, true, false, "master.teste"));
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertEquals("Lote já está publicado.", ex.getMessage());
@@ -311,7 +311,7 @@ class PontoServiceTest {
             return null;
         });
 
-        service.publicar(LOTE, false, false);
+        service.publicar(LOTE, false, false, "master.teste");
 
         InOrder ordem = inOrder(loteRepo, paginaRepo, saldoAberturaService);
         ordem.verify(loteRepo).save(lote);                       // flip do status
@@ -325,7 +325,7 @@ class PontoServiceTest {
         when(loteRepo.lockPorId(LOTE)).thenReturn(Optional.empty());
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.publicar(LOTE, true, false));
+                () -> service.publicar(LOTE, true, false, "master.teste"));
 
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
         assertEquals("Lote não encontrado.", ex.getMessage());
@@ -351,7 +351,7 @@ class PontoServiceTest {
             when(paginaRepo.findByLoteIdOrderByNumeroPagina(LOTE)).thenReturn(List.of(pendente));
             when(operadorRepo.findAll()).thenReturn(List.of(operador()));
 
-            service.atualizarVinculo(LOTE, "pag-1", OP, "OPERADOR");
+            service.atualizarVinculo(LOTE, "pag-1", OP, "OPERADOR", "master.teste");
 
             verify(loteRepo).lockPorId(LOTE);
             // Sem o lock, a leitura do lote não espera a publicação em voo: o vínculo enxergava o status
@@ -369,7 +369,7 @@ class PontoServiceTest {
                     lote("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30), "PUBLICADO")));
 
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.atualizarVinculo(LOTE, "pag-1", OP, "OPERADOR"));
+                    () -> service.atualizarVinculo(LOTE, "pag-1", OP, "OPERADOR", "master.teste"));
 
             assertEquals("Lote já publicado não pode ser alterado.", ex.getMessage());
             // É esta a recusa que a corrida produz agora: a página nem chega a ser lida, nada é salvo.
@@ -383,7 +383,7 @@ class PontoServiceTest {
             when(loteRepo.lockPorId(LOTE)).thenReturn(Optional.empty());
 
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.atualizarVinculo(LOTE, "pag-1", OP, "OPERADOR"));
+                    () -> service.atualizarVinculo(LOTE, "pag-1", OP, "OPERADOR", "master.teste"));
 
             assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
             assertEquals("Lote não encontrado.", ex.getMessage());
@@ -407,7 +407,7 @@ class PontoServiceTest {
             when(pessoaCadastro.existe(OP, "TECNICO")).thenReturn(false);   // o par trocado, visto daqui
 
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.atualizarVinculo(LOTE, "pag-1", OP, "TECNICO"));
+                    () -> service.atualizarVinculo(LOTE, "pag-1", OP, "TECNICO", "master.teste"));
 
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             assertEquals("Operador/técnico/administrador inválido.", ex.getMessage());
@@ -436,7 +436,7 @@ class PontoServiceTest {
         when(paginaRepo.findPessoasComMensalPublicadaNoPeriodo(eq(LOTE), anyCollection(), any(), any()))
                 .thenReturn(List.of());
 
-        service.publicar(LOTE, false, false);
+        service.publicar(LOTE, false, false, "master.teste");
 
         InOrder ordem = inOrder(saldoAberturaService);
         ordem.verify(saldoAberturaService).reancorar("adm-9", "ADMINISTRADOR");
@@ -483,7 +483,7 @@ class PontoServiceTest {
                     pagina(2, OP, "OPERADOR"));
 
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.publicar(LOTE, true, false));
+                    () -> service.publicar(LOTE, true, false, "master.teste"));
 
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             String msg = mensagemDoAdmin(ex);
@@ -505,7 +505,7 @@ class PontoServiceTest {
             mensalPublicadaDe(OP, "OPERADOR", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30), DEFINITIVA);
 
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.publicar(LOTE, true, false));
+                    () -> service.publicar(LOTE, true, false, "master.teste"));
 
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             String msg = mensagemDoAdmin(ex);
@@ -525,7 +525,7 @@ class PontoServiceTest {
             mensalPublicadaDe(OP, "OPERADOR", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 7, 31), DEFINITIVA);
 
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.publicar(LOTE, true, false));
+                    () -> service.publicar(LOTE, true, false, "master.teste"));
 
             String msg = mensagemDoAdmin(ex);
             assertTrue(msg.contains("Junho/2026"), () -> "junho é o mês fechado: " + msg);
@@ -544,7 +544,7 @@ class PontoServiceTest {
                     new Object[] { OP, "OPERADOR", JULHO_INI, DEFINITIVA });
 
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.publicar(LOTE, true, false));
+                    () -> service.publicar(LOTE, true, false, "master.teste"));
 
             assertEquals("Não foi possível publicar o lote."
                     + " Já existe folha definitiva de Julho/2026 publicada.", ex.getMessage());
@@ -566,7 +566,7 @@ class PontoServiceTest {
             cenario(lote, pagina(1, OP, "OPERADOR"));
             nenhumaMensalPublicada();
 
-            Map<String, Object> out = service.publicar(LOTE, true, false);
+            Map<String, Object> out = service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals("PUBLICADO", out.get("status"));
             assertEquals("PUBLICADO", lote.getStatus());
@@ -586,7 +586,7 @@ class PontoServiceTest {
             cenario(lote, pagina(1, OP, "OPERADOR"));
             nenhumaMensalPublicada();
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             // Sem a origem, a exclusão do lote teria de adivinhar quais avisos são dele — e apagaria,
             // por autor/tipo, os avisos PESSOAIS do desfecho de folga, que não são desta publicação.
@@ -604,7 +604,7 @@ class PontoServiceTest {
                     pagina(1, OP, "OPERADOR"));
             nenhumaMensalPublicada();
 
-            Map<String, Object> out = service.publicar(LOTE, true, false);
+            Map<String, Object> out = service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals("PUBLICADO", out.get("status"));
             // A única pergunta feita ao banco é sobre a MENSAL — semanal com semanal nunca conflita.
@@ -620,7 +620,7 @@ class PontoServiceTest {
             when(paginaRepo.findPessoasComMensalPublicadaNoPeriodo(eq(LOTE), anyCollection(),
                     eq(LocalDate.of(2026, 7, 1)), eq(LocalDate.of(2026, 7, 31)))).thenReturn(List.of());
 
-            Map<String, Object> out = service.publicar(LOTE, true, false);
+            Map<String, Object> out = service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals("PUBLICADO", out.get("status"));
             verify(saldoAberturaService).reancorar(OP, "OPERADOR");
@@ -634,7 +634,7 @@ class PontoServiceTest {
                     pagina(2, OP, "OPERADOR"));
             nenhumaMensalPublicada();
 
-            Map<String, Object> out = service.publicar(LOTE, true, false);
+            Map<String, Object> out = service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals("PUBLICADO", out.get("status"));
             // Uma re-âncora só: reancorarPessoas dedupa por (pessoa, tipo).
@@ -647,7 +647,7 @@ class PontoServiceTest {
             cenario(emRevisao("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)),
                     pagina(1, null, null));
 
-            Map<String, Object> out = service.publicar(LOTE, true, false);
+            Map<String, Object> out = service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals("PUBLICADO", out.get("status"));
             verify(paginaRepo, never()).findPessoasComMensalPublicadaNoPeriodo(any(), anyCollection(), any(), any());
@@ -680,7 +680,7 @@ class PontoServiceTest {
             nenhumaMensalPublicada();
             when(retificacaoService.limiteRetificacao(lote)).thenReturn(LocalDate.of(2026, 7, 10));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             // A folha mensal É a competência inteira: o intervalo 01/06–30/06 em datas seria redundante
             // e ilegível — o aviso diz o MÊS; o intervalo de datas é identidade só da semanal.
@@ -698,7 +698,7 @@ class PontoServiceTest {
             // Sem limite de retificação, a última frase simplesmente não existe — nada de "até null".
             when(retificacaoService.limiteRetificacao(lote)).thenReturn(null);
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals("Folha de ponto mensal — prévia (Março/2026) publicada. "
                     + "Acesse \"Minhas Folhas\" para visualizá-la.",
@@ -712,7 +712,7 @@ class PontoServiceTest {
                     pagina(1, OP, "OPERADOR"));
             nenhumaMensalPublicada();
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals("Folha de ponto definitiva do mês Julho/2026 publicada.", textoDoAviso());
             // A definitiva encerra o mês: não há prazo de retificação a anunciar, e por isso o texto
@@ -728,7 +728,7 @@ class PontoServiceTest {
             nenhumaMensalPublicada();
             when(retificacaoService.limiteRetificacao(lote)).thenReturn(LocalDate.of(2026, 6, 12));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals("Folha de ponto semanal (01/06/2026 a 05/06/2026) publicada. "
                     + "Acesse \"Minhas Folhas\" para visualizá-la. Retificações até 12/06/2026.",
@@ -888,7 +888,7 @@ class PontoServiceTest {
                     dia("pag-4", "08:00", "12:00", "13:00"),                       // voltou e não saiu
                     dia("pag-5", "08:00", "12:00", "13:00", "17:00"));             // dia completo
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             // Falta uma batida no dia: o dia inteiro vira débito no banco se ninguém corrigir.
             assertEquals(List.of(OP2, OP4), alertados());
@@ -906,7 +906,7 @@ class PontoServiceTest {
                     diaDeStatus("pag-1", "Atest", "08:00"),
                     dia("pag-1", "08:00", "12:00", "13:00", "17:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             nenhumAlerta();
             assertEquals(List.of(OP), avisadosDaFolha());
@@ -920,7 +920,7 @@ class PontoServiceTest {
             // fechado virar ímpar e alertar quem está em dia.
             folhasComAsLinhas(dia("pag-1", "08:00", "12:00", "+04:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             nenhumAlerta();
             assertEquals(List.of(OP), avisadosDaFolha());
@@ -938,7 +938,7 @@ class PontoServiceTest {
                     dia("pag-1", "08:00", "12:00", "13:00"),
                     dia("pag-2", "08:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             // O papel é o que decide em qual coluna o alvo do aviso é gravado — errar aqui endereça a
             // notificação a um operador inexistente. ⚠️ O vínculo diz ADMINISTRADOR; o papel é ADMIN.
@@ -959,7 +959,7 @@ class PontoServiceTest {
                     dia("pag-1", "08:00", "12:00", "13:00"),
                     dia("pag-1", "08:00", "12:00", "13:00", "17:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals(List.of(OP), alertados());
             nenhumAvisoDeFolha();   // não sobrou ninguém para o aviso comum
@@ -982,7 +982,7 @@ class PontoServiceTest {
                     dia("pag-2", "08:00"),
                     dia("pag-3", "08:00", "12:00", "13:00", "17:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals(List.of(OP), alertados());
             // A pessoa alertada não pode aparecer também no aviso comum: seriam dois popups da mesma folha.
@@ -997,7 +997,7 @@ class PontoServiceTest {
                     dia("pag-1", "08:00", "12:00", "13:00", "17:00"),
                     dia("pag-2", "08:00", "12:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals(List.of(OP, OP2), avisadosDaFolha());
             nenhumAlerta();
@@ -1010,7 +1010,7 @@ class PontoServiceTest {
             folhasComAsLinhas(dia("pag-1", "08:00", "12:00", "13:00"));
             when(retificacaoService.limiteRetificacao(any())).thenReturn(LocalDate.of(2026, 6, 12));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             verify(avisoService).criarPessoalIndividual(anyList(), texto.capture(), eq(ADMIN),
                     eq(SubtipoAviso.FOLHA_REGISTRO_INCOMPLETO), eq(LOTE));
@@ -1029,7 +1029,7 @@ class PontoServiceTest {
             loteSemanalDe(OP);
             folhasComAsLinhas(dia("pag-1", "08:00", "12:00", "13:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             // Conferir antes de gravar leria a folha da publicação ANTERIOR (ou nenhuma), e o alerta
             // falaria de um dia que a folha nova já não tem.
@@ -1050,7 +1050,7 @@ class PontoServiceTest {
                     dia("pag-1", "08:00", "12:00", "13:00"),
                     dia("pag-2", "08:00", "12:00", "13:00", "17:00"));
 
-            service.publicar(LOTE, false, false);
+            service.publicar(LOTE, false, false, "master.teste");
 
             // O alerta existe para provocar a correção enquanto o prazo corre: publicar em silêncio
             // não pode calar justamente o aviso que pede uma providência.
@@ -1064,7 +1064,7 @@ class PontoServiceTest {
             loteSemanalDe(OP);
             folhasComAsLinhas(dia("pag-1", "08:00", "12:00", "13:00", "17:00"));
 
-            service.publicar(LOTE, false, false);
+            service.publicar(LOTE, false, false, "master.teste");
 
             verifyNoInteractions(avisoService);
         }
@@ -1081,7 +1081,7 @@ class PontoServiceTest {
                     dia("pag-1", "08:00"),
                     dia("pag-2", "08:00", "12:00", "13:00", "17:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals(List.of(OP), alertados());
             // Na mensal o aviso comum continua sendo o da folha mensal: o alerta não rouba o subtipo
@@ -1103,7 +1103,7 @@ class PontoServiceTest {
                     diaEm("pag-1", LocalDate.of(2026, 6, 2), "08:00"),
                     diaEm("pag-2", LocalDate.of(2026, 6, 4), "08:00", "12:00", "13:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals(List.of(OP), alertados(), "uma pessoa, um alvo — não um por folha");
             // E o texto dela reúne os dias das DUAS folhas: é a pessoa que é avisada, não a folha.
@@ -1118,7 +1118,7 @@ class PontoServiceTest {
             cenario(mensal(DEFINITIVA, JULHO_INI, JULHO_FIM), pagina(1, OP, "OPERADOR"));
             nenhumaMensalPublicada();
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             // Nem chega a perguntar ao banco pelas linhas da folha.
             verify(folhaLinhaRepo, never()).findCelulasDasFolhas(anyCollection());
@@ -1133,7 +1133,7 @@ class PontoServiceTest {
             cenario(emRevisao("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5)),
                     pagina(1, null, null));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             verify(folhaLinhaRepo, never()).findCelulasDasFolhas(anyCollection());
             verifyNoInteractions(avisoService);
@@ -1151,7 +1151,7 @@ class PontoServiceTest {
                     diaEm("pag-2", LocalDate.of(2026, 6, 3), "08:00", "12:00", "13:00"),
                     diaEm("pag-2", LocalDate.of(2026, 6, 5), "17:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals(List.of(
                             "O dia 01/06 da sua folha está sem registro de entrada ou de saída.",
@@ -1168,7 +1168,7 @@ class PontoServiceTest {
                     diaEm("pag-1", LocalDate.of(2026, 6, 2), "08:00"),
                     diaEm("pag-1", LocalDate.of(2026, 7, 1), "08:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             // Ordenar por data, e não pelo texto: "02/06" vem antes de "10/06", e julho depois de junho.
             assertEquals(List.of("Os dias 02/06, 10/06 e 01/07 da sua folha estão sem registro de entrada ou de saída."),
@@ -1186,7 +1186,7 @@ class PontoServiceTest {
                     diaEm("pag-1", LocalDate.of(2026, 6, 2), "08:00"),
                     diaEm("pag-2", LocalDate.of(2026, 6, 2), "08:00", "12:00", "13:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals(List.of("O dia 02/06 da sua folha está sem registro de entrada ou de saída."),
                     diasQueCadaUmLe());
@@ -1199,7 +1199,7 @@ class PontoServiceTest {
             // Folha torta: a data não pôde ser derivada, mas o dia continua impresso na coluna DIA.
             folhasComAsLinhas(diaSemData("pag-1", "14/07/26 - ter", "08:00", "12:00", "13:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals(List.of("O dia 14/07 da sua folha está sem registro de entrada ou de saída."),
                     diasQueCadaUmLe());
@@ -1211,7 +1211,7 @@ class PontoServiceTest {
             loteSemanalDe(OP);
             folhasComAsLinhas(diaSemData("pag-1", null, "08:00", "12:00", "13:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             // Calar seria pior: o dia continua valendo débito no banco de horas.
             assertEquals(List.of(OP), alertados());
@@ -1226,7 +1226,7 @@ class PontoServiceTest {
                     diaEm("pag-1", LocalDate.of(2026, 6, 2), "08:00"),
                     diaSemData("pag-1", "", "08:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals(List.of("O dia 02/06 da sua folha está sem registro de entrada ou de saída."),
                     diasQueCadaUmLe());
@@ -1240,7 +1240,7 @@ class PontoServiceTest {
                     diaEm("pag-1", LocalDate.of(2026, 6, 2), "08:00"),
                     diaEm("pag-2", LocalDate.of(2026, 6, 4), "08:00", "12:00", "13:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             // O cadastro é um só e o texto é por destinatário — ninguém lê o dia do colega.
             assertEquals(List.of(OP, OP2), alertados());
@@ -1258,7 +1258,7 @@ class PontoServiceTest {
                     dia("pag-1", "08:00"),
                     dia("pag-2", "08:00", "12:00", "13:00", "17:00"));
 
-            service.publicar(LOTE, true, false);
+            service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals(List.of(OP2), avisadosDaFolha());
             assertNull(alvosDaFolha().get(0).complemento(), "o aviso comum é igual para todo mundo");
@@ -1283,7 +1283,7 @@ class PontoServiceTest {
         /** Publica esperando a recusa do lote INTEIRO e devolve a frase que o admin lê. */
         private String recusaAoPublicar() {
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.publicar(LOTE, true, false));
+                    () -> service.publicar(LOTE, true, false, "master.teste"));
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             assertEquals(ex.getMessage(), mensagemDoAdmin(ex), "a frase tem de estar nos dois campos do erro");
             assertNadaGravado();
@@ -1292,7 +1292,7 @@ class PontoServiceTest {
 
         /** Publica o 1º passo esperando o pedido de confirmação; devolve quantas pessoas ele anuncia. */
         private int confirmacaoPedida() {
-            Map<String, Object> out = service.publicar(LOTE, true, false);
+            Map<String, Object> out = service.publicar(LOTE, true, false, "master.teste");
             assertEquals(Boolean.TRUE, out.get("requer_confirmacao"), () -> "o lote substitui: " + out);
             assertNadaGravado();
             return (Integer) out.get("substituicoes");
@@ -1300,7 +1300,7 @@ class PontoServiceTest {
 
         /** Publica direto (nada a substituir) e confirma que o lote ficou publicado. */
         private void publicaDireto(PontoLote lote) {
-            Map<String, Object> out = service.publicar(LOTE, true, false);
+            Map<String, Object> out = service.publicar(LOTE, true, false, "master.teste");
             assertEquals("PUBLICADO", out.get("status"), () -> "não havia nada a substituir: " + out);
             assertEquals("PUBLICADO", lote.getStatus());
         }
@@ -1433,7 +1433,7 @@ class PontoServiceTest {
                     new Object[] { OP, "OPERADOR", JULHO_INI, PREVIA },
                     new Object[] { OP, "OPERADOR", JULHO_INI, DEFINITIVA });
 
-            Map<String, Object> out = service.publicar(LOTE, true, false);
+            Map<String, Object> out = service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals(Boolean.TRUE, out.get("requer_confirmacao"));
             assertEquals(1, out.get("substituicoes"));
@@ -1450,7 +1450,7 @@ class PontoServiceTest {
             cenario(lote, pagina(1, OP, "OPERADOR"));
             mensalPublicadaDe(OP, "OPERADOR", JULHO_INI, JULHO_FIM, PREVIA);
 
-            Map<String, Object> out = service.publicar(LOTE, true, true);
+            Map<String, Object> out = service.publicar(LOTE, true, true, "master.teste");
 
             assertEquals("PUBLICADO", out.get("status"));
             assertEquals("PUBLICADO", lote.getStatus());
@@ -1472,7 +1472,7 @@ class PontoServiceTest {
                     new Object[] { OP, "OPERADOR", JULHO_INI, PREVIA },
                     new Object[] { OP2, "OPERADOR", JULHO_INI, DEFINITIVA });
 
-            assertEquals(2, service.publicar(LOTE, true, false).get("substituicoes"));
+            assertEquals(2, service.publicar(LOTE, true, false, "master.teste").get("substituicoes"));
         }
 
         /**
@@ -1489,7 +1489,7 @@ class PontoServiceTest {
             when(operadorRepo.findAll()).thenReturn(List.of(operador()));
             mensalPublicadaDe(OP, "OPERADOR", JULHO_INI, JULHO_FIM, PREVIA);
 
-            assertEquals(1, service.obterLote(LOTE).get("substituicoes"));
+            assertEquals(1, service.obterLote(LOTE, "master.teste").get("substituicoes"));
         }
 
         @Test
@@ -1499,7 +1499,7 @@ class PontoServiceTest {
             cenario(lote, pagina(1, OP, "OPERADOR"));
             nenhumaMensalPublicada();
 
-            Map<String, Object> out = service.publicar(LOTE, true, false);
+            Map<String, Object> out = service.publicar(LOTE, true, false, "master.teste");
 
             assertNull(out.get("requer_confirmacao"));
             assertEquals("PUBLICADO", out.get("status"));
@@ -1512,7 +1512,7 @@ class PontoServiceTest {
             mensalPublicadaDe(OP, "OPERADOR", JULHO_INI, JULHO_FIM, DEFINITIVA);
 
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.publicar(LOTE, true, true));
+                    () -> service.publicar(LOTE, true, true, "master.teste"));
 
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             verify(loteRepo, never()).save(any());
@@ -1550,7 +1550,7 @@ class PontoServiceTest {
         void mensalSemCategoria() {
             // O arquivo nem chega a ser lido: a natureza é validada junto do tipo, no início do envio.
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.upload(null, "MENSAL", null, "2026-07-01", "2026-07-31", ADMIN));
+                    () -> service.upload(null, "MENSAL", null, "2026-07-01", "2026-07-31", ADMIN, false, "master.teste"));
 
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             assertEquals("Informe se a folha mensal é prévia ou definitiva.", ex.getMessage());
@@ -1561,7 +1561,7 @@ class PontoServiceTest {
         @DisplayName("mensal com natureza fora do domínio → 400 dizendo os dois valores aceitos")
         void mensalComCategoriaInvalida() {
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.upload(null, "MENSAL", "PARCIAL", "2026-07-01", "2026-07-31", ADMIN));
+                    () -> service.upload(null, "MENSAL", "PARCIAL", "2026-07-01", "2026-07-31", ADMIN, false, "master.teste"));
 
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
             assertEquals("Categoria inválida (use PREVIA ou DEFINITIVA).", ex.getMessage());
@@ -1572,7 +1572,7 @@ class PontoServiceTest {
         @DisplayName("semanal com natureza preenchida → 400: ela é cumulativa e não fecha mês nenhum")
         void semanalComCategoria() {
             ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.upload(null, "SEMANAL", "PREVIA", "2026-07-06", "2026-07-10", ADMIN));
+                    () -> service.upload(null, "SEMANAL", "PREVIA", "2026-07-06", "2026-07-10", ADMIN, false, "master.teste"));
 
             // Recusar, e não ignorar em silêncio: quem marcou a natureza numa semanal errou o tipo.
             assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
@@ -1584,7 +1584,7 @@ class PontoServiceTest {
         @DisplayName("a natureza da mensal é normalizada: \"  previa \" chega ao banco como PREVIA")
         void categoriaDaMensalNormalizada() {
             Map<String, Object> out = service.upload(pdfDeUmaPagina(), "MENSAL", "  previa ",
-                    "2026-07-01", "2026-07-31", ADMIN);
+                    "2026-07-01", "2026-07-31", ADMIN, false, "master.teste");
 
             // O CHECK do banco só aceita o domínio em caixa alta — normalizar aqui é o que evita o
             // erro de constraint virar 500 na cara do admin.
@@ -1595,9 +1595,9 @@ class PontoServiceTest {
         @Test
         @DisplayName("semanal sem natureza (vazia ou nula) grava CATEGORIA nula no lote")
         void semanalGravaCategoriaNula() {
-            service.upload(pdfDeUmaPagina(), "SEMANAL", "", "2026-07-06", "2026-07-10", ADMIN);
+            service.upload(pdfDeUmaPagina(), "SEMANAL", "", "2026-07-06", "2026-07-10", ADMIN, false, "master.teste");
             Map<String, Object> out = service.upload(pdfDeUmaPagina(), "SEMANAL", null,
-                    "2026-07-13", "2026-07-17", ADMIN);
+                    "2026-07-13", "2026-07-17", ADMIN, false, "master.teste");
 
             for (PontoLote l : lotesGravados(2)) {
                 assertNull(l.getCategoria(), "a semanal não tem natureza: o banco exige nulo nela");
@@ -1812,7 +1812,7 @@ class PontoServiceTest {
             PontoLotePagina pg = folhaVinculada();
             gravarFolha(pg, FOLHA);
 
-            service.publicar(LOTE, false, false);
+            service.publicar(LOTE, false, false, "master.teste");
 
             List<PontoFolhaLinha> linhas = linhasGravadas();
             // Cabeçalho e TOTAIS não são dias: só as três linhas-dia entram.
@@ -1851,7 +1851,7 @@ class PontoServiceTest {
             PontoLotePagina pg = folhaVinculada();
             gravarFolha(pg, FOLHA);
 
-            service.publicar(LOTE, false, false);
+            service.publicar(LOTE, false, false, "master.teste");
 
             List<PontoFolhaLinha> linhas = linhasGravadas();
             // No Oracle, string vazia JÁ é nulo: gravar "" faria a coluna divergir do que a leitura
@@ -1877,7 +1877,7 @@ class PontoServiceTest {
                 return null;
             }).when(folhaLinhaRepo).deleteByPaginaId("pag-1");
 
-            service.publicar(LOTE, false, false);
+            service.publicar(LOTE, false, false, "master.teste");
 
             List<PontoFolhaLinha> linhas = linhasGravadas();
             assertEquals(3, linhas.size(), "as linhas são as da folha lida no início, não as da trocada");
@@ -1893,7 +1893,7 @@ class PontoServiceTest {
             cenario(emRevisao("SEMANAL", LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 5)), pendente);
             gravarFolha(pendente, FOLHA);
 
-            service.publicar(LOTE, false, false);
+            service.publicar(LOTE, false, false, "master.teste");
 
             // Folha sem dono não é folha de ninguém: não há o que gravar nem o que limpar.
             verifyNoInteractions(folhaLinhaRepo);
@@ -1908,7 +1908,7 @@ class PontoServiceTest {
             // O arquivo nunca foi gravado no @TempDir.
             PontoLotePagina pg = folhaVinculada();
 
-            Map<String, Object> out = service.publicar(LOTE, false, false);
+            Map<String, Object> out = service.publicar(LOTE, false, false, "master.teste");
 
             assertEquals("PUBLICADO", out.get("status"));
             assertNull(pg.getBancoFinalMin());
@@ -1925,7 +1925,7 @@ class PontoServiceTest {
             PontoLotePagina pg = folhaVinculada();
             gravarArquivo(pg, "isto nao e um PDF".getBytes(StandardCharsets.UTF_8));
 
-            Map<String, Object> out = service.publicar(LOTE, false, false);
+            Map<String, Object> out = service.publicar(LOTE, false, false, "master.teste");
 
             // Uma folha ilegível é problema de uma pessoa; abortar puniria o lote inteiro, e o admin
             // ainda republica ou reprocessa depois.
@@ -1943,7 +1943,7 @@ class PontoServiceTest {
             PontoLotePagina pg = folhaVinculada();
             gravarFolha(pg, FOLHA);
 
-            service.publicar(LOTE, false, false);
+            service.publicar(LOTE, false, false, "master.teste");
 
             // A folha é regravada por inteiro, não completada: a unicidade (página, ordem) não admite
             // duas gerações convivendo, e o flush é o que garante que o DELETE chegue antes do INSERT.

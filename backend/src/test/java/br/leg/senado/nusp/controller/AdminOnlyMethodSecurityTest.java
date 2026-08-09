@@ -94,7 +94,7 @@ class AdminOnlyMethodSecurityTest {
                 .thenReturn(new DashboardQueryHelper.PagedResult(List.of(), 0, Map.of()));
         when(avisoService.buscarPendentes(anyString(), any(PapelPessoa.class), anyString()))
                 .thenReturn(List.of());
-        when(pontoService.listarLotes()).thenReturn(List.of());
+        when(pontoService.listarLotes(anyString())).thenReturn(List.of());
         when(pontoService.minhasFolhas(TokenFactory.USER_ID)).thenReturn(List.of());
     }
 

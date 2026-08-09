@@ -4,11 +4,11 @@ import { ANO_MINIMO_PONTO, MESES } from '../../core/helpers/table.helpers';
 /** Par ano/mês (mes 1–12) emitido pelo seletor. */
 export interface MesAno { ano: number; mes: number; }
 
-/** Anos navegáveis desde a implantação do Ponto até o mês local corrente mais dois. */
-export function anosNavegaveis(hoje: Date): number[] {
+/** Anos navegáveis do piso informado (implantação do Ponto, por padrão) até o mês corrente mais dois. */
+export function anosNavegaveis(hoje: Date, anoMinimo = ANO_MINIMO_PONTO): number[] {
   const teto = new Date(hoje.getFullYear(), hoje.getMonth() + 2, 1);
-  const quantidade = Math.max(0, teto.getFullYear() - ANO_MINIMO_PONTO + 1);
-  return Array.from({ length: quantidade }, (_, i) => ANO_MINIMO_PONTO + i);
+  const quantidade = Math.max(0, teto.getFullYear() - anoMinimo + 1);
+  return Array.from({ length: quantidade }, (_, i) => anoMinimo + i);
 }
 
 /** Posição absoluta de um mês, usada para comparar pares ano/mês. */

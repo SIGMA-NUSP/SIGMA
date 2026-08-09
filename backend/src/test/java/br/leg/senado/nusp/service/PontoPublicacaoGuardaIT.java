@@ -129,19 +129,19 @@ class PontoPublicacaoGuardaIT {
     @DisplayName("2ª folha MENSAL da pessoa no mesmo mês: o 1º passo conta a substituição e não publica")
     void segundaMensalDoMesmoMesSubstitui() {
         PontoLote junho = loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
-        service.publicar(junho.getId(), false, false);
+        service.publicar(junho.getId(), false, false, "master.teste");
         assertEquals("PUBLICADO", statusNoBanco(junho));
 
         PontoLote junhoDeNovo = loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
 
-        Map<String, Object> pedido = service.publicar(junhoDeNovo.getId(), true, false);
+        Map<String, Object> pedido = service.publicar(junhoDeNovo.getId(), true, false, "master.teste");
 
         assertEquals(Boolean.TRUE, pedido.get("requer_confirmacao"));
         assertEquals(1, pedido.get("substituicoes"), "uma pessoa tem folha do mês para ser substituída");
         assertEquals("REVISAO", statusNoBanco(junhoDeNovo), "o 1º passo não publica nada");
         verifyNoInteractions(avisoService);
 
-        service.publicar(junhoDeNovo.getId(), false, true);
+        service.publicar(junhoDeNovo.getId(), false, true, "master.teste");
 
         assertEquals("PUBLICADO", statusNoBanco(junhoDeNovo), "confirmada, a folha nova entra");
         assertEquals("PUBLICADO", statusNoBanco(junho), "a substituída continua no histórico do admin");
@@ -150,12 +150,12 @@ class PontoPublicacaoGuardaIT {
     @Test
     @DisplayName("SEMANAL atrasada de mês já ocupado pela MENSAL publicada: 400 e lote intacto (REVISAO)")
     void semanalDeMesFechadoRecusada() {
-        service.publicar(loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)).getId(), false, false);
+        service.publicar(loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)).getId(), false, false, "master.teste");
 
         PontoLote semanalAtrasada = loteDoOperador("SEMANAL", LocalDate.of(2026, 6, 22), LocalDate.of(2026, 6, 28));
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.publicar(semanalAtrasada.getId(), true, false));
+                () -> service.publicar(semanalAtrasada.getId(), true, false, "master.teste"));
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertEquals(ex.getMessage(), mensagemDoAdmin(ex), "a frase tem de estar nos dois campos do erro");
@@ -174,7 +174,7 @@ class PontoPublicacaoGuardaIT {
         CenarioFactory.novaPaginaLote(emReal(), lote, 2, operador.getId(), "OPERADOR");
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.publicar(lote.getId(), true, false));
+                () -> service.publicar(lote.getId(), true, false, "master.teste"));
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         // Uma página não substitui a outra: aqui o nome fica, porque é ele que diz qual vínculo desfazer.
@@ -191,10 +191,10 @@ class PontoPublicacaoGuardaIT {
         PontoLote junhoDoColega = CenarioFactory.novoLotePonto(emReal(), "MENSAL",
                 LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30), admin);
         CenarioFactory.novaPaginaLote(emReal(), junhoDoColega, 1, colega.getId(), "OPERADOR");
-        service.publicar(junhoDoColega.getId(), false, false);
+        service.publicar(junhoDoColega.getId(), false, false, "master.teste");
 
         PontoLote junhoDoOperador = loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
-        service.publicar(junhoDoOperador.getId(), false, false);
+        service.publicar(junhoDoOperador.getId(), false, false, "master.teste");
 
         assertEquals("PUBLICADO", statusNoBanco(junhoDoOperador));
     }
@@ -202,10 +202,10 @@ class PontoPublicacaoGuardaIT {
     @Test
     @DisplayName("SEMANAIS cumulativas do mesmo mês (01–05, 01–12) publicam: sobrepor período é o normal")
     void semanaisCumulativasPublicam() {
-        service.publicar(loteDoOperador("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5)).getId(), false, false);
+        service.publicar(loteDoOperador("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5)).getId(), false, false, "master.teste");
         PontoLote ate12 = loteDoOperador("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 12));
 
-        service.publicar(ate12.getId(), false, false);
+        service.publicar(ate12.getId(), false, false, "master.teste");
 
         assertEquals("PUBLICADO", statusNoBanco(ate12),
                 "a 2ª semanal reengloba os dias da 1ª — é assim que as folhas semanais funcionam");
@@ -214,10 +214,10 @@ class PontoPublicacaoGuardaIT {
     @Test
     @DisplayName("a MENSAL de junho não impede a MENSAL de julho da mesma pessoa")
     void mensalDeOutroMesPublica() {
-        service.publicar(loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)).getId(), false, false);
+        service.publicar(loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)).getId(), false, false, "master.teste");
         PontoLote julho = loteDoOperador("MENSAL", LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31));
 
-        service.publicar(julho.getId(), false, false);
+        service.publicar(julho.getId(), false, false, "master.teste");
 
         assertEquals("PUBLICADO", statusNoBanco(julho));
     }
@@ -227,7 +227,7 @@ class PontoPublicacaoGuardaIT {
     void primeiraMensalPublica() {
         PontoLote junho = loteDoOperador("MENSAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
 
-        service.publicar(junho.getId(), false, false);
+        service.publicar(junho.getId(), false, false, "master.teste");
 
         assertEquals("PUBLICADO", statusNoBanco(junho));
         List<Object[]> pessoasComFolha = paginaRepo.findPessoasComFolhaPublicada();
@@ -256,7 +256,7 @@ class PontoPublicacaoGuardaIT {
     @DisplayName("matriz da recusa: 400 dizendo a competência ocupada e a natureza que a ocupa")
     void matrizDeRecusaPorNatureza(String jaPublicada, String tipoNovo, String categoriaNova, String natureza) {
         service.publicar(loteDoOperador("MENSAL", jaPublicada,
-                LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)).getId(), false, false);
+                LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30)).getId(), false, false, "master.teste");
 
         // A semanal atrasada cai DENTRO do mês já ocupado; a mensal disputa a competência inteira.
         PontoLote candidato = "SEMANAL".equals(tipoNovo)
@@ -264,7 +264,7 @@ class PontoPublicacaoGuardaIT {
                 : loteDoOperador(tipoNovo, categoriaNova, LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.publicar(candidato.getId(), true, false));
+                () -> service.publicar(candidato.getId(), true, false, "master.teste"));
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         String msg = mensagemDoAdmin(ex);
@@ -290,18 +290,18 @@ class PontoPublicacaoGuardaIT {
     void matrizDeSubstituicaoPorNatureza(String jaPublicada, String categoriaNova) {
         PontoLote publicada = loteDoOperador("MENSAL", jaPublicada,
                 LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
-        service.publicar(publicada.getId(), false, false);
+        service.publicar(publicada.getId(), false, false, "master.teste");
 
         PontoLote candidato = loteDoOperador("MENSAL", categoriaNova,
                 LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
 
-        Map<String, Object> pedido = service.publicar(candidato.getId(), true, false);
+        Map<String, Object> pedido = service.publicar(candidato.getId(), true, false, "master.teste");
         assertEquals(Boolean.TRUE, pedido.get("requer_confirmacao"));
         assertEquals(1, pedido.get("substituicoes"));
         assertEquals("REVISAO", statusNoBanco(candidato));
         verifyNoInteractions(avisoService);
 
-        service.publicar(candidato.getId(), false, true);
+        service.publicar(candidato.getId(), false, true, "master.teste");
 
         assertEquals("PUBLICADO", statusNoBanco(candidato));
         assertEquals("PUBLICADO", statusNoBanco(publicada),
@@ -313,15 +313,15 @@ class PontoPublicacaoGuardaIT {
     void semanalSobreSemanalDoMesmoPeriodo() {
         LocalDate inicio = LocalDate.of(2026, 6, 1);
         LocalDate fim = LocalDate.of(2026, 6, 5);
-        service.publicar(loteDoOperador("SEMANAL", inicio, fim).getId(), false, false);
+        service.publicar(loteDoOperador("SEMANAL", inicio, fim).getId(), false, false, "master.teste");
 
         PontoLote outroPeriodo = loteDoOperador("SEMANAL", inicio, LocalDate.of(2026, 6, 12));
-        service.publicar(outroPeriodo.getId(), false, false);
+        service.publicar(outroPeriodo.getId(), false, false, "master.teste");
         assertEquals("PUBLICADO", statusNoBanco(outroPeriodo), "01–12 reengloba 01–05, e as duas convivem");
 
         PontoLote mesmoPeriodo = loteDoOperador("SEMANAL", inicio, fim);
 
-        Map<String, Object> pedido = service.publicar(mesmoPeriodo.getId(), true, false);
+        Map<String, Object> pedido = service.publicar(mesmoPeriodo.getId(), true, false, "master.teste");
 
         assertEquals(Boolean.TRUE, pedido.get("requer_confirmacao"), () -> "período idêntico substitui: " + pedido);
         assertEquals(1, pedido.get("substituicoes"));
@@ -333,12 +333,12 @@ class PontoPublicacaoGuardaIT {
     void definitivaEntraPorCimaDaPrevia() {
         PontoLote previa = loteDoOperador("MENSAL", PontoLote.CATEGORIA_PREVIA,
                 LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
-        service.publicar(previa.getId(), false, false);
+        service.publicar(previa.getId(), false, false, "master.teste");
 
         PontoLote definitiva = loteDoOperador("MENSAL", PontoLote.CATEGORIA_DEFINITIVA,
                 LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
 
-        service.publicar(definitiva.getId(), false, true);
+        service.publicar(definitiva.getId(), false, true, "master.teste");
 
         assertEquals("PUBLICADO", statusNoBanco(definitiva));
         assertEquals("PUBLICADO", statusNoBanco(previa),

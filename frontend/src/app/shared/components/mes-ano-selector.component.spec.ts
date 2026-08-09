@@ -93,6 +93,11 @@ describe('MesAnoSelectorComponent', () => {
       expect(anosNavegaveis(new Date(2030, 10, 15)))
         .toEqual([2026, 2027, 2028, 2029, 2030, 2031]);
     });
+
+    it('com piso explícito a lista começa nele — é a janela do sumário, que alcança o acervo de 2025', () => {
+      expect(anosNavegaveis(new Date(2026, 0, 15), 2025)).toEqual([2025, 2026]);
+      expect(anosNavegaveis(new Date(2026, 10, 15), 2025)).toEqual([2025, 2026, 2027]);
+    });
   });
 
   describe('opções e limites do range', () => {

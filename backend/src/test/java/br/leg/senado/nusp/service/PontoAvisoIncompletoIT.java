@@ -293,7 +293,7 @@ class PontoAvisoIncompletoIT {
     @Test
     @DisplayName("a publicação cria DUAS comunicações do mesmo lote: a da folha e a do alerta, com destinatários disjuntos")
     void publicacaoSeparaQuemTemDiaIncompleto() {
-        pontoService.publicar(lote.getId(), true, false);
+        pontoService.publicar(lote.getId(), true, false, "master.teste");
 
         // O subtipo novo só chega ao banco se o domínio do CHECK tiver sido recriado com ele.
         assertEquals(List.of(SUBTIPO_FOLHA, SUBTIPO_ALERTA), subtiposDaPublicacao());
@@ -311,7 +311,7 @@ class PontoAvisoIncompletoIT {
     @Test
     @DisplayName("os dias que faltaram ficam no complemento do alvo de quem os tem, e em mais lugar nenhum")
     void diasFicamNoComplementoDoAlvo() {
-        pontoService.publicar(lote.getId(), true, false);
+        pontoService.publicar(lote.getId(), true, false, "master.teste");
 
         assertEquals(List.of(O_DIA_DE_ANA), complementosDe(SUBTIPO_ALERTA),
                 "o dia é dito à pessoa que o tem, com a data que a folha dela traz");
@@ -322,7 +322,7 @@ class PontoAvisoIncompletoIT {
     @Test
     @DisplayName("na janela, só o dono lê os dias dele: quem está em dia recebe a mensagem comum e nada mais")
     void aJanelaMostraOsDiasSoAoDono() {
-        pontoService.publicar(lote.getId(), true, false);
+        pontoService.publicar(lote.getId(), true, false, "master.teste");
         String avisoDaFolha = textosDe(SUBTIPO_FOLHA).get(0);
 
         // Uma janela só, com o aviso da folha e, no fim, o que é dela.
@@ -335,7 +335,7 @@ class PontoAvisoIncompletoIT {
     @Test
     @DisplayName("o detalhe da comunicação mostra ao administrador o que cada destinatário leu")
     void detalheMostraOComplementoPorDestinatario() {
-        pontoService.publicar(lote.getId(), true, false);
+        pontoService.publicar(lote.getId(), true, false, "master.teste");
 
         List<Map<String, Object>> doAlerta = destinatariosNoDetalhe(SUBTIPO_ALERTA);
         assertEquals(1, doAlerta.size());
@@ -351,7 +351,7 @@ class PontoAvisoIncompletoIT {
     @Test
     @DisplayName("publicar em silêncio avisa SÓ quem tem dia incompleto — e com o alerta inteiro")
     void publicacaoSilenciosaAvisaSoOAlerta() {
-        pontoService.publicar(lote.getId(), false, false);
+        pontoService.publicar(lote.getId(), false, false, "master.teste");
 
         assertEquals(List.of(SUBTIPO_ALERTA), subtiposDaPublicacao(),
                 "sem 'Emitir aviso' o lote não anuncia a folha, mas o pedido de correção continua saindo");
@@ -363,7 +363,7 @@ class PontoAvisoIncompletoIT {
     @Test
     @DisplayName("excluir o lote leva as DUAS comunicações, com mensagens e destinatários")
     void exclusaoDoLoteLevaAsDuas() {
-        pontoService.publicar(lote.getId(), true, false);
+        pontoService.publicar(lote.getId(), true, false, "master.teste");
         assertEquals(2, subtiposDaPublicacao().size(), "as duas nascem com a publicação");
 
         exclusaoService.excluirLote(lote.getId(), MASTER, admin.getId());
@@ -379,7 +379,7 @@ class PontoAvisoIncompletoIT {
     @Test
     @DisplayName("a exclusão conta as pessoas avisadas uma vez cada: os dois cadastros não somam a mesma pessoa duas vezes")
     void exclusaoContaCadaPessoaUmaVez() {
-        pontoService.publicar(lote.getId(), true, false);
+        pontoService.publicar(lote.getId(), true, false, "master.teste");
 
         Map<String, Object> resumo = exclusaoService.excluirLote(lote.getId(), MASTER, admin.getId());
 

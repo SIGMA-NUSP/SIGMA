@@ -38,6 +38,8 @@ interface Lote {
   data_inicio: string;
   data_fim: string;
   status: 'REVISAO' | 'PUBLICADO';
+  /** Lote do acervo histórico: o backend só o devolve ao admin master, que o vê com um selo. */
+  oculto?: boolean;
   total_paginas: number;
   pendentes: number;
   criado_em?: string;
@@ -231,6 +233,9 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
                   <td>
                     @if (l.status === 'PUBLICADO') { <span class="badge-ok">Publicado</span> }
                     @else { <span class="badge-rev">Em revisão</span> }
+                    @if (l.oculto) {
+                      <span class="badge-oculto" title="Só o administrador master vê este lote.">Oculto</span>
+                    }
                   </td>
                   <td>{{ l.criado_em | fmtDate }}</td>
                   @if (colunaExcluir()) {
@@ -464,6 +469,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
     .radio-linha { display:flex; gap:20px; flex-wrap:wrap; }
     .pessoa-select { width:100%; max-width:360px; }
     .badge-rev { color:#b45309; font-weight:600; }
+    .badge-oculto { color:var(--muted); font-weight:600; margin-left:6px; cursor:help; }
     .aviso-substituicao { margin:0 0 10px; color:#b45309; font-weight:600; }
     .badge-manual { color:var(--primary); font-weight:600; }
     .btn-x {

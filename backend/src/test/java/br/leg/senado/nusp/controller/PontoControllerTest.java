@@ -94,6 +94,9 @@ class PontoControllerTest {
     /** O username que o token carrega ({@code teste.<perfil>}) — é ele que o controller repassa. */
     private static final String USERNAME_DO_TOKEN = "teste." + TokenFactory.ADMIN;
 
+    /** O username do token de OPERADOR — o download da própria folha viaja com ele. */
+    private static final String USERNAME_OPERADOR = "teste." + TokenFactory.OPERADOR;
+
     /** Mensagem única do handler de requisição malformada. */
     private static final String MSG_BINDING_INVALIDO = "Requisição inválida. Verifique os dados enviados.";
 
@@ -134,7 +137,7 @@ class PontoControllerTest {
         when(authSessionRepository.touchSession(anyLong(), anyString(), anyInt())).thenReturn(1);
 
         // Stubs do braço 2xx da matriz (valores diferentes do default do Mockito).
-        when(pontoService.listarLotes()).thenReturn(List.of(Map.of("id", LOTE_ID, "paginas", 42)));
+        when(pontoService.listarLotes(USERNAME_DO_TOKEN)).thenReturn(List.of(Map.of("id", LOTE_ID, "paginas", 42)));
         when(pontoService.minhasFolhas(TokenFactory.USER_ID))
                 .thenReturn(List.of(Map.of("id", PAGINA_ID, "mes_ref", "2026-07")));
         // O papel entra no service (role do token) → matcher no role, valor exato no id do dono.
@@ -215,7 +218,7 @@ class PontoControllerTest {
                 .andExpect(jsonPath("$.data[0].id").value(LOTE_ID))
                 .andExpect(jsonPath("$.data[0].paginas").value(42));
 
-        verify(pontoService).listarLotes();
+        verify(pontoService).listarLotes(USERNAME_DO_TOKEN);
     }
 
     // ══ 3) Exclusão de lote/página ═════════════════════════════════════════
@@ -244,7 +247,7 @@ class PontoControllerTest {
         @Test
         @DisplayName("GET /lotes: o pode_excluir vem em CADA lote, decidido pelo status e pelo principal")
         void listagemCarregaAFlagPorLote() throws Exception {
-            when(pontoService.listarLotes()).thenReturn(List.of(
+            when(pontoService.listarLotes(USERNAME_DO_TOKEN)).thenReturn(List.of(
                     Map.of("id", LOTE_ID, "status", "REVISAO"),
                     Map.of("id", PAGINA_ID, "status", "PUBLICADO")));
             when(pontoExclusaoService.podeExcluir("REVISAO", USERNAME_DO_TOKEN)).thenReturn(true);
@@ -267,9 +270,9 @@ class PontoControllerTest {
         @Test
         @DisplayName("a publicação e o detalhe devolvem o lote com o pode_excluir do status ATUAL")
         void permissaoAcompanhaOLotePublicado() throws Exception {
-            when(pontoService.publicar(LOTE_ID, true, false))
+            when(pontoService.publicar(LOTE_ID, true, false, USERNAME_DO_TOKEN))
                     .thenReturn(Map.of("id", LOTE_ID, "status", "PUBLICADO"));
-            when(pontoService.obterLote(LOTE_ID)).thenReturn(Map.of("id", LOTE_ID, "status", "PUBLICADO"));
+            when(pontoService.obterLote(LOTE_ID, USERNAME_DO_TOKEN)).thenReturn(Map.of("id", LOTE_ID, "status", "PUBLICADO"));
             when(pontoExclusaoService.podeExcluir("PUBLICADO", USERNAME_DO_TOKEN)).thenReturn(false);
 
             mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
@@ -576,7 +579,7 @@ class PontoControllerTest {
         @DisplayName("POST /api/admin/ponto/upload — 201 com o arquivo, os params e o id do admin do token")
         void upload_multipart_201() throws Exception {
             when(pontoService.upload(any(), eq("MENSAL"), eq("PREVIA"), eq("2026-07-01"), eq("2026-07-31"),
-                    eq(TokenFactory.USER_ID)))
+                    eq(TokenFactory.USER_ID), eq(false), eq(USERNAME_DO_TOKEN)))
                     .thenReturn(Map.of("lote_id", LOTE_ID, "paginas", 3));
 
             mockMvc.perform(Requests.multipart("/api/admin/ponto/upload")
@@ -598,7 +601,37 @@ class PontoControllerTest {
                             && "arquivo".equals(f.getName())
                             && f.getSize() == PDF.length),
                     eq("MENSAL"), eq("PREVIA"), eq("2026-07-01"), eq("2026-07-31"),
-                    eq(TokenFactory.USER_ID));
+                    eq(TokenFactory.USER_ID), eq(false), eq(USERNAME_DO_TOKEN));
+        }
+
+        /**
+         * O envio oculto não tem checkbox na tela: é o campo {@code oculto} do multipart, feito
+         * direto pela API. O que este teste trava é a travessia — o campo chega ao service como
+         * booleano verdadeiro; sem ele, um typo no nome do param deixaria o upload oculto
+         * silenciosamente inerte (o default {@code false} mascara tudo).
+         */
+        @Test
+        @DisplayName("upload com oculto=true — o campo do multipart chega ao service como booleano")
+        void upload_ocultoChegaAoService() throws Exception {
+            when(pontoService.upload(any(), eq("MENSAL"), eq("DEFINITIVA"), eq("2025-05-01"),
+                    eq("2025-05-31"), eq(TokenFactory.USER_ID), eq(true), eq(USERNAME_DO_TOKEN)))
+                    .thenReturn(Map.of("lote_id", LOTE_ID, "paginas", 1));
+
+            mockMvc.perform(Requests.multipart("/api/admin/ponto/upload")
+                            .file(new MockMultipartFile("arquivo", "acervo.pdf",
+                                    MediaType.APPLICATION_PDF_VALUE, PDF))
+                            .param("tipo", "MENSAL")
+                            .param("categoria", "DEFINITIVA")
+                            .param("data_inicio", "2025-05-01")
+                            .param("data_fim", "2025-05-31")
+                            .param("oculto", "true")
+                            .header("Authorization", admin))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.ok").value(true))
+                    .andExpect(jsonPath("$.data.lote_id").value(LOTE_ID));
+
+            verify(pontoService).upload(any(), eq("MENSAL"), eq("DEFINITIVA"), eq("2025-05-01"),
+                    eq("2025-05-31"), eq(TokenFactory.USER_ID), eq(true), eq(USERNAME_DO_TOKEN));
         }
 
         /**
@@ -612,7 +645,7 @@ class PontoControllerTest {
         @DisplayName("upload mensal — a natureza escolhida chega ao service entre o tipo e as datas")
         void upload_mensal_naturezaChegaAoService(String categoria) throws Exception {
             when(pontoService.upload(any(), eq("MENSAL"), eq(categoria), eq("2026-07-01"),
-                    eq("2026-07-31"), eq(TokenFactory.USER_ID)))
+                    eq("2026-07-31"), eq(TokenFactory.USER_ID), eq(false), eq(USERNAME_DO_TOKEN)))
                     .thenReturn(Map.of("lote_id", LOTE_ID, "paginas", 3));
 
             mockMvc.perform(Requests.multipart("/api/admin/ponto/upload")
@@ -628,7 +661,7 @@ class PontoControllerTest {
                     .andExpect(jsonPath("$.data.lote_id").value(LOTE_ID));
 
             verify(pontoService).upload(any(), eq("MENSAL"), eq(categoria), eq("2026-07-01"),
-                    eq("2026-07-31"), eq(TokenFactory.USER_ID));
+                    eq("2026-07-31"), eq(TokenFactory.USER_ID), eq(false), eq(USERNAME_DO_TOKEN));
         }
 
         /**
@@ -641,7 +674,7 @@ class PontoControllerTest {
         @DisplayName("upload semanal sem o campo categoria — o service recebe null e o envio continua 201")
         void upload_semanalSemCategoria_recebeNull() throws Exception {
             when(pontoService.upload(any(), eq("SEMANAL"), isNull(), eq("2026-07-06"), eq("2026-07-12"),
-                    eq(TokenFactory.USER_ID)))
+                    eq(TokenFactory.USER_ID), eq(false), eq(USERNAME_DO_TOKEN)))
                     .thenReturn(Map.of("lote_id", LOTE_ID, "paginas", 5));
 
             mockMvc.perform(Requests.multipart("/api/admin/ponto/upload")
@@ -657,7 +690,7 @@ class PontoControllerTest {
                     .andExpect(jsonPath("$.data.paginas").value(5));
 
             verify(pontoService).upload(any(), eq("SEMANAL"), isNull(), eq("2026-07-06"),
-                    eq("2026-07-12"), eq(TokenFactory.USER_ID));
+                    eq("2026-07-12"), eq(TokenFactory.USER_ID), eq(false), eq(USERNAME_DO_TOKEN));
         }
 
         /**
@@ -689,7 +722,7 @@ class PontoControllerTest {
         @Test
         @DisplayName("POST /api/admin/ponto/upload — PDF recusado pelo service vira 400 {ok:false, error}")
         void upload_arquivoInvalido_400() throws Exception {
-            when(pontoService.upload(any(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            when(pontoService.upload(any(), anyString(), anyString(), anyString(), anyString(), anyString(), anyBoolean(), anyString()))
                     .thenThrow(new ServiceValidationException("O arquivo enviado não é um PDF válido."));
 
             mockMvc.perform(Requests.multipart("/api/admin/ponto/upload")
@@ -723,7 +756,7 @@ class PontoControllerTest {
         @Test
         @DisplayName("PATCH com pessoa_id/pessoa_tipo — os dois textos chegam ao service e o vínculo é devolvido em {ok,data}")
         void vincular_repassaOParAoService() throws Exception {
-            when(pontoService.atualizarVinculo(LOTE_ID, PAGINA_ID, "op-1", "OPERADOR"))
+            when(pontoService.atualizarVinculo(LOTE_ID, PAGINA_ID, "op-1", "OPERADOR", USERNAME_DO_TOKEN))
                     .thenReturn(Map.of("id", LOTE_ID, "status_match", "MANUAL"));
 
             mockMvc.perform(Requests.patch(ROTA)
@@ -734,7 +767,7 @@ class PontoControllerTest {
                     .andExpect(jsonPath("$.ok").value(true))
                     .andExpect(jsonPath("$.data.status_match").value("MANUAL"));
 
-            verify(pontoService).atualizarVinculo(LOTE_ID, PAGINA_ID, "op-1", "OPERADOR");
+            verify(pontoService).atualizarVinculo(LOTE_ID, PAGINA_ID, "op-1", "OPERADOR", USERNAME_DO_TOKEN);
         }
 
         /**
@@ -745,14 +778,14 @@ class PontoControllerTest {
         @Test
         @DisplayName("PATCH sem corpo continua DESVINCULANDO: o service recebe null/null")
         void vincular_semCorpo_desvincula() throws Exception {
-            when(pontoService.atualizarVinculo(eq(LOTE_ID), eq(PAGINA_ID), isNull(), isNull()))
+            when(pontoService.atualizarVinculo(eq(LOTE_ID), eq(PAGINA_ID), isNull(), isNull(), eq(USERNAME_DO_TOKEN)))
                     .thenReturn(Map.of("id", LOTE_ID, "status_match", "PENDENTE"));
 
             mockMvc.perform(Requests.patch(ROTA).header("Authorization", admin))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data.status_match").value("PENDENTE"));
 
-            verify(pontoService).atualizarVinculo(LOTE_ID, PAGINA_ID, null, null);
+            verify(pontoService).atualizarVinculo(LOTE_ID, PAGINA_ID, null, null, USERNAME_DO_TOKEN);
         }
 
         /**
@@ -763,7 +796,7 @@ class PontoControllerTest {
         @Test
         @DisplayName("PATCH {\"pessoa_id\":null,\"pessoa_tipo\":null} (o corpo REAL do front) desvincula")
         void vincular_nullsExplicitos_desvincula() throws Exception {
-            when(pontoService.atualizarVinculo(eq(LOTE_ID), eq(PAGINA_ID), isNull(), isNull()))
+            when(pontoService.atualizarVinculo(eq(LOTE_ID), eq(PAGINA_ID), isNull(), isNull(), eq(USERNAME_DO_TOKEN)))
                     .thenReturn(Map.of("id", LOTE_ID, "status_match", "PENDENTE"));
 
             mockMvc.perform(Requests.patch(ROTA)
@@ -773,14 +806,14 @@ class PontoControllerTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data.status_match").value("PENDENTE"));
 
-            verify(pontoService).atualizarVinculo(LOTE_ID, PAGINA_ID, null, null);
+            verify(pontoService).atualizarVinculo(LOTE_ID, PAGINA_ID, null, null, USERNAME_DO_TOKEN);
         }
 
         /** Idem com corpo vazio: {@code {}} não é "tipo errado", é ausência — desvincula igual. */
         @Test
         @DisplayName("PATCH com corpo {} também desvincula (ausência ≠ tipo errado)")
         void vincular_corpoVazio_desvincula() throws Exception {
-            when(pontoService.atualizarVinculo(eq(LOTE_ID), eq(PAGINA_ID), isNull(), isNull()))
+            when(pontoService.atualizarVinculo(eq(LOTE_ID), eq(PAGINA_ID), isNull(), isNull(), eq(USERNAME_DO_TOKEN)))
                     .thenReturn(Map.of("id", LOTE_ID, "status_match", "PENDENTE"));
 
             mockMvc.perform(Requests.patch(ROTA)
@@ -789,7 +822,7 @@ class PontoControllerTest {
                             .content("{}"))
                     .andExpect(status().isOk());
 
-            verify(pontoService).atualizarVinculo(LOTE_ID, PAGINA_ID, null, null);
+            verify(pontoService).atualizarVinculo(LOTE_ID, PAGINA_ID, null, null, USERNAME_DO_TOKEN);
         }
 
         /**
@@ -835,7 +868,7 @@ class PontoControllerTest {
         @Test
         @DisplayName("POST /api/admin/ponto/lote/{id}/publicar — sem corpo, emite aviso (é o default: só um false explícito o desliga)")
         void publicar_semCorpo_emiteAviso() throws Exception {
-            when(pontoService.publicar(LOTE_ID, true, false)).thenReturn(Map.of("publicado", true, "avisos", 12));
+            when(pontoService.publicar(LOTE_ID, true, false, USERNAME_DO_TOKEN)).thenReturn(Map.of("publicado", true, "avisos", 12));
 
             mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
                             .header("Authorization", admin))
@@ -843,13 +876,13 @@ class PontoControllerTest {
                     .andExpect(jsonPath("$.ok").value(true))
                     .andExpect(jsonPath("$.data.avisos").value(12));
 
-            verify(pontoService).publicar(LOTE_ID, true, false);
+            verify(pontoService).publicar(LOTE_ID, true, false, USERNAME_DO_TOKEN);
         }
 
         @Test
         @DisplayName("POST /api/admin/ponto/lote/{id}/publicar — corpo {emitir_aviso:false} publica calado")
         void publicar_emitirAvisoFalse_naoEmite() throws Exception {
-            when(pontoService.publicar(LOTE_ID, false, false)).thenReturn(Map.of("publicado", true, "avisos", 0));
+            when(pontoService.publicar(LOTE_ID, false, false, USERNAME_DO_TOKEN)).thenReturn(Map.of("publicado", true, "avisos", 0));
 
             mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
                             .header("Authorization", admin)
@@ -858,7 +891,7 @@ class PontoControllerTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data.avisos").value(0));
 
-            verify(pontoService).publicar(LOTE_ID, false, false);
+            verify(pontoService).publicar(LOTE_ID, false, false, USERNAME_DO_TOKEN);
         }
 
         /**
@@ -903,7 +936,7 @@ class PontoControllerTest {
         @Test
         @DisplayName("corpo sem o campo emitir_aviso mantém o default (publica COM aviso)")
         void publicar_corpoSemOCampo_emiteAviso() throws Exception {
-            when(pontoService.publicar(LOTE_ID, true, false)).thenReturn(Map.of("publicado", true, "avisos", 12));
+            when(pontoService.publicar(LOTE_ID, true, false, USERNAME_DO_TOKEN)).thenReturn(Map.of("publicado", true, "avisos", 12));
 
             mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
                             .header("Authorization", admin)
@@ -912,7 +945,7 @@ class PontoControllerTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data.avisos").value(12));
 
-            verify(pontoService).publicar(LOTE_ID, true, false);
+            verify(pontoService).publicar(LOTE_ID, true, false, USERNAME_DO_TOKEN);
         }
 
         /**
@@ -923,7 +956,7 @@ class PontoControllerTest {
         @Test
         @DisplayName("sem confirmar_substituicao o service recebe false, e a resposta de confirmação passa inteira")
         void publicar_semConfirmacao_repassaFalseEDevolveOPedido() throws Exception {
-            when(pontoService.publicar(LOTE_ID, true, false))
+            when(pontoService.publicar(LOTE_ID, true, false, USERNAME_DO_TOKEN))
                     .thenReturn(Map.of("requer_confirmacao", true, "substituicoes", 7));
 
             mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
@@ -939,7 +972,7 @@ class PontoControllerTest {
         @Test
         @DisplayName("corpo {confirmar_substituicao:true} autoriza a substituição no service")
         void publicar_comConfirmacao_repassaTrue() throws Exception {
-            when(pontoService.publicar(LOTE_ID, true, true))
+            when(pontoService.publicar(LOTE_ID, true, true, USERNAME_DO_TOKEN))
                     .thenReturn(Map.of("id", LOTE_ID, "status", "PUBLICADO"));
 
             mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
@@ -949,7 +982,7 @@ class PontoControllerTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data.status").value("PUBLICADO"));
 
-            verify(pontoService).publicar(LOTE_ID, true, true);
+            verify(pontoService).publicar(LOTE_ID, true, true, USERNAME_DO_TOKEN);
         }
 
         @Test
@@ -968,7 +1001,7 @@ class PontoControllerTest {
         @Test
         @DisplayName("POST /api/admin/ponto/lote/{id}/publicar — lote já publicado vira 400 com a mensagem do service")
         void publicar_loteJaPublicado_400() throws Exception {
-            when(pontoService.publicar(eq(LOTE_ID), anyBoolean(), anyBoolean()))
+            when(pontoService.publicar(eq(LOTE_ID), anyBoolean(), anyBoolean(), anyString()))
                     .thenThrow(new ServiceValidationException("Lote já está publicado."));
 
             mockMvc.perform(Requests.post("/api/admin/ponto/lote/" + LOTE_ID + "/publicar")
@@ -1090,7 +1123,7 @@ class PontoControllerTest {
         @Test
         @DisplayName("GET /api/ponto/folha/{id}/download — application/pdf, attachment com o nome do record e os bytes")
         void download_attachmentComNomeEBytes() throws Exception {
-            when(pontoService.baixarFolha(PAGINA_ID, TokenFactory.USER_ID, TokenFactory.OPERADOR))
+            when(pontoService.baixarFolha(PAGINA_ID, TokenFactory.USER_ID, TokenFactory.OPERADOR, USERNAME_OPERADOR))
                     .thenReturn(new ArquivoPonto(PDF, "ponto_julho_2026.pdf"));
 
             mockMvc.perform(Requests.get("/api/ponto/folha/" + PAGINA_ID + "/download")
@@ -1103,13 +1136,13 @@ class PontoControllerTest {
                     .andExpect(content().bytes(PDF));
 
             // O dono e o papel vêm do token — o path só traz a página (ownership é do service).
-            verify(pontoService).baixarFolha(PAGINA_ID, TokenFactory.USER_ID, TokenFactory.OPERADOR);
+            verify(pontoService).baixarFolha(PAGINA_ID, TokenFactory.USER_ID, TokenFactory.OPERADOR, USERNAME_OPERADOR);
         }
 
         @Test
         @DisplayName("GET /api/admin/ponto/pagina/{id}/preview — mesmo PDF, mas inline (a única diferença é o disposition)")
         void preview_inline() throws Exception {
-            when(pontoService.previewPagina(PAGINA_ID)).thenReturn(new ArquivoPonto(PDF, "pagina-9.pdf"));
+            when(pontoService.previewPagina(PAGINA_ID, USERNAME_DO_TOKEN)).thenReturn(new ArquivoPonto(PDF, "pagina-9.pdf"));
 
             mockMvc.perform(Requests.get("/api/admin/ponto/pagina/" + PAGINA_ID + "/preview")
                             .header("Authorization", admin))
@@ -1123,7 +1156,7 @@ class PontoControllerTest {
         @Test
         @DisplayName("GET /api/ponto/folha/{id}/download — folha de outra pessoa dá 403 do SERVICE (≠ o 403 do RBAC: o papel passa, o dono não)")
         void download_folhaDeOutraPessoa_403() throws Exception {
-            when(pontoService.baixarFolha(anyString(), anyString(), anyString()))
+            when(pontoService.baixarFolha(anyString(), anyString(), anyString(), anyString()))
                     .thenThrow(new ServiceValidationException("Acesso negado a esta folha.", HttpStatus.FORBIDDEN));
 
             mockMvc.perform(Requests.get("/api/ponto/folha/" + PAGINA_ID + "/download")

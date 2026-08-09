@@ -264,7 +264,7 @@ class PontoFolhaLinhaIT {
         void publicarAFolhaDeJulho() {
             lote = loteEmRevisao("MENSAL", PontoLote.CATEGORIA_PREVIA, JULHO_INI, JULHO_FIM);
             folha = folhaDe(lote, 1, ana, CARTAO_DE_JULHO);
-            pontoService.publicar(lote.getId(), false, false);
+            pontoService.publicar(lote.getId(), false, false, "master.teste");
         }
 
         @Test
@@ -365,7 +365,7 @@ class PontoFolhaLinhaIT {
             lote = loteEmRevisao("MENSAL", PontoLote.CATEGORIA_PREVIA, JULHO_INI, JULHO_FIM);
             folhaDeAna = folhaDe(lote, 1, ana, CARTAO_DE_JULHO);
             folhaDeBruno = folhaDe(lote, 2, bruno, CARTAO_DE_JULHO);
-            pontoService.publicar(lote.getId(), false, false);
+            pontoService.publicar(lote.getId(), false, false, "master.teste");
         }
 
         @Test
@@ -400,7 +400,7 @@ class PontoFolhaLinhaIT {
             lote = loteEmRevisao("MENSAL", PontoLote.CATEGORIA_PREVIA, JULHO_INI, JULHO_FIM);
             folhaDeAna = folhaDe(lote, 1, ana, CARTAO_DE_JULHO);
             folhaDeBruno = folhaDe(lote, 2, bruno, CARTAO_DE_JULHO);
-            pontoService.publicar(lote.getId(), false, false);
+            pontoService.publicar(lote.getId(), false, false, "master.teste");
             assertEquals(LINHAS_DO_CARTAO, linhasDaFolha(folhaDeAna).size(), "a folha nasce gravada");
             assertEquals(LINHAS_DO_CARTAO, linhasDaFolha(folhaDeBruno).size());
         }
@@ -449,7 +449,7 @@ class PontoFolhaLinhaIT {
         void publicarFolhaSemBanco() {
             lote = loteEmRevisao("SEMANAL", null, SEMANA_INI, SEMANA_FIM);
             folha = folhaDe(lote, 1, ana, CARTAO_SEM_BANCO);
-            pontoService.publicar(lote.getId(), false, false);
+            pontoService.publicar(lote.getId(), false, false, "master.teste");
         }
 
         @Test

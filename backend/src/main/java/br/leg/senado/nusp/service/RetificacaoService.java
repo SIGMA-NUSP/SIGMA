@@ -342,8 +342,10 @@ public class RetificacaoService {
                 .orElseThrow(() -> new ServiceValidationException("Lote não encontrado.", HttpStatus.NOT_FOUND));
         // A folha substituída por outra publicada depois deixou de ser a folha do dono: some da lista
         // dele e não abre mais para download — a retificação responde a mesma coisa. A regra mora no
-        // FolhaSubstituida, e é uma só para os três caminhos.
+        // FolhaSubstituida, e é uma só para os três caminhos. A folha de lote OCULTO tampouco existe
+        // para o dono, e recebe a mesma resposta.
         if (!STATUS_PUBLICADO.equals(lote.getStatus())
+                || Boolean.TRUE.equals(lote.getOculto())
                 || FolhaSubstituida.substituida(pg.getId(),
                         paginaRepo.findFolhasPublicadasByPessoa(pg.getPessoaId()))) {
             throw new ServiceValidationException("Folha indisponível.", HttpStatus.NOT_FOUND);

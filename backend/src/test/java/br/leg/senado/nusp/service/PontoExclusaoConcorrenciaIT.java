@@ -158,7 +158,7 @@ class PontoExclusaoConcorrenciaIT {
 
     private Callable<String> publicar() {
         return () -> {
-            pontoService.publicar(lote.getId(), true, false);
+            pontoService.publicar(lote.getId(), true, false, "master.teste");
             return "PUBLICOU";
         };
     }
