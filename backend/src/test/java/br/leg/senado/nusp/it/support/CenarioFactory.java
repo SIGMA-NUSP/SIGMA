@@ -31,6 +31,7 @@ import br.leg.senado.nusp.enums.StatusSolicitacaoFolga;
 import br.leg.senado.nusp.enums.TipoEvento;
 import br.leg.senado.nusp.enums.Turno;
 import br.leg.senado.nusp.service.NativeQueryUtils;
+import br.leg.senado.nusp.service.OperacaoService;
 import br.leg.senado.nusp.service.TipoMarcacaoService;
 import jakarta.persistence.EntityManager;
 
@@ -89,7 +90,26 @@ public final class CenarioFactory {
         return novaSala(em, nomeBase, false);
     }
 
+    /**
+     * Sala COMUM: o id gerado nunca é o reservado à "Demais Salas"
+     * ({@link OperacaoService#SALA_DEMAIS_SALAS_ID}), que o domínio trata de forma especial —
+     * uma sessão nessa sala exige o nome livre no corpo da edição. Como o gerador IDENTITY de
+     * CAD_SALA percorre os ids em sequência, e no clone de testes ele começa do zero, uma sala de
+     * cenário acabaria recebendo o id reservado e deixaria de ser comum. Quando isso acontece, a
+     * sala é descartada e o cenário fica com o id seguinte; o gerador não recua no rollback, então
+     * o desvio ocorre no máximo uma vez por schema.
+     */
     public static Sala novaSala(EntityManager em, String nomeBase, boolean multiOperador) {
+        Sala sala = persistirSala(em, nomeBase, multiOperador);
+        if (sala.getId() != null && sala.getId() == OperacaoService.SALA_DEMAIS_SALAS_ID) {
+            em.remove(sala);
+            em.flush();
+            sala = persistirSala(em, nomeBase, multiOperador);
+        }
+        return sala;
+    }
+
+    private static Sala persistirSala(EntityManager em, String nomeBase, boolean multiOperador) {
         Sala sala = new Sala();
         sala.setNome(nomeBase + "_" + next());
         sala.setMultiOperador(multiOperador);
