@@ -26,6 +26,7 @@ import br.leg.senado.nusp.service.AvisoService.CriarAvisoRequest;
 import br.leg.senado.nusp.service.AvisoService.DestinatarioAviso;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -1356,6 +1357,39 @@ class AvisoServiceTest {
     @Nested
     @DisplayName("registrarCiencia — idempotência e desvios")
     class RegistrarCiencia {
+
+        /**
+         * Depois de gravar a ciência, o serviço conta quantos destinatários ainda faltam para
+         * encerrar a comunicação sozinho. O padrão destes testes é "ainda falta alguém" — a regra
+         * em si é apurada contra o banco no {@code AvisoCienciaTotalIT}; o que interessa aqui é
+         * que a idempotência e as recusas continuam as mesmas. Stubs lenientes: a maioria dos
+         * casos nem chega a gravar a ciência.
+         */
+        @BeforeEach
+        void aindaFaltaAlguem() {
+            Query q = mock(Query.class, RETURNS_SELF);
+            lenient().when(entityManager.createNativeQuery(argThat((String sql) ->
+                    sql != null && (sql.contains("SELECT COUNT(*)") || sql.contains("UPDATE FRM_AVISO_CADASTRO")))))
+                    .thenReturn(q);
+            lenient().when(q.getSingleResult()).thenReturn(BigDecimal.ONE);
+        }
+
+        @Test
+        @DisplayName("registrarCiencia — sem destinatário pendente, a comunicação se encerra sozinha")
+        void registrarCiencia_encerraQuandoTodosCientes() {
+            when(cadastroRepo.findById(CADASTRO_ID))
+                    .thenReturn(Optional.of(cadastro(TipoAviso.PESSOAL, StatusAviso.ATIVO, true)));
+            when(cienciaRepo.findByCadastroIdAndOperadorId(CADASTRO_ID, OPERADOR_ID)).thenReturn(Optional.empty());
+            Query contagem = mockQuery("SELECT COUNT(*)");
+            when(contagem.getSingleResult()).thenReturn(BigDecimal.ZERO);
+            Query encerramento = mockQuery("UPDATE FRM_AVISO_CADASTRO");
+            when(encerramento.executeUpdate()).thenReturn(1);
+
+            service.registrarCiencia(CADASTRO_ID, null, OPERADOR_ID, PapelPessoa.OPERADOR);
+
+            verify(cienciaWriter).inserir(any());
+            verify(encerramento).executeUpdate();
+        }
 
         @Test
         @DisplayName("registrarCiencia — cadastro inexistente responde 404")

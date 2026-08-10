@@ -1276,18 +1276,48 @@ describe('AdminPontoComponent', () => {
       expect(comp.publicando('lote-1')).toBe(false);
     });
 
-    // ── Substituição de folhas publicadas: o gesto tem DOIS passos ──
+    // ── Substituição de folhas publicadas: UMA janela ──
     //
-    // O 1º POST não publica nada quando o lote toma o lugar de folhas já publicadas: o backend
-    // devolve quantas PESSOAS seriam atingidas, e é essa contagem — a final, apurada sob o lock —
-    // que vai ao segundo confirm. Sem o sim do admin, nenhuma folha de ninguém é substituída.
+    // O detalhe do lote (o mesmo número do banner da revisão) já diz quantas pessoas serão
+    // atingidas: o admin confirma sabendo o tamanho do gesto numa janela só, e o POST já sai
+    // autorizado a substituir. A segunda janela sobrou como rede de segurança — só aparece se o
+    // quadro tiver mudado entre carregar a tela e clicar.
+
+    it('lote que substitui folhas: UM confirm com a contagem e UM POST já com a flag', () => {
+      const comp = criarCarregado();
+      const l: any = comp.lotes()[0];
+      l.pendentes = 0;
+      l.substituicoes = 2;
+
+      comp.publicar(l);
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(confirmSpy).toHaveBeenCalledWith(
+        'Publicar folha mensal PRÉVIA de Junho/2026? Este lote substituirá folhas publicadas de 2 funcionário(s).');
+      expect(apiPost).toHaveBeenCalledTimes(1);
+      expect(apiPost).toHaveBeenCalledWith(
+        '/api/admin/ponto/lote/lote-1/publicar', { emitir_aviso: true, confirmar_substituicao: true });
+      expect(l.status).toBe('PUBLICADO');
+    });
+
+    it('lote sem nada a substituir: confirm padrão e POST sem a flag', () => {
+      const comp = criarCarregado();
+      const l: any = comp.lotes()[0];
+      l.pendentes = 0;
+      l.substituicoes = 0;
+
+      comp.publicar(l);
+
+      expect(confirmSpy).toHaveBeenCalledWith('Publicar folha mensal PRÉVIA de Junho/2026?');
+      expect(apiPost).toHaveBeenCalledWith('/api/admin/ponto/lote/lote-1/publicar', { emitir_aviso: true });
+    });
 
     /** Faz o 1º POST responder com o pedido de confirmação; o 2º publica normalmente. */
     function exigirConfirmacao(quantas: number): void {
       apiPost.mockReturnValueOnce(of({ ok: true, data: { requer_confirmacao: true, substituicoes: quantas } }));
     }
 
-    it('resposta com requer_confirmacao: 2º confirm traz a contagem e o 2º POST leva a flag', () => {
+    it('o quadro mudou depois da carga: a 2ª janela traz a contagem fresca e o POST repete com a flag', () => {
       exigirConfirmacao(3);
       const comp = criarCarregado();
       const l: any = comp.lotes()[0];
@@ -1297,7 +1327,7 @@ describe('AdminPontoComponent', () => {
 
       expect(confirmSpy).toHaveBeenNthCalledWith(1, 'Publicar folha mensal PRÉVIA de Junho/2026?');
       expect(confirmSpy).toHaveBeenNthCalledWith(2,
-        'Publicar folha mensal PRÉVIA de Junho/2026? Substituirá as folhas publicadas de 3 funcionário(s).');
+        'Publicar folha mensal PRÉVIA de Junho/2026? Este lote substituirá folhas publicadas de 3 funcionário(s).');
       expect(apiPost).toHaveBeenNthCalledWith(1,
         '/api/admin/ponto/lote/lote-1/publicar', { emitir_aviso: true });
       expect(apiPost).toHaveBeenNthCalledWith(2,

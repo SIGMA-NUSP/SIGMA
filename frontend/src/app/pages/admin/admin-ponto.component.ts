@@ -6,7 +6,9 @@ import { AuthService } from '../../core/services/auth.service';
 import { erroCargaMsg, httpErrorMsg } from '../../core/helpers/http.helpers';
 import { ClientPager } from '../../core/helpers/client-pager';
 import { ANO_MINIMO_PONTO, mesNome, periodoFolha, tipoFolhaLabel } from '../../core/helpers/table.helpers';
+import { formatarDataBr } from '../../core/helpers/date.helpers';
 import { FmtDatePipe } from '../../shared/pipes/fmt-date.pipe';
+import { ColumnFilterComponent, ColumnFilterDef, ColumnFilterState } from '../../shared/components/column-filter.component';
 import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
 import { PaginationComponent } from '../../shared/components/pagination.component';
 import { SolicitacoesAdminComponent } from '../../shared/components/solicitacoes-admin.component';
@@ -90,7 +92,7 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
   standalone: true,
   imports: [FormsModule, RouterLink, FmtDatePipe, ErroCargaComponent, PaginationComponent,
     SolicitacoesAdminComponent, GradeRetificacoesComponent, SumarioOcorrenciasComponent,
-    FeatureToggleDirective, AjudaChatComponent],
+    ColumnFilterComponent, FeatureToggleDirective, AjudaChatComponent],
   template: `
     <h1>Ponto e Banco de Horas</h1>
     <a routerLink="/admin/gestao-pessoas" class="back-link">&larr; Voltar</a>
@@ -203,11 +205,24 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
         <table class="data-table">
           <thead><tr>
             <th style="width:34px"></th>
-            <th>Período</th><th style="width:150px">Tipo</th>
+            <th>
+              <app-column-filter [col]="colPeriodoLote" [distinctValues]="periodosLote()"
+                                 [currentSort]="sortKeyLote()" [currentDir]="sortDirLote()"
+                                 (sortChange)="onSortLote($event)" (filterChange)="onFiltroLote($event)" />
+            </th>
+            <th style="width:150px">
+              <app-column-filter [col]="colTipoLote" [distinctValues]="tiposLote()"
+                                 [currentSort]="sortKeyLote()" [currentDir]="sortDirLote()"
+                                 (sortChange)="onSortLote($event)" (filterChange)="onFiltroLote($event)" />
+            </th>
             <th style="width:90px; text-align:center">Páginas</th>
             <th style="width:110px; text-align:center">Pendentes</th>
             <th style="width:130px">Status</th>
-            <th style="width:130px">Enviado em</th>
+            <th style="width:130px">
+              <app-column-filter [col]="colEnvioLote" [distinctValues]="enviosLote()"
+                                 [currentSort]="sortKeyLote()" [currentDir]="sortDirLote()"
+                                 (sortChange)="onSortLote($event)" (filterChange)="onFiltroLote($event)" />
+            </th>
             <!-- Coluna do X: existe se algum lote da lista é excluível por quem está logado
                  (a permissão vem do backend, lote a lote; o 403 é a segurança) -->
             @if (colunaExcluir()) { <th style="width:70px; text-align:center">Excluir</th> }
@@ -220,6 +235,8 @@ interface AlvoExclusao { lote: Lote; pagina?: Pagina; }
               </td></tr>
             } @else if (lotes().length === 0) {
               <tr><td [attr.colspan]="colunasLote()" class="empty-state">{{ loadingLotes() ? 'Carregando...' : 'Nenhum lote enviado ainda.' }}</td></tr>
+            } @else if (lotesVisiveis().length === 0) {
+              <tr><td [attr.colspan]="colunasLote()" class="empty-state">Nenhum lote corresponde ao filtro.</td></tr>
             } @else {
               @for (l of lotesPager.rows(); track l.id) {
                 <tr class="row-clickable" (click)="toggleLote(l)">
@@ -524,8 +541,76 @@ export class AdminPontoComponent implements OnInit {
   tecnicos = computed(() => this.pessoas().filter(p => p.tipo === 'TECNICO'));
   administradores = computed(() => this.pessoas().filter(p => p.tipo === 'ADMINISTRADOR'));
   lotes = signal<Lote[]>([]);
-  protected lotesPager = new ClientPager(this.lotes);
   loadingLotes = signal(true);
+
+  /**
+   * Colunas com painel de filtro na lista de lotes. Ficam de fora as contagens (Páginas,
+   * Pendentes) e o Status, que tem poucos valores e já se lê de relance na própria coluna.
+   */
+  protected readonly colPeriodoLote: ColumnFilterDef = { key: 'periodo', label: 'Período', type: 'text', sortable: true };
+  protected readonly colTipoLote: ColumnFilterDef = { key: 'tipo', label: 'Tipo', type: 'text', sortable: true };
+  protected readonly colEnvioLote: ColumnFilterDef = { key: 'criado_em', label: 'Enviado em', type: 'text', sortable: true };
+
+  /** Valores marcados no painel de cada coluna; ausente ou null = coluna sem filtro. */
+  private filtrosLote = signal<Record<string, string[] | null>>({});
+  sortKeyLote = signal('');
+  sortDirLote = signal('');
+
+  /** O que a coluna filtrável mostra na linha — é por este texto que a tabela filtra e classifica. */
+  private valorColunaLote(l: Lote, key: string): string {
+    if (key === 'periodo') return this.periodoLote(l);
+    if (key === 'tipo') return this.tipoLote(l);
+    return formatarDataBr(l.criado_em);
+  }
+
+  /** Lotes exibidos: os que passam pelos filtros das colunas, na ordem pedida. */
+  protected lotesVisiveis = computed(() => {
+    const filtros = this.filtrosLote();
+    let out = this.lotes().filter(l =>
+      Object.entries(filtros).every(([key, valores]) =>
+        !valores || valores.includes(this.valorColunaLote(l, key))));
+
+    const key = this.sortKeyLote();
+    const dir = this.sortDirLote();
+    if (key && dir) {
+      const mul = dir === 'desc' ? -1 : 1;
+      // "Enviado em" ordena pelo instante do envio, não pelo texto do dia: dias iguais mantêm a
+      // ordem de chegada, e o dd/mm/aaaa não se ordena como data.
+      const chave = (l: Lote) => (key === 'criado_em' ? (l.criado_em ?? '') : this.valorColunaLote(l, key));
+      out = [...out].sort((a, b) => mul * chave(a).localeCompare(chave(b), 'pt-BR'));
+    }
+    return out;
+  });
+
+  protected lotesPager = new ClientPager(this.lotesVisiveis);
+
+  /** Valores oferecidos no painel de uma coluna, sem repetição e na ordem em que aparecem. */
+  private distintosLote(key: string): { value: string; label: string }[] {
+    const vistos = new Set<string>();
+    for (const l of this.lotes()) vistos.add(this.valorColunaLote(l, key));
+    return [...vistos].map(v => ({ value: v, label: v }));
+  }
+
+  protected periodosLote = computed(() => this.distintosLote('periodo'));
+  protected tiposLote = computed(() => this.distintosLote('tipo'));
+  protected enviosLote = computed(() => this.distintosLote('criado_em'));
+
+  onSortLote(ev: { sort: string; direction: string }): void {
+    this.sortKeyLote.set(ev.sort);
+    this.sortDirLote.set(ev.direction);
+    this.recolherLotes();
+  }
+
+  onFiltroLote(ev: { key: string; state: ColumnFilterState | null }): void {
+    this.filtrosLote.update(atual => ({ ...atual, [ev.key]: ev.state?.values ?? null }));
+    this.recolherLotes();
+  }
+
+  /** Mudou o recorte: as expansões abertas seriam de linhas que podem nem estar mais na página. */
+  private recolherLotes(): void {
+    this.lotes().forEach(l => l._exp = false);
+    this.lotesPager.onPage(1);
+  }
 
   /**
    * Publicações em voo, POR LOTE (C9/F49). Era um slot único (`publicandoId`), e **qualquer**
@@ -943,22 +1028,34 @@ export class AdminPontoComponent implements OnInit {
   }
 
   // ── Publicação ──
+  /**
+   * Uma janela só: o detalhe do lote já diz quantas folhas publicadas este lote vai substituir (o
+   * mesmo número do banner da revisão), então a substituição é anunciada e confirmada de uma vez —
+   * e o POST já sai autorizado a substituir.
+   */
   publicar(l: Lote): void {
     if (this.publicando(l.id)) return;   // F49: trava por lote (o [disabled] do botão é a camada de UI)
 
+    const substituicoes = l.substituicoes ?? 0;
     const aviso = l.pendentes > 0
       ? `\n\nAtenção: Há ${l.pendentes} página(s) pendente(s).`
       : '';
-    if (!confirm(`${this.perguntaDePublicacao(l)}${aviso}`)) return;
+    if (!confirm(`${this.perguntaDePublicacao(l, substituicoes)}${aviso}`)) return;
 
-    this.enviarPublicacao(l, false);
+    this.enviarPublicacao(l, substituicoes > 0);
   }
 
-  /** A pergunta do confirm. A mensal declara a natureza: a DEFINITIVA fecha o mês de quem está no lote. */
-  private perguntaDePublicacao(l: Lote): string {
-    return l.tipo === 'MENSAL'
+  /**
+   * A pergunta do confirm. A mensal declara a natureza: a DEFINITIVA fecha o mês de quem está no
+   * lote. Havendo folhas a substituir, o número de pessoas atingidas vem junto.
+   */
+  private perguntaDePublicacao(l: Lote, substituicoes = 0): string {
+    const pergunta = l.tipo === 'MENSAL'
       ? `Publicar folha mensal ${l.categoria === 'DEFINITIVA' ? 'DEFINITIVA' : 'PRÉVIA'} de ${this.periodoLote(l)}?`
       : 'Publicar lote e vincular as folhas aos destinatários?';
+    return substituicoes > 0
+      ? `${pergunta} Este lote substituirá folhas publicadas de ${substituicoes} funcionário(s).`
+      : pergunta;
   }
 
   /**
@@ -994,15 +1091,14 @@ export class AdminPontoComponent implements OnInit {
   }
 
   /**
-   * O segundo passo: substituir folha de outras pessoas nunca acontece sem o admin dizer que sim,
-   * sabendo QUANTAS. Cancelar não publica nada — e o lote fica com a contagem que o backend acabou
-   * de apurar, que é a que o banner passa a mostrar.
+   * Rede de segurança: o quadro mudou entre carregar a tela e clicar em Publicar (outro admin
+   * publicou nesse meio-tempo), e só agora se sabe que há folhas a substituir. A contagem é a que o
+   * backend acabou de apurar sob o lock — a mesma que o banner passa a mostrar. Cancelar não
+   * publica nada.
    */
   private pedirConfirmacaoDaSubstituicao(l: Lote, quantas: number): void {
     this.aplicarLote(l, { substituicoes: quantas });
-    if (!confirm(`${this.perguntaDePublicacao(l)} Substituirá as folhas publicadas de ${quantas} funcionário(s).`)) {
-      return;
-    }
+    if (!confirm(this.perguntaDePublicacao(l, quantas))) return;
     this.enviarPublicacao(l, true);
   }
 

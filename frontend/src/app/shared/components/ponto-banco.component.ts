@@ -46,12 +46,13 @@ import { RegistroManualPontoComponent } from './registro-manual-ponto.component'
         }
       </div>
 
-      <!-- Banco de horas -->
+      <!-- Solicitação de folga pelo saldo de banco de horas -->
       <button class="card-custom card-pick" [class.active]="activeCard() === 'banco'" (click)="toggleCard('banco')">
-        <strong>Banco de horas</strong>
+        <strong>Solicitar Banco de Horas</strong>
       </button>
       <div class="painel" [hidden]="activeCard() !== 'banco'">
-        <app-banco-horas-pessoal />
+        <!-- O card fechado devolve a seleção de dias ao zero: o componente fica oculto, nunca destruído. -->
+        <app-banco-horas-pessoal [aberto]="activeCard() === 'banco'" />
       </div>
 
       <!-- Registro manual de ponto — card visível porém inerte enquanto a flag estiver desligada -->

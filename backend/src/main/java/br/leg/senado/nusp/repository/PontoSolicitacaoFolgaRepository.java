@@ -48,6 +48,19 @@ public interface PontoSolicitacaoFolgaRepository extends JpaRepository<PontoSoli
                           @Param("statusVivos") Collection<StatusSolicitacaoFolga> statusVivos);
 
     /**
+     * Os dias de UMA solicitação, do mais antigo ao mais novo. A chave é o grupo do envio; nas
+     * linhas anteriores à coluna de grupo, que são de um dia só, é o próprio id da linha.
+     */
+    @Query("SELECT s FROM PontoSolicitacaoFolga s " +
+           "WHERE COALESCE(s.grupoId, s.id) = :chave ORDER BY s.dataFolga")
+    List<PontoSolicitacaoFolga> findDaSolicitacao(@Param("chave") String chave);
+
+    /** Os dias de várias solicitações de uma vez — as da página que a listagem acabou de montar. */
+    @Query("SELECT s FROM PontoSolicitacaoFolga s " +
+           "WHERE COALESCE(s.grupoId, s.id) IN :chaves ORDER BY s.dataFolga")
+    List<PontoSolicitacaoFolga> findDasSolicitacoes(@Param("chaves") Collection<String> chaves);
+
+    /**
      * Folgas de UM status de uma categoria no range [ini, fim) — DATA_FOLGA
      * sargável, sem TRUNC (gotcha 4). Com APROVADO alimenta as células
      * "Banco de horas" e a contagem "Folgas" por pessoa da grade (Q13, E10).

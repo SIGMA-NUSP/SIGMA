@@ -297,7 +297,7 @@ describe('PontoBancoComponent', () => {
 
       botaoCard(fixture, 'Registro manual de ponto').click();
       fixture.detectChanges();
-      botaoCard(fixture, 'Banco de horas').click();
+      botaoCard(fixture, 'Solicitar Banco de Horas').click();
       fixture.detectChanges();
 
       const paineis = fixture.debugElement.queryAll(By.css('.painel'))

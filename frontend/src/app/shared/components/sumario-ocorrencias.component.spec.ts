@@ -82,12 +82,14 @@ describe('SumarioOcorrenciasComponent', () => {
     f.debugElement.queryAll(By.css(seletor)).map(d => (d.nativeElement as HTMLElement).textContent!.trim());
 
   describe('filtro de competências', () => {
-    it('abre no ano corrente inteiro', () => {
+    it('abre no acervo inteiro: do primeiro mês navegável ao mês corrente', () => {
       const fixture = renderizar();
 
-      expect(apiGet).toHaveBeenCalledWith(ROTA, { de: '2026-01', ate: '2026-12' });
+      expect(apiGet).toHaveBeenCalledWith(ROTA, { de: '2025-01', ate: '2026-07' });
       expect(fixture.componentInstance.deMes()).toBe(1);
-      expect(fixture.componentInstance.ateMes()).toBe(12);
+      expect(fixture.componentInstance.deAno()).toBe(2025);
+      expect(fixture.componentInstance.ateMes()).toBe(7);
+      expect(fixture.componentInstance.ateAno()).toBe(2026);
     });
 
     it('os selects de ano alcançam o acervo histórico: a lista começa em 2025', () => {
@@ -103,20 +105,14 @@ describe('SumarioOcorrenciasComponent', () => {
       escolher(selects(fixture)[2], '3');   // De: mês, ano · Até: mês, ano
       fixture.detectChanges();
 
-      expect(apiGet).toHaveBeenCalledWith(ROTA, { de: '2026-01', ate: '2026-03' });
+      expect(apiGet).toHaveBeenCalledWith(ROTA, { de: '2025-01', ate: '2026-03' });
     });
 
-    it('"Ano inteiro" volta a janeiro–dezembro do ano inicial', () => {
+    it('a barra de período traz só os quatro seletores', () => {
       const fixture = renderizar();
-      escolher(selects(fixture)[0], '5');
-      escolher(selects(fixture)[2], '6');
-      fixture.detectChanges();
-      apiGet.mockClear();
 
-      fixture.debugElement.query(By.css('button.btn-ano')).nativeElement.click();
-      fixture.detectChanges();
-
-      expect(apiGet).toHaveBeenCalledWith(ROTA, { de: '2026-01', ate: '2026-12' });
+      expect(selects(fixture)).toHaveLength(4);
+      expect(fixture.debugElement.query(By.css('.barra button'))).toBeNull();
     });
 
     /**
@@ -127,10 +123,10 @@ describe('SumarioOcorrenciasComponent', () => {
       const fixture = renderizar();
       apiGet.mockClear();
 
-      escolher(selects(fixture)[0], '9');   // De: setembro; Até segue em dezembro… trocamos o final
+      escolher(selects(fixture)[1], '2026');   // De: 2026; Até segue em julho/2026
       fixture.detectChanges();
       apiGet.mockClear();
-      escolher(selects(fixture)[2], '3');
+      escolher(selects(fixture)[0], '9');      // De: setembro/2026 — depois do mês final
       fixture.detectChanges();
 
       expect(apiGet).not.toHaveBeenCalled();
@@ -287,6 +283,9 @@ describe('SumarioOcorrenciasComponent', () => {
      */
     it('consulta em voo é abortada e não apaga o aviso do intervalo invertido', () => {
       const fixture = renderizar();
+      escolher(selects(fixture)[1], '2026');   // os dois extremos no mesmo ano…
+      escolher(selects(fixture)[2], '12');     // …e o final em dezembro
+      fixture.detectChanges();
       const pendente = new Subject<any>();
       apiGet.mockReturnValue(pendente);
 

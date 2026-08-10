@@ -52,15 +52,8 @@ const POLL_MS = 60_000;
           <app-categoria-selo [categoria]="a.categoria" />
           <h2 class="modal-title">{{ titulo(a) }}</h2>
 
-          @if (a.mensagens.length === 1) {
-            <div class="aviso-box"><p class="aviso-msg">{{ a.mensagens[0].texto }}</p></div>
-          } @else {
-            @for (m of a.mensagens; track m.ordem) {
-              <div class="aviso-box">
-                <div class="aviso-header">Texto nº {{ m.ordem }}</div>
-                <p class="aviso-msg">{{ m.texto }}</p>
-              </div>
-            }
+          @for (m of a.mensagens; track m.ordem) {
+            <div class="aviso-box"><p class="aviso-msg">{{ m.texto }}</p></div>
           }
 
           @if (a.exige_ciencia) {

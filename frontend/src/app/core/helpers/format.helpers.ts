@@ -36,3 +36,18 @@ export function formatEvento(row: Record<string, unknown>, eventoKey: string): s
   const sigla = idx >= 0 ? comissao.substring(0, idx).trim() : comissao.trim();
   return sigla + ' - ' + evento;
 }
+
+/**
+ * Rótulo do status de uma solicitação de banco de horas — o do envio inteiro e o de cada dia dele.
+ * "Parcialmente aprovado" só existe no envio: é quando parte dos dias foi aprovada e parte, rejeitada.
+ */
+export function rotuloStatusSolicitacao(status: string): string {
+  switch (status) {
+    case 'PENDENTE':  return 'Pendente';
+    case 'APROVADO':  return 'Aprovado';
+    case 'REJEITADO': return 'Rejeitado';
+    case 'CANCELADO': return 'Cancelado';
+    case 'PARCIAL':   return 'Parcialmente aprovado';
+    default: return status;
+  }
+}

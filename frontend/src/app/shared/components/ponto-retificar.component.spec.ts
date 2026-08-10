@@ -1,3 +1,4 @@
+import { DebugElement } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -1470,6 +1471,26 @@ describe('PontoRetificarComponent', () => {
       expect(comp.erro()).toContain('máximo de 300 caracteres');   // o motivo do backend
       expect(comp.enviado()).toBe(false);
       expect(comp.salvando()).toBe(false);                         // a trava é liberada: dá para consertar
+    });
+  });
+
+  describe('card do celular: destaque só nas horas', () => {
+    /** Textos das células em negrito do card (a classe que o CSS do celular engrossa). */
+    const emNegrito = (card: DebugElement) =>
+      card.queryAll(By.css('.val.hora')).map(e => e.nativeElement.textContent.trim());
+
+    it('horário registrado sai destacado; dia sem batida, status e rótulos não', () => {
+      const fixture = TestBed.createComponent(PontoRetificarComponent);
+      fixture.detectChanges();
+      const cards = fixture.debugElement.queryAll(By.css('.vista-mobile .dia-card'));
+
+      expect(emNegrito(cards[0])).toEqual(['08:00', '12:00', '13:00', '17:00', '08:00', '00:00']);
+      expect(emNegrito(cards[2])).toEqual(['08:10', '12:00', '03:50', '-02:10']);   // sem a 2ª metade do dia
+      expect(cards[2].queryAll(By.css('.val:not(.hora)')).map(e => e.nativeElement.textContent.trim()))
+        .toEqual(['—', '—']);
+
+      expect(emNegrito(cards[1])).toEqual(['00:00']);   // o Feriado não é hora; o banco do dia é
+      expect(cards[1].query(By.css('.status-cell')).nativeElement.textContent.trim()).toBe('Feriado');
     });
   });
 });

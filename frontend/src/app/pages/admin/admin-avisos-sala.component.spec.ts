@@ -10,11 +10,11 @@ import { ToastService } from '../../shared/components/toast.component';
 import { AdminAvisosSalaComponent } from './admin-avisos-sala.component';
 
 /**
- * Testes de RENDER da listagem "Comunicações Cadastradas": caixa de erro presente com a
- * mensagem certa, retry que re-pede o endpoint, estado vazio legítimo intacto, rodapé
- * coerente, e falha da LISTA não derruba o FORMULÁRIO de cadastro. Também cobre o lock
- * fail-closed de "1 aviso ativo por sala" (cadastro bloqueado enquanto a carga de salas
- * não tiver sucedido).
+ * Testes de RENDER das listagens de comunicações — "Ativas" à vista e "Inativas" recolhida:
+ * caixa de erro presente com a mensagem certa, retry que re-pede o endpoint, estado vazio
+ * legítimo intacto, rodapé coerente, e falha da LISTA não derruba o FORMULÁRIO de cadastro.
+ * Também cobre o lock fail-closed de "1 aviso ativo por sala" (cadastro bloqueado enquanto a
+ * carga de salas não tiver sucedido).
  * TestBed com ApiService mockado por useValue (getList roteado POR ENDPOINT); Router
  * real via provideRouter([]) — RouterLink não aceita useValue cru; sem fake timers.
  * O template tem ngModel → todo render passa por `await fixture.whenStable()`.
@@ -50,7 +50,7 @@ const ERRO_500 = { status: 500, error: { ok: false, error: 'Erro interno do serv
 /** Texto que o admin efetivamente lê na caixa: guia da tela + detalhe do backend entre parênteses. */
 const MSG_500 = 'Não foi possível carregar a lista. (Erro interno do servidor)';
 
-const VAZIO = 'Nenhum aviso cadastrado.';
+const VAZIO = 'Nenhuma comunicação ativa.';
 
 describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
   let apiGetList: ReturnType<typeof vi.fn>;
@@ -131,8 +131,22 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
     (f.debugElement.query(By.css('app-erro-carga button')).nativeElement as HTMLButtonElement).click();
   }
 
-  /** Quantas vezes a listagem foi PEDIDA (prova do retry). */
-  const chamadas = (endpoint: string) => apiGetList.mock.calls.filter(c => c[0] === endpoint).length;
+  /**
+   * Quantas vezes uma TABELA foi pedida (prova do retry). O contador das inativas bate no mesmo
+   * endpoint pedindo 1 linha só pelo total — essa chamada não conta como carga de tabela.
+   */
+  const chamadas = (endpoint: string) =>
+    apiGetList.mock.calls.filter(c => c[0] === endpoint && c[1]?.limit !== 1).length;
+
+  /** Chamadas do contador das inativas (limit 1). */
+  const chamadasContador = () =>
+    apiGetList.mock.calls.filter(c => c[0] === EP_LISTA && c[1]?.limit === 1).length;
+
+  /** Abre a lista de inativas pelo título clicável. */
+  async function abrirInativas(f: ComponentFixture<AdminAvisosSalaComponent>): Promise<void> {
+    (f.debugElement.query(By.css('.titulo-recolhivel')).nativeElement as HTMLElement).click();
+    await estabilizar(f);
+  }
 
   // ═══════════════════════════════════════════════════════════════════
   // Carga inicial — o ponto de partida das demais provas
@@ -145,6 +159,12 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
         expect.objectContaining({ page: 1, limit: 10, sort: 'data', direction: 'desc' }));
       expect(apiGet).toHaveBeenCalledWith(EP_SALAS_OCUPADAS);
       expect(loadSalas).toHaveBeenCalledTimes(1);   // só com o cache do lookup vazio (guard do ngOnInit)
+    });
+
+    it('a lista visível é a das comunicações em curso — o status vai no filtro do pedido', async () => {
+      await renderizar();
+      const pedido = apiGetList.mock.calls.find(c => c[0] === EP_LISTA && c[1]?.limit === 10)![1];
+      expect(pedido.filters).toEqual({ status: { values: ['Ativo', 'Pendente', '—'] } });
     });
 
     it('tudo OK: a tabela exibe os avisos cadastrados e nenhuma caixa de erro existe na tela', async () => {
@@ -164,18 +184,21 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
     const celulaTipo = (f: ComponentFixture<AdminAvisosSalaComponent>, i = 0) =>
       f.debugElement.queryAll(By.css('tbody tr .col-tipo'))[i]?.nativeElement as HTMLElement;
 
-    it('a tela se chama "Comunicações" e a listagem "Comunicações Cadastradas"', async () => {
+    it('a tela se chama "Comunicações" e as listagens, "Ativas" e "Inativas"', async () => {
       const fixture = await renderizar();
       const texto = (fixture.nativeElement as HTMLElement).textContent ?? '';
       expect(fixture.debugElement.query(By.css('h1')).nativeElement.textContent.trim()).toBe('Comunicações');
-      expect(texto).toContain('Comunicações Cadastradas');
+      expect(texto).toContain('Comunicações Ativas');
+      expect(texto).toContain('Comunicações Inativas');
       expect(texto).not.toContain('Inserir Avisos');
       expect(texto).not.toContain('Avisos Cadastrados');
     });
 
     it('a coluna se chama "Tipo" e traz o selo da categoria com o contexto ao lado', async () => {
       const fixture = await renderizar();
-      expect(fixture.componentInstance.cols[0].label).toBe('Tipo');
+      const titulos = fixture.debugElement.queryAll(By.css('thead th'))
+        .map(d => (d.nativeElement as HTMLElement).textContent!.replace(/[▽▼]/g, '').trim());
+      expect(titulos).toEqual(['Cadastro nº', 'Tipo', 'Data', 'Cadastrado por', 'Expira em', 'Status', 'Ação']);
 
       const celula = celulaTipo(fixture);
       expect(celula.querySelector('.cat-selo')?.textContent?.trim()).toBe('Aviso');
@@ -239,7 +262,7 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
       expect(box.query(By.css('[role="alert"]'))).not.toBeNull();   // anunciado ao leitor de tela
       expect(textoDaTabela(fixture)).toContain(MSG_500);
       expect(textoDaTabela(fixture)).not.toContain(VAZIO);
-      expect(fixture.componentInstance.ctrl.rows()).toEqual([]);
+      expect(fixture.componentInstance.ctrlAtivas.rows()).toEqual([]);
     });
 
     it('a caixa vive DENTRO do <tbody> da listagem (é ali que a frase falsa aparecia)', async () => {
@@ -268,7 +291,7 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
       await estabilizar(fixture);
 
       expect(caixa(fixture)).toBeNull();
-      expect(fixture.componentInstance.ctrl.erro()).toBe('');
+      expect(fixture.componentInstance.ctrlAtivas.erro()).toBe('');
       expect(textoDaTabela(fixture)).toContain('Ana Prado');
       expect(textoDaTabela(fixture)).not.toContain(MSG_500);
     });
@@ -287,7 +310,7 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
 
       expect(textoDaTabela(fixture)).toContain(VAZIO);
       expect(caixa(fixture)).toBeNull();
-      expect(fixture.componentInstance.ctrl.erro()).toBe('');
+      expect(fixture.componentInstance.ctrlAtivas.erro()).toBe('');
     });
 
     it('o rodapé não mente: no erro o meta é limpo e a paginação some (não exibe o total anterior)', async () => {
@@ -295,10 +318,10 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
       expect(fixture.debugElement.query(By.css('.pag-info')).nativeElement.textContent).toContain('2 registros');
 
       respostas[EP_LISTA] = falha();
-      fixture.componentInstance.ctrl.load();   // recarga (paginação, sort, filtro de coluna, busca)
+      fixture.componentInstance.ctrlAtivas.load();   // recarga (paginação, sort, filtro de coluna, busca)
       await estabilizar(fixture);
 
-      expect(fixture.componentInstance.ctrl.meta()).toBeNull();
+      expect(fixture.componentInstance.ctrlAtivas.meta()).toBeNull();
       expect(fixture.debugElement.query(By.css('.pag-info'))).toBeNull();   // "2 registros" não sobrevive à falha
       expect(caixa(fixture)).not.toBeNull();
     });
@@ -474,7 +497,7 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
       expect(fixture.debugElement.query(By.css('app-aviso-pessoal-form'))).toBeNull();
     });
 
-    it('cada card ativa o seu painel; a tabela "Comunicações Cadastradas" continua na tela', async () => {
+    it('cada card ativa o seu painel; a tabela de comunicações continua na tela', async () => {
       const fixture = await renderizar();
       const casos: [number, string][] = [[1, 'app-aviso-escala-form'], [2, 'app-aviso-agenda-form'], [3, 'app-aviso-pessoal-form']];
       for (const [i, sel] of casos) {
@@ -502,6 +525,63 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
       respostas[EP_LISTA] = ok({ ...AVISO_ATIVO, permanente: 1, expira_em: '2026-07-24' });
       const fixture = await renderizar();
       expect(textoDaTabela(fixture)).toContain('24/07/2026');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Duas listagens: as em curso à vista, as encerradas a um clique
+  // ═══════════════════════════════════════════════════════════════════
+  describe('comunicações inativas', () => {
+    const tabelas = (f: ComponentFixture<AdminAvisosSalaComponent>) =>
+      f.debugElement.queryAll(By.css('table.data-table'));
+    const tituloInativas = (f: ComponentFixture<AdminAvisosSalaComponent>) =>
+      (f.debugElement.query(By.css('.titulo-recolhivel')).nativeElement as HTMLElement).textContent!.trim();
+
+    it('a lista nasce recolhida: uma tabela na tela e nenhum pedido das inativas além do total', async () => {
+      const fixture = await renderizar();
+
+      expect(tabelas(fixture)).toHaveLength(1);
+      expect(chamadas(EP_LISTA)).toBe(1);
+      expect(chamadasContador()).toBe(1);
+      expect(apiGetList).toHaveBeenCalledWith(EP_LISTA, expect.objectContaining({
+        limit: 1, filters: { status: { values: ['Expirado', 'Desativado'] } },
+      }));
+    });
+
+    it('o título traz o total das inativas sem carregar a tabela', async () => {
+      respostas[EP_LISTA] = () => of({ data: [AVISO_ATIVO], meta: { ...META, total: 12 } });
+      const fixture = await renderizar();
+      expect(tituloInativas(fixture)).toContain('Comunicações Inativas (12)');
+    });
+
+    it('abrir carrega a segunda tabela — só na primeira vez; fechar e reabrir não repete o pedido', async () => {
+      const fixture = await renderizar();
+
+      await abrirInativas(fixture);
+      expect(tabelas(fixture)).toHaveLength(2);
+      expect(chamadas(EP_LISTA)).toBe(2);
+      const pedido = apiGetList.mock.calls.at(-1)![1];
+      expect(pedido.filters).toEqual({ status: { values: ['Expirado', 'Desativado'] } });
+
+      await abrirInativas(fixture);                 // recolhe
+      expect(tabelas(fixture)).toHaveLength(1);
+      await abrirInativas(fixture);                 // reabre
+      expect(chamadas(EP_LISTA)).toBe(2);           // os dados já estavam carregados
+    });
+
+    it('desativar recarrega as duas listas e o total', async () => {
+      const fixture = await renderizar();
+      await abrirInativas(fixture);
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      apiGetList.mockClear();
+
+      fixture.componentInstance.desativar({ ...AVISO_ATIVO, permanente: 0 } as any);
+      await estabilizar(fixture);
+
+      expect(apiPatch).toHaveBeenCalledWith('/api/admin/avisos/av-1/desativar', {});
+      expect(toastSuccess).toHaveBeenCalledWith('Aviso desativado.');
+      expect(chamadas(EP_LISTA)).toBe(2);           // ativas e inativas
+      expect(chamadasContador()).toBe(1);
     });
   });
 });

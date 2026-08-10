@@ -6,6 +6,7 @@ import { AvisoMensagensComponent } from '../../shared/components/aviso-mensagens
 import { MultiSelectDropdownComponent, MultiSelectOption } from '../../shared/components/multi-select-dropdown.component';
 import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
 import { erroCargaMsg, httpErrorMsg } from '../../core/helpers/http.helpers';
+import { categoriaAviso } from '../../core/helpers/aviso-categoria.helpers';
 
 interface Pessoa { id: string; nome: string; tipo: 'OPERADOR' | 'TECNICO' | 'ADMINISTRADOR'; }
 
@@ -94,7 +95,7 @@ const ORDEM_TIPO = ['OPERADOR', 'TECNICO', 'ADMINISTRADOR'];
         <div class="form-row">
           <label class="check-opt check-sub">
             <input type="checkbox" [(ngModel)]="manterAposCiencia" name="manter">
-            Manter aviso após ciência
+            Manter {{ categoria.toLowerCase() }} após ciência
           </label>
         </div>
       }
@@ -103,7 +104,7 @@ const ORDEM_TIPO = ['OPERADOR', 'TECNICO', 'ADMINISTRADOR'];
 
       <div class="painel-actions">
         <button class="btn-primary-custom" [disabled]="saving() || (modo === 'pessoas' && pessoasIndisponiveis())" (click)="onSubmit()">
-          {{ saving() ? 'Salvando...' : 'Cadastrar Aviso' }}
+          {{ saving() ? 'Salvando...' : 'Cadastrar ' + categoria }}
         </button>
       </div>
     </section>
@@ -144,6 +145,11 @@ export class AvisoPessoalFormComponent implements OnInit {
   manterAposCiencia = false;
   saving = signal(false);
   errorMsg = signal('');
+
+  /** Categoria do que está sendo cadastrado: pessoas escolhidas recebem uma mensagem; um grupo, um comunicado. */
+  get categoria(): string {
+    return categoriaAviso(this.modo === 'pessoas' ? 'MENSAGEM' : 'COMUNICADO').label;
+  }
 
   /** FAIL-CLOSED (modo pessoas): sem a lista de pessoas, o multi-select mentiria "ninguém disponível". */
   pessoasIndisponiveis = computed(() => this.loadingPessoas() || !!this.erroPessoas());

@@ -110,10 +110,10 @@ public class ReportPdfService {
     /** "Minhas Solicitações" do banco de horas (E7/C-4): colunas C-4.2, cores C-4.3 + Cancelado cinza. */
     public byte[] gerarRelatorioMinhasSolicitacoes(List<Map<String, Object>> rows) {
         return buildFlatReport("Minhas Solicitações — Banco de Horas", rows,
-                new String[]{"Dia solicitado", "Status", "Deliberado por", "Motivo"},
+                new String[]{"Dias solicitados", "Status", "Deliberado por", "Motivo"},
                 COLS_MINHAS_SOLICITACOES,
                 (tbl, r, nf) -> {
-                    tbl.addCell(cell(fmtDate(r.get("data_folga")), nf, false));
+                    tbl.addCell(cell(nonEmpty(r, "dias_fmt", "--"), nf, false));
                     ReportConfig.SolicitacaoStatusView st = solicitacaoStatusView(str(r, "status"));
                     tbl.addCell(colorCenter(st.label(), nf, st.corHex()));
                     tbl.addCell(cell(nonEmpty(r, "deliberado_por", "--"), nf, false));
@@ -128,7 +128,7 @@ public class ReportPdfService {
                 (tbl, r, nf) -> {
                     tbl.addCell(cell(nonEmpty(r, "nome", "--"), nf, false));
                     tbl.addCell(centerCell(str(r, "saldo"), nf));
-                    tbl.addCell(cell(fmtDate(r.get("data_folga")), nf, false));
+                    tbl.addCell(cell(nonEmpty(r, "dias_fmt", "--"), nf, false));
                     ReportConfig.SolicitacaoStatusView st = solicitacaoStatusView(str(r, "status"));
                     tbl.addCell(colorCenter(st.label(), nf, st.corHex()));
                     tbl.addCell(cell(nonEmpty(r, "deliberado_por", "--"), nf, false));

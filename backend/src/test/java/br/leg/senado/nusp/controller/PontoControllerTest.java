@@ -50,6 +50,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -142,9 +143,9 @@ class PontoControllerTest {
                 .thenReturn(List.of(Map.of("id", PAGINA_ID, "mes_ref", "2026-07")));
         // O papel entra no service (role do token) → matcher no role, valor exato no id do dono.
         when(bancoHorasService.listMinhasSolicitacoes(eq(TokenFactory.USER_ID), anyString(),
-                eq(1), eq(25), eq("data_folga"), eq("desc"), isNull()))
+                eq(1), eq(25), eq("data_solicitacao"), eq("desc"), isNull()))
                 .thenReturn(new PagedResult(List.of(Map.of("id", SOLICITACAO_ID)), 1, Map.of()));
-        when(bancoHorasService.listSolicitacoesAdmin(TokenFactory.USER_ID, 1, 25, "padrao", "asc", null, null))
+        when(bancoHorasService.listSolicitacoesAdmin(TokenFactory.USER_ID, 1, 25, "data_solicitacao", "desc", null, null))
                 .thenReturn(new PagedResult(List.of(Map.of("id", SOLICITACAO_ID)), 1, Map.of()));
     }
 
@@ -1140,6 +1141,21 @@ class PontoControllerTest {
         }
 
         @Test
+        @DisplayName("GET /api/ponto/folha/{id}/download?inline=true — mesmo PDF, exibido em vez de baixado")
+        void download_inline() throws Exception {
+            when(pontoService.baixarFolha(PAGINA_ID, TokenFactory.USER_ID, TokenFactory.OPERADOR, USERNAME_OPERADOR))
+                    .thenReturn(new ArquivoPonto(PDF, "ponto_julho_2026.pdf"));
+
+            mockMvc.perform(Requests.get("/api/ponto/folha/" + PAGINA_ID + "/download")
+                            .param("inline", "true")
+                            .header("Authorization", operador))
+                    .andExpect(status().isOk())
+                    .andExpect(content().contentType(MediaType.APPLICATION_PDF))
+                    .andExpect(header().string("Content-Disposition", containsString("inline")))
+                    .andExpect(content().bytes(PDF));
+        }
+
+        @Test
         @DisplayName("GET /api/admin/ponto/pagina/{id}/preview — mesmo PDF, mas inline (a única diferença é o disposition)")
         void preview_inline() throws Exception {
             when(pontoService.previewPagina(PAGINA_ID, USERNAME_DO_TOKEN)).thenReturn(new ArquivoPonto(PDF, "pagina-9.pdf"));
@@ -1310,55 +1326,47 @@ class PontoControllerTest {
         }
     }
 
-    // ══ 7) Deliberação do admin (aprovar / rejeitar) ═══════════════════════
+    // ══ 7) Deliberação do admin (a solicitação inteira, de uma vez) ═══════
 
     @Nested
-    @DisplayName("deliberação do admin — aprovar (sem corpo) e rejeitar (motivo no corpo opcional)")
+    @DisplayName("deliberação do admin — os dias aprovados e os rejeitados no corpo, motivo opcional")
     class Deliberacao {
 
-        @Test
-        @DisplayName("POST .../banco/solicitacao/{id}/aprovar — 200 com o id do path e o do admin do token")
-        void aprovar_200() throws Exception {
-            when(bancoHorasService.aprovar(SOLICITACAO_ID, TokenFactory.USER_ID))
-                    .thenReturn(Map.of("status", "APROVADA"));
-
-            mockMvc.perform(Requests.post("/api/admin/ponto/banco/solicitacao/" + SOLICITACAO_ID + "/aprovar")
-                            .header("Authorization", admin))
-                    .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.ok").value(true))
-                    .andExpect(jsonPath("$.data.status").value("APROVADA"));
-
-            verify(bancoHorasService).aprovar(SOLICITACAO_ID, TokenFactory.USER_ID);
-        }
+        private static final String ROTA = "/api/admin/ponto/banco/solicitacao/" + SOLICITACAO_ID + "/deliberar";
 
         @Test
-        @DisplayName("POST .../banco/solicitacao/{id}/rejeitar — o motivo é extraído do corpo opcional e repassado ao service")
-        void rejeitar_comMotivo_200() throws Exception {
-            when(bancoHorasService.rejeitar(SOLICITACAO_ID, TokenFactory.USER_ID, "Sem cobertura na escala"))
-                    .thenReturn(Map.of("status", "REJEITADA"));
+        @DisplayName("POST .../deliberar — as duas listas e o motivo chegam ao service, com o admin do token")
+        void deliberar_200() throws Exception {
+            when(bancoHorasService.deliberar(SOLICITACAO_ID, TokenFactory.USER_ID,
+                    List.of("dia-1"), List.of("dia-2"), "Sem cobertura na escala"))
+                    .thenReturn(Map.of("aprovados", 1, "rejeitados", 1));
 
-            mockMvc.perform(Requests.post("/api/admin/ponto/banco/solicitacao/" + SOLICITACAO_ID + "/rejeitar")
+            mockMvc.perform(Requests.post(ROTA)
                             .header("Authorization", admin)
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content("{\"motivo\":\"Sem cobertura na escala\"}"))
+                            .content("{\"aprovados\":[\"dia-1\"],\"rejeitados\":[\"dia-2\"],"
+                                    + "\"motivo\":\"Sem cobertura na escala\"}"))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.data.status").value("REJEITADA"));
+                    .andExpect(jsonPath("$.ok").value(true))
+                    .andExpect(jsonPath("$.data.aprovados").value(1))
+                    .andExpect(jsonPath("$.data.rejeitados").value(1));
 
-            verify(bancoHorasService).rejeitar(SOLICITACAO_ID, TokenFactory.USER_ID, "Sem cobertura na escala");
+            verify(bancoHorasService).deliberar(SOLICITACAO_ID, TokenFactory.USER_ID,
+                    List.of("dia-1"), List.of("dia-2"), "Sem cobertura na escala");
         }
 
         @Test
-        @DisplayName("POST .../banco/solicitacao/{id}/rejeitar — sem corpo, motivo null chega ao service, que responde 400 (a exigência é dele)")
-        void rejeitar_semCorpo_motivoNull_400() throws Exception {
-            when(bancoHorasService.rejeitar(eq(SOLICITACAO_ID), eq(TokenFactory.USER_ID), isNull()))
-                    .thenThrow(new ServiceValidationException("Informe o motivo da rejeição."));
+        @DisplayName("POST .../deliberar — sem corpo, listas vazias e motivo null chegam ao service, que recusa (a exigência é dele)")
+        void deliberar_semCorpo_400() throws Exception {
+            when(bancoHorasService.deliberar(eq(SOLICITACAO_ID), eq(TokenFactory.USER_ID),
+                    eq(List.of()), eq(List.of()), isNull()))
+                    .thenThrow(new ServiceValidationException("Delibere todos os dias pendentes da solicitação."));
 
-            mockMvc.perform(Requests.post("/api/admin/ponto/banco/solicitacao/" + SOLICITACAO_ID + "/rejeitar")
-                            .header("Authorization", admin))
+            mockMvc.perform(Requests.post(ROTA).header("Authorization", admin))
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.error").value("Informe o motivo da rejeição."));
+                    .andExpect(jsonPath("$.error").value("Delibere todos os dias pendentes da solicitação."));
 
-            verify(bancoHorasService).rejeitar(SOLICITACAO_ID, TokenFactory.USER_ID, null);
+            verify(bancoHorasService).deliberar(SOLICITACAO_ID, TokenFactory.USER_ID, List.of(), List.of(), null);
         }
 
         /**
@@ -1370,8 +1378,8 @@ class PontoControllerTest {
          */
         @Test
         @DisplayName("objeto em motivo → 400 nomeando o campo, service nunca chamado (nada é gravado)")
-        void rejeitar_motivoNaoTextual_400() throws Exception {
-            mockMvc.perform(Requests.post("/api/admin/ponto/banco/solicitacao/" + SOLICITACAO_ID + "/rejeitar")
+        void deliberar_motivoNaoTextual_400() throws Exception {
+            mockMvc.perform(Requests.post(ROTA)
                             .header("Authorization", admin)
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"motivo\":{\"a\":1}}"))
@@ -1383,38 +1391,35 @@ class PontoControllerTest {
         }
 
         @Test
-        @DisplayName("POST .../banco/solicitacao/{id}/aprovar — solicitação inexistente vira 404 (a ordem 404→403→400 é do service; aqui prova-se o mapeamento)")
-        void aprovar_inexistente_404() throws Exception {
-            when(bancoHorasService.aprovar(anyString(), anyString()))
+        @DisplayName("POST .../deliberar — solicitação inexistente vira 404 (a ordem 404→403→400 é do service; aqui prova-se o mapeamento)")
+        void deliberar_inexistente_404() throws Exception {
+            when(bancoHorasService.deliberar(anyString(), anyString(), anyList(), anyList(), any()))
                     .thenThrow(new ServiceValidationException("Solicitação não encontrada.", HttpStatus.NOT_FOUND));
 
-            mockMvc.perform(Requests.post("/api/admin/ponto/banco/solicitacao/" + SOLICITACAO_ID + "/aprovar")
-                            .header("Authorization", admin))
+            mockMvc.perform(Requests.post(ROTA).header("Authorization", admin))
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.error").value("Solicitação não encontrada."));
         }
 
         @Test
-        @DisplayName("POST .../banco/solicitacao/{id}/aprovar — admin deliberando o próprio pedido vira 403 do service (T-1.2)")
-        void aprovar_proprioPedido_403() throws Exception {
-            when(bancoHorasService.aprovar(anyString(), anyString()))
+        @DisplayName("POST .../deliberar — admin deliberando o próprio pedido vira 403 do service (T-1.2)")
+        void deliberar_proprioPedido_403() throws Exception {
+            when(bancoHorasService.deliberar(anyString(), anyString(), anyList(), anyList(), any()))
                     .thenThrow(new ServiceValidationException("Você não pode deliberar o próprio pedido.",
                             HttpStatus.FORBIDDEN));
 
-            mockMvc.perform(Requests.post("/api/admin/ponto/banco/solicitacao/" + SOLICITACAO_ID + "/aprovar")
-                            .header("Authorization", admin))
+            mockMvc.perform(Requests.post(ROTA).header("Authorization", admin))
                     .andExpect(status().isForbidden())
                     .andExpect(jsonPath("$.error").value("Você não pode deliberar o próprio pedido."));
         }
 
         @Test
-        @DisplayName("POST .../banco/solicitacao/{id}/aprovar — solicitação já deliberada vira 400")
-        void aprovar_jaDeliberada_400() throws Exception {
-            when(bancoHorasService.aprovar(anyString(), anyString()))
+        @DisplayName("POST .../deliberar — solicitação já deliberada vira 400")
+        void deliberar_jaDeliberada_400() throws Exception {
+            when(bancoHorasService.deliberar(anyString(), anyString(), anyList(), anyList(), any()))
                     .thenThrow(new ServiceValidationException("Apenas solicitações pendentes podem ser deliberadas."));
 
-            mockMvc.perform(Requests.post("/api/admin/ponto/banco/solicitacao/" + SOLICITACAO_ID + "/aprovar")
-                            .header("Authorization", admin))
+            mockMvc.perform(Requests.post(ROTA).header("Authorization", admin))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.error").value("Apenas solicitações pendentes podem ser deliberadas."));
         }
@@ -1470,7 +1475,7 @@ class PontoControllerTest {
                     .andExpect(jsonPath("$.meta.page").value(1))
                     .andExpect(jsonPath("$.meta.limit").value(25));
 
-            verify(bancoHorasService).listSolicitacoesAdmin(TokenFactory.USER_ID, 1, 25, "padrao", "asc",
+            verify(bancoHorasService).listSolicitacoesAdmin(TokenFactory.USER_ID, 1, 25, "data_solicitacao", "desc",
                     null, null);
         }
 
@@ -1490,7 +1495,7 @@ class PontoControllerTest {
             byte[] docx = "DOCX-DO-RELATORIO".getBytes(StandardCharsets.UTF_8);
 
             when(bancoHorasService.listSolicitacoesAdmin(TokenFactory.USER_ID, 1, ControllerUtils.REPORT_LIMIT,
-                    "padrao", "asc", null, null, true))
+                    "data_solicitacao", "desc", null, null, true))
                     .thenReturn(new PagedResult(cruas, 1, Map.of()));
             when(bancoHorasService.enriquecerRowsParaRelatorioSolicitacoesAdmin(cruas)).thenReturn(enriquecidas);
             when(pdfService.gerarRelatorioSolicitacoesAdmin(enriquecidas)).thenReturn(pdf);

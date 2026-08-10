@@ -851,18 +851,21 @@ class BancoHorasServiceTest {
     // ── PATCH /api/ponto/banco/solicitacao/{id}/cancelar ──────────
 
     @Test
-    @DisplayName("cancelar: PENDENTE do dono → CANCELADO + recálculo do cache (Q19)")
+    @DisplayName("cancelar: os dias PENDENTES do envio viram CANCELADO + recálculo do cache (Q19)")
     void cancelarSucesso() {
-        PontoSolicitacaoFolga s = solicitacao(HOJE.plusDays(3), StatusSolicitacaoFolga.PENDENTE);
-        when(solicitacaoRepo.findById("sol-1")).thenReturn(Optional.of(s));
+        PontoSolicitacaoFolga dia1 = solicitacao(HOJE.plusDays(3), StatusSolicitacaoFolga.PENDENTE);
+        PontoSolicitacaoFolga dia2 = solicitacao(HOJE.plusDays(4), StatusSolicitacaoFolga.PENDENTE);
+        when(solicitacaoRepo.findDaSolicitacao("env-1")).thenReturn(List.of(dia1, dia2));
         when(saldoAberturaService.reancorar(OP, "OPERADOR")).thenReturn(saldoDe(960, null));
 
-        Map<String, Object> out = service.cancelar("sol-1", OP, ROLE);
+        Map<String, Object> out = service.cancelar("env-1", OP, ROLE);
 
-        assertEquals(StatusSolicitacaoFolga.CANCELADO, s.getStatus());
+        assertEquals(StatusSolicitacaoFolga.CANCELADO, dia1.getStatus());
+        assertEquals(StatusSolicitacaoFolga.CANCELADO, dia2.getStatus());
         assertEquals("CANCELADO", out.get("status"));
+        assertEquals(2, out.get("dias"));
         assertEquals(960, out.get("saldo_min"));
-        verify(solicitacaoRepo).save(s);
+        verify(solicitacaoRepo).saveAll(List.of(dia1, dia2));
         verify(saldoAberturaService).reancorar(OP, "OPERADOR");
     }
 
@@ -871,164 +874,232 @@ class BancoHorasServiceTest {
     void cancelarOutroDono() {
         PontoSolicitacaoFolga s = solicitacao(HOJE.plusDays(3), StatusSolicitacaoFolga.PENDENTE);
         s.setPessoaId("outro");
-        when(solicitacaoRepo.findById("sol-1")).thenReturn(Optional.of(s));
+        when(solicitacaoRepo.findDaSolicitacao("env-1")).thenReturn(List.of(s));
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.cancelar("sol-1", OP, ROLE));
+                () -> service.cancelar("env-1", OP, ROLE));
         assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
-        verify(solicitacaoRepo, never()).save(any());
+        verify(solicitacaoRepo, never()).saveAll(any());
     }
 
     @Test
-    @DisplayName("cancelar: já deliberada (APROVADO) → 400")
+    @DisplayName("cancelar: nenhum dia pendente (já deliberada) → 400")
     void cancelarNaoPendente() {
         PontoSolicitacaoFolga s = solicitacao(HOJE.plusDays(3), StatusSolicitacaoFolga.APROVADO);
-        when(solicitacaoRepo.findById("sol-1")).thenReturn(Optional.of(s));
+        when(solicitacaoRepo.findDaSolicitacao("env-1")).thenReturn(List.of(s));
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.cancelar("sol-1", OP, ROLE));
+                () -> service.cancelar("env-1", OP, ROLE));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertEquals(StatusSolicitacaoFolga.APROVADO, s.getStatus());
-        verify(solicitacaoRepo, never()).save(any());
+        verify(solicitacaoRepo, never()).saveAll(any());
     }
 
     @Test
     @DisplayName("cancelar: id inexistente → 404")
     void cancelarInexistente() {
-        when(solicitacaoRepo.findById("nao-existe")).thenReturn(Optional.empty());
+        when(solicitacaoRepo.findDaSolicitacao("nao-existe")).thenReturn(List.of());
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
                 () -> service.cancelar("nao-existe", OP, ROLE));
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
     }
 
-    // ══ Deliberação do admin ══════════════════════════════════════
+    // ══ Deliberação do admin — a solicitação inteira, de uma vez ══
 
-    // ── POST .../solicitacao/{id}/aprovar ──
+    /** Um envio de dois dias pendentes, com ids conhecidos: o alvo da deliberação mista. */
+    private List<PontoSolicitacaoFolga> envioDeDoisDias() {
+        PontoSolicitacaoFolga dia1 = solicitacao(HOJE.plusDays(3), StatusSolicitacaoFolga.PENDENTE);
+        dia1.setId("dia-1");
+        PontoSolicitacaoFolga dia2 = solicitacao(HOJE.plusDays(4), StatusSolicitacaoFolga.PENDENTE);
+        dia2.setId("dia-2");
+        when(solicitacaoRepo.findDaSolicitacao("env-1")).thenReturn(List.of(dia1, dia2));
+        return List.of(dia1, dia2);
+    }
 
     @Test
-    @DisplayName("aprovar: PENDENTE → APROVADO com deliberador, deliberadoEm do Clock, motivo nulado e aviso PESSOAL")
-    void aprovarSucesso() {
-        PontoSolicitacaoFolga s = solicitacao(HOJE.plusDays(3), StatusSolicitacaoFolga.PENDENTE);
-        s.setMotivoRejeicao("resíduo de uma rejeição anterior");   // aprovar precisa LIMPAR o campo
-        when(solicitacaoRepo.findById("sol-1")).thenReturn(Optional.of(s));
+    @DisplayName("aprovação total: os dois dias viram APROVADO com deliberador e carimbo do Clock; a comunicação sai com 1 texto")
+    void deliberarTudoAprovado() {
+        List<PontoSolicitacaoFolga> dias = envioDeDoisDias();
+        dias.get(0).setMotivoRejeicao("resíduo de uma rejeição anterior");   // aprovar precisa LIMPAR o campo
 
-        Map<String, Object> out = service.aprovar("sol-1", ADMIN);
+        Map<String, Object> out = service.deliberar("env-1", ADMIN, List.of("dia-1", "dia-2"), List.of(), null);
 
-        assertEquals(StatusSolicitacaoFolga.APROVADO, s.getStatus());
-        assertEquals(ADMIN, s.getDeliberadoPorId());
-        assertEquals(AGORA, s.getDeliberadoEm(), "o carimbo vem do Clock injetado, não do relógio da máquina");
-        assertNull(s.getMotivoRejeicao());
-        assertEquals("APROVADO", out.get("status"));
-        assertFalse(out.containsKey("motivo"), "aprovação não tem motivo");
+        assertEquals(StatusSolicitacaoFolga.APROVADO, dias.get(0).getStatus());
+        assertEquals(StatusSolicitacaoFolga.APROVADO, dias.get(1).getStatus());
+        assertEquals(ADMIN, dias.get(0).getDeliberadoPorId());
+        assertEquals(AGORA, dias.get(0).getDeliberadoEm(), "o carimbo vem do Clock injetado");
+        assertNull(dias.get(0).getMotivoRejeicao());
+        assertEquals(2, out.get("aprovados"));
+        assertEquals(0, out.get("rejeitados"));
 
-        verify(solicitacaoRepo).save(s);
         verify(saldoAberturaService).reancorar(OP, "OPERADOR");   // reprecifica o cache (Q10)
         verify(avisoService).criarPessoalIndividual(
                 argThat((List<AvisoService.DestinatarioAviso> ds) -> ds.size() == 1
                         && OP.equals(ds.get(0).pessoaId()) && ds.get(0).papel() == PapelPessoa.OPERADOR),
-                argThat((String msg) -> msg.contains("APROVADA")
-                        && msg.contains(ReportConfig.fmtDate(HOJE.plusDays(3)))),
-                eq(ADMIN), eq(SubtipoAviso.SOLICITACAO_APROVADA));
+                argThat((List<String> textos) -> textos.size() == 1
+                        && textos.get(0).contains("APROVADA")
+                        && textos.get(0).contains(diaCurto(HOJE.plusDays(3)))
+                        && textos.get(0).contains(diaCurto(HOJE.plusDays(4)))),
+                eq(ADMIN), eq(SubtipoAviso.SOLICITACAO_APROVADA), isNull());
     }
 
     @Test
-    @DisplayName("aprovar: pedido de TÉCNICO notifica com o papel TECNICO (o aviso segue o PESSOA_TIPO)")
-    void aprovarPedidoDeTecnico() {
-        PontoSolicitacaoFolga s = solicitacao("tec-9", "TECNICO", HOJE.plusDays(2), StatusSolicitacaoFolga.PENDENTE);
-        when(solicitacaoRepo.findById("sol-9")).thenReturn(Optional.of(s));
+    @DisplayName("rejeição total: motivo stripado em cada dia e na comunicação, que sai com 1 texto")
+    void deliberarTudoRejeitado() {
+        List<PontoSolicitacaoFolga> dias = envioDeDoisDias();
 
-        service.aprovar("sol-9", ADMIN);
+        Map<String, Object> out = service.deliberar("env-1", ADMIN, List.of(), List.of("dia-1", "dia-2"),
+                "   Sem cobertura na sala   ");
+
+        assertEquals(StatusSolicitacaoFolga.REJEITADO, dias.get(0).getStatus());
+        assertEquals("Sem cobertura na sala", dias.get(0).getMotivoRejeicao(), "o motivo é stripado antes de persistir");
+        assertEquals("Sem cobertura na sala", dias.get(1).getMotivoRejeicao());
+        assertEquals(2, out.get("rejeitados"));
+        assertEquals("Sem cobertura na sala", out.get("motivo"));
+
+        verify(saldoAberturaService).reancorar(OP, "OPERADOR");   // estorno implícito (C-5.6)
+        verify(avisoService).criarPessoalIndividual(anyList(),
+                argThat((List<String> textos) -> textos.size() == 1
+                        && textos.get(0).contains("REJEITADA")
+                        && textos.get(0).contains("Motivo: Sem cobertura na sala.")),
+                eq(ADMIN), eq(SubtipoAviso.SOLICITACAO_REJEITADA), isNull());
+    }
+
+    @Test
+    @DisplayName("deliberação mista: cada dia com o seu desfecho e UMA comunicação de 2 textos")
+    void deliberarMista() {
+        List<PontoSolicitacaoFolga> dias = envioDeDoisDias();
+
+        Map<String, Object> out = service.deliberar("env-1", ADMIN, List.of("dia-1"), List.of("dia-2"), "Escala fechada");
+
+        assertEquals(StatusSolicitacaoFolga.APROVADO, dias.get(0).getStatus());
+        assertNull(dias.get(0).getMotivoRejeicao(), "o motivo é só de quem foi rejeitado");
+        assertEquals(StatusSolicitacaoFolga.REJEITADO, dias.get(1).getStatus());
+        assertEquals("Escala fechada", dias.get(1).getMotivoRejeicao());
+        assertEquals(1, out.get("aprovados"));
+        assertEquals(1, out.get("rejeitados"));
+
+        verify(avisoService).criarPessoalIndividual(anyList(),
+                argThat((List<String> textos) -> textos.size() == 2
+                        && textos.get(0).contains(diaCurto(HOJE.plusDays(3))) && textos.get(0).contains("APROVADA")
+                        && textos.get(1).contains(diaCurto(HOJE.plusDays(4))) && textos.get(1).contains("REJEITADA")
+                        && textos.get(1).contains("Motivo: Escala fechada.")),
+                eq(ADMIN), eq(SubtipoAviso.SOLICITACAO_MISTA), isNull());
+    }
+
+    @Test
+    @DisplayName("deliberar: pedido de TÉCNICO notifica com o papel TECNICO (a comunicação segue o PESSOA_TIPO)")
+    void deliberarPedidoDeTecnico() {
+        PontoSolicitacaoFolga s = solicitacao("tec-9", "TECNICO", HOJE.plusDays(2), StatusSolicitacaoFolga.PENDENTE);
+        s.setId("dia-9");
+        when(solicitacaoRepo.findDaSolicitacao("env-9")).thenReturn(List.of(s));
+
+        service.deliberar("env-9", ADMIN, List.of("dia-9"), List.of(), null);
 
         verify(saldoAberturaService).reancorar("tec-9", "TECNICO");
         verify(avisoService).criarPessoalIndividual(
                 argThat((List<AvisoService.DestinatarioAviso> ds) -> ds.size() == 1
                         && "tec-9".equals(ds.get(0).pessoaId()) && ds.get(0).papel() == PapelPessoa.TECNICO),
-                anyString(), eq(ADMIN), eq(SubtipoAviso.SOLICITACAO_APROVADA));
+                anyList(), eq(ADMIN), eq(SubtipoAviso.SOLICITACAO_APROVADA), isNull());
     }
 
-    // ── POST .../solicitacao/{id}/rejeitar ──
+    @Test
+    @DisplayName("deliberar: deixar um dia pendente de fora → 400, sem gravar nada")
+    void deliberarIncompleta() {
+        envioDeDoisDias();
+
+        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                () -> service.deliberar("env-1", ADMIN, List.of("dia-1"), List.of(), null));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+        assertTrue(ex.getMessage().contains("todos os dias pendentes"));
+        verify(solicitacaoRepo, never()).saveAll(any());
+        verifyNoInteractions(avisoService, saldoAberturaService);
+    }
 
     @Test
-    @DisplayName("rejeitar: PENDENTE → REJEITADO com motivo stripado, na resposta e na mensagem do aviso")
-    void rejeitarSucesso() {
-        PontoSolicitacaoFolga s = solicitacao(HOJE.plusDays(4), StatusSolicitacaoFolga.PENDENTE);
-        when(solicitacaoRepo.findById("sol-2")).thenReturn(Optional.of(s));
+    @DisplayName("deliberar: o mesmo dia aprovado E rejeitado → 400")
+    void deliberarDiaNosDoisLados() {
+        envioDeDoisDias();
 
-        Map<String, Object> out = service.rejeitar("sol-2", ADMIN, "   Sem cobertura na sala   ");
+        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                () -> service.deliberar("env-1", ADMIN, List.of("dia-1", "dia-2"), List.of("dia-2"), "x"));
 
-        assertEquals(StatusSolicitacaoFolga.REJEITADO, s.getStatus());
-        assertEquals(ADMIN, s.getDeliberadoPorId());
-        assertEquals(AGORA, s.getDeliberadoEm());
-        assertEquals("Sem cobertura na sala", s.getMotivoRejeicao(), "o motivo é stripado antes de persistir");
-        assertEquals("REJEITADO", out.get("status"));
-        assertEquals("Sem cobertura na sala", out.get("motivo"));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+        assertTrue(ex.getMessage().contains("aprovado ou rejeitado"));
+        verify(solicitacaoRepo, never()).saveAll(any());
+    }
 
-        verify(solicitacaoRepo).save(s);
-        verify(saldoAberturaService).reancorar(OP, "OPERADOR");   // estorno implícito (C-5.6)
-        verify(avisoService).criarPessoalIndividual(anyList(),
-                argThat((String msg) -> msg.contains("REJEITADA")
-                        && msg.contains("Motivo: Sem cobertura na sala.")),
-                eq(ADMIN), eq(SubtipoAviso.SOLICITACAO_REJEITADA));
+    @Test
+    @DisplayName("deliberar: dia estranho ao envio → 400")
+    void deliberarDiaDeOutraSolicitacao() {
+        envioDeDoisDias();
+
+        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                () -> service.deliberar("env-1", ADMIN, List.of("dia-1", "dia-2", "dia-de-outro"), List.of(), null));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+        verify(solicitacaoRepo, never()).saveAll(any());
     }
 
     @ParameterizedTest(name = "[{index}] motivo = \"{0}\"")
     @NullSource
     @ValueSource(strings = {"", "   "})
-    @DisplayName("rejeitar: motivo ausente/em branco → 400 ANTES de carregar a solicitação (D-3.2)")
-    void rejeitarSemMotivo(String motivo) {
+    @DisplayName("deliberar: havendo rejeição, motivo ausente/em branco → 400 sem gravar (D-3.2)")
+    void deliberarRejeicaoSemMotivo(String motivo) {
+        envioDeDoisDias();
+
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.rejeitar("sol-2", ADMIN, motivo));
+                () -> service.deliberar("env-1", ADMIN, List.of("dia-1"), List.of("dia-2"), motivo));
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertTrue(ex.getMessage().contains("motivo"));
-        verifyNoInteractions(solicitacaoRepo, saldoAberturaService, avisoService, administradorRepo);
+        verify(solicitacaoRepo, never()).saveAll(any());
+        verifyNoInteractions(avisoService, saldoAberturaService);
     }
 
     @Test
     @DisplayName("motivo de 301 caracteres → 400 nomeando o CAMPO, antes de tocar o banco (era ORA-12899 → 500)")
-    void rejeitarMotivoAcimaDoLimite() {
+    void deliberarMotivoAcimaDoLimite() {
         // MOTIVO_REJEICAO é VARCHAR2(1000) em BYTES: um motivo colado de um e-mail/norma estourava a
         // coluna, o ORA-12899 caía no handler genérico e o admin recebia um 500 com um toast sem
         // nenhuma pista da causa — a rejeição ficava impossível.
+        envioDeDoisDias();
+
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.rejeitar("sol-2", ADMIN, "ç".repeat(301)));
+                () -> service.deliberar("env-1", ADMIN, List.of("dia-1"), List.of("dia-2"), "ç".repeat(301)));
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertTrue(ex.getMessage().contains("motivo da rejeição"), ex.getMessage());
         assertTrue(ex.getMessage().contains("300 caracteres"), ex.getMessage());
-        verifyNoInteractions(solicitacaoRepo, saldoAberturaService, avisoService, administradorRepo);
+        verify(solicitacaoRepo, never()).saveAll(any());
+        verifyNoInteractions(avisoService, saldoAberturaService);
     }
 
     @Test
     @DisplayName("motivo de 300 caracteres passa (limite inclusivo) e é persistido inteiro")
-    void rejeitarMotivoNoLimite() {
+    void deliberarMotivoNoLimite() {
         String motivo = "ç".repeat(300);   // 600 bytes em UTF-8 — dentro do budget de 1000 da coluna
-        PontoSolicitacaoFolga s = solicitacao(HOJE.plusDays(4), StatusSolicitacaoFolga.PENDENTE);
-        when(solicitacaoRepo.findById("sol-2")).thenReturn(Optional.of(s));
+        List<PontoSolicitacaoFolga> dias = envioDeDoisDias();
 
-        service.rejeitar("sol-2", ADMIN, motivo);
+        service.deliberar("env-1", ADMIN, List.of("dia-1"), List.of("dia-2"), motivo);
 
-        assertEquals(StatusSolicitacaoFolga.REJEITADO, s.getStatus());
-        assertEquals(motivo, s.getMotivoRejeicao());
-        verify(solicitacaoRepo).save(s);
+        assertEquals(motivo, dias.get(1).getMotivoRejeicao());
+        verify(solicitacaoRepo).saveAll(anyList());
     }
 
     // ── ordem da validação: 404 → 403 (T-1.2/T-1.3) → só PENDENTE ──
 
     @Test
-    @DisplayName("deliberar: solicitação inexistente → 404 (aprovar e rejeitar)")
+    @DisplayName("deliberar: solicitação inexistente → 404")
     void deliberarInexistente() {
-        when(solicitacaoRepo.findById("nao-existe")).thenReturn(Optional.empty());
+        when(solicitacaoRepo.findDaSolicitacao("nao-existe")).thenReturn(List.of());
 
-        ServiceValidationException aoAprovar = assertThrows(ServiceValidationException.class,
-                () -> service.aprovar("nao-existe", ADMIN));
-        assertEquals(HttpStatus.NOT_FOUND, aoAprovar.getStatus());
+        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                () -> service.deliberar("nao-existe", ADMIN, List.of("dia-1"), List.of(), null));
+        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
 
-        ServiceValidationException aoRejeitar = assertThrows(ServiceValidationException.class,
-                () -> service.rejeitar("nao-existe", ADMIN, "motivo válido"));
-        assertEquals(HttpStatus.NOT_FOUND, aoRejeitar.getStatus());
-
-        verify(solicitacaoRepo, never()).save(any());
+        verify(solicitacaoRepo, never()).saveAll(any());
         verifyNoInteractions(avisoService, saldoAberturaService);
     }
 
@@ -1037,17 +1108,18 @@ class BancoHorasServiceTest {
     void deliberarProprioPedido() {
         PontoSolicitacaoFolga s = solicitacao(ADMIN, "ADMINISTRADOR", HOJE.plusDays(3),
                 StatusSolicitacaoFolga.PENDENTE);
-        when(solicitacaoRepo.findById("sol-3")).thenReturn(Optional.of(s));
+        s.setId("dia-3");
+        when(solicitacaoRepo.findDaSolicitacao("env-3")).thenReturn(List.of(s));
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.aprovar("sol-3", ADMIN));
+                () -> service.deliberar("env-3", ADMIN, List.of("dia-3"), List.of(), null));
 
         assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertTrue(ex.getMessage().contains("próprio pedido"));
         assertEquals(StatusSolicitacaoFolga.PENDENTE, s.getStatus());
         // T-1.2 vem ANTES de T-1.3: nem chega a consultar o caller no repositório
         verifyNoInteractions(administradorRepo);
-        verify(solicitacaoRepo, never()).save(any());
+        verify(solicitacaoRepo, never()).saveAll(any());
     }
 
     /** T-1.3: só admin SERVIDOR PÚBLICO delibera pedido de admin. Os 3 casos que NÃO passam. */
@@ -1064,16 +1136,17 @@ class BancoHorasServiceTest {
     void deliberarPedidoDeAdminSemServidorPublico(String cenario, Optional<Administrador> caller) {
         PontoSolicitacaoFolga s = solicitacao("adm-alvo", "ADMINISTRADOR", HOJE.plusDays(3),
                 StatusSolicitacaoFolga.PENDENTE);
-        when(solicitacaoRepo.findById("sol-4")).thenReturn(Optional.of(s));
+        s.setId("dia-4");
+        when(solicitacaoRepo.findDaSolicitacao("env-4")).thenReturn(List.of(s));
         when(administradorRepo.findById(ADMIN)).thenReturn(caller);
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.aprovar("sol-4", ADMIN));
+                () -> service.deliberar("env-4", ADMIN, List.of("dia-4"), List.of(), null));
 
         assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertTrue(ex.getMessage().contains("servidores públicos"));
         assertEquals(StatusSolicitacaoFolga.PENDENTE, s.getStatus());
-        verify(solicitacaoRepo, never()).save(any());
+        verify(solicitacaoRepo, never()).saveAll(any());
         verifyNoInteractions(avisoService);
     }
 
@@ -1082,18 +1155,18 @@ class BancoHorasServiceTest {
     void deliberarPedidoDeAdminComServidorPublico() {
         PontoSolicitacaoFolga s = solicitacao("adm-alvo", "ADMINISTRADOR", HOJE.plusDays(3),
                 StatusSolicitacaoFolga.PENDENTE);
-        when(solicitacaoRepo.findById("sol-4")).thenReturn(Optional.of(s));
+        s.setId("dia-4");
+        when(solicitacaoRepo.findDaSolicitacao("env-4")).thenReturn(List.of(s));
         when(administradorRepo.findById(ADMIN)).thenReturn(Optional.of(admin(true)));
 
-        service.aprovar("sol-4", ADMIN);
+        service.deliberar("env-4", ADMIN, List.of("dia-4"), List.of(), null);
 
         assertEquals(StatusSolicitacaoFolga.APROVADO, s.getStatus());
-        verify(solicitacaoRepo).save(s);
         verify(saldoAberturaService).reancorar("adm-alvo", "ADMINISTRADOR");
         verify(avisoService).criarPessoalIndividual(
                 argThat((List<AvisoService.DestinatarioAviso> ds) -> ds.size() == 1
                         && "adm-alvo".equals(ds.get(0).pessoaId()) && ds.get(0).papel() == PapelPessoa.ADMIN),
-                anyString(), eq(ADMIN), eq(SubtipoAviso.SOLICITACAO_APROVADA));
+                anyList(), eq(ADMIN), eq(SubtipoAviso.SOLICITACAO_APROVADA), isNull());
     }
 
     @ParameterizedTest(name = "[{index}] status {0} → 400")
@@ -1101,15 +1174,16 @@ class BancoHorasServiceTest {
     @DisplayName("deliberar: solicitação já deliberada (ou cancelada) → 400, sem regravar")
     void deliberarNaoPendente(StatusSolicitacaoFolga status) {
         PontoSolicitacaoFolga s = solicitacao(HOJE.plusDays(3), status);
-        when(solicitacaoRepo.findById("sol-5")).thenReturn(Optional.of(s));
+        s.setId("dia-5");
+        when(solicitacaoRepo.findDaSolicitacao("env-5")).thenReturn(List.of(s));
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.aprovar("sol-5", ADMIN));
+                () -> service.deliberar("env-5", ADMIN, List.of("dia-5"), List.of(), null));
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertTrue(ex.getMessage().contains("pendentes"));
         assertEquals(status, s.getStatus(), "o status anterior é preservado");
-        verify(solicitacaoRepo, never()).save(any());
+        verify(solicitacaoRepo, never()).saveAll(any());
         verifyNoInteractions(avisoService, saldoAberturaService);
     }
 
@@ -1118,12 +1192,13 @@ class BancoHorasServiceTest {
     void deliberarProprioPedidoJaDeliberado() {
         PontoSolicitacaoFolga s = solicitacao(ADMIN, "ADMINISTRADOR", HOJE.plusDays(3),
                 StatusSolicitacaoFolga.APROVADO);
-        when(solicitacaoRepo.findById("sol-6")).thenReturn(Optional.of(s));
+        s.setId("dia-6");
+        when(solicitacaoRepo.findDaSolicitacao("env-6")).thenReturn(List.of(s));
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.aprovar("sol-6", ADMIN));
+                () -> service.deliberar("env-6", ADMIN, List.of("dia-6"), List.of(), null));
 
-        // Invertida a ordem em deliberavel(), este caso viraria 400 — e o estado do pedido vazaria
+        // Invertida a ordem em deliberar(), este caso viraria 400 — e o estado do pedido vazaria
         // para quem não tem poder sobre ele.
         assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertTrue(ex.getMessage().contains("próprio pedido"));
@@ -1134,14 +1209,20 @@ class BancoHorasServiceTest {
     void deliberarPedidoDeAdminJaDeliberadoSemServidorPublico() {
         PontoSolicitacaoFolga s = solicitacao("adm-alvo", "ADMINISTRADOR", HOJE.plusDays(3),
                 StatusSolicitacaoFolga.REJEITADO);
-        when(solicitacaoRepo.findById("sol-7")).thenReturn(Optional.of(s));
+        s.setId("dia-7");
+        when(solicitacaoRepo.findDaSolicitacao("env-7")).thenReturn(List.of(s));
         when(administradorRepo.findById(ADMIN)).thenReturn(Optional.of(admin(false)));
 
         ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.aprovar("sol-7", ADMIN));
+                () -> service.deliberar("env-7", ADMIN, List.of("dia-7"), List.of(), null));
 
         assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertTrue(ex.getMessage().contains("servidores públicos"));
+    }
+
+    /** Como os dias aparecem na comunicação do desfecho: {@code dd/MM}. */
+    private static String diaCurto(LocalDate d) {
+        return String.format("%02d/%02d", d.getDayOfMonth(), d.getMonthValue());
     }
 
     // ── Relatório da fila do admin (Q27) ──

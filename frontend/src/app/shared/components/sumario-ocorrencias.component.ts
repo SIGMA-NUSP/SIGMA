@@ -85,8 +85,6 @@ const TRADUCAO_POR_CODIGO = new Map(
       <select class="sel-ano" aria-label="Ano final" (change)="onAno('ate', $event)">
         @for (a of anos; track a) { <option [value]="a" [selected]="ateAno() === a">{{ a }}</option> }
       </select>
-
-      <button type="button" class="btn-outline btn-ano" (click)="anoInteiro()">Ano inteiro</button>
     </div>
 
     @if (erro()) {
@@ -152,7 +150,6 @@ const TRADUCAO_POR_CODIGO = new Map(
       justify-content: center; margin-bottom: 16px;
     }
     .rot { color: var(--muted); font-size: .9rem; }
-    .btn-ano { margin-left: 6px; }
 
     .sumario .col-oc { text-align: center; white-space: nowrap; }
     /* Só a coluna que TEM tradução promete a dica ao pousar o mouse */
@@ -170,10 +167,10 @@ export class SumarioOcorrenciasComponent implements OnInit {
   /** O sumário navega até o acervo histórico — piso próprio, anterior à implantação do módulo. */
   readonly anos = anosNavegaveis(this.hoje, ANO_MINIMO_SUMARIO);
 
-  // Período default: o ano corrente inteiro — o recorte que o admin mais pede.
+  // Período default: todo o acervo, do primeiro mês navegável ao mês corrente (não há folha futura).
   deMes = signal(1);
-  deAno = signal(this.hoje.getFullYear());
-  ateMes = signal(12);
+  deAno = signal(ANO_MINIMO_SUMARIO);
+  ateMes = signal(this.hoje.getMonth() + 1);
   ateAno = signal(this.hoje.getFullYear());
 
   sumario = signal<SumarioData | null>(null);
@@ -285,14 +282,6 @@ export class SumarioOcorrenciasComponent implements OnInit {
     const ano = Number((ev.target as HTMLSelectElement).value);
     if (!this.anos.includes(ano)) return;
     if (campo === 'de') this.deAno.set(ano); else this.ateAno.set(ano);
-    this.carregar();
-  }
-
-  /** Atalho do filtro: janeiro a dezembro do ano já escolhido no início do intervalo. */
-  anoInteiro(): void {
-    this.deMes.set(1);
-    this.ateMes.set(12);
-    this.ateAno.set(this.deAno());
     this.carregar();
   }
 

@@ -77,6 +77,16 @@ export class ApiService {
     return this.http.get(this.url(endpoint), { params: hp, responseType: 'blob' });
   }
 
+  /**
+   * Abre um endpoint da API em nova aba, direto pela URL. Feito no gesto do clique, porque a aba
+   * pedida depois de uma resposta assíncrona é bloqueada em silêncio pelos navegadores de celular.
+   * O cookie de sessão acompanha a requisição (mesma origem). Devolve false quando o navegador
+   * recusa a aba — quem chamou avisa o usuário.
+   */
+  abrirEmNovaAba(endpoint: string): boolean {
+    return !!window.open(this.url(endpoint), '_blank');
+  }
+
   /** Abre um blob em nova aba (revoga a URL após 60s). */
   abrirBlobInline(blob: Blob): void {
     const url = URL.createObjectURL(blob);

@@ -149,7 +149,14 @@ export class ColumnFilterComponent {
   private cdr = inject(ChangeDetectorRef);
 
   @Input() col!: ColumnFilterDef;
-  @Input() distinctValues: { value: string; label: string }[] = [];
+
+  /**
+   * Valores oferecidos no painel. Guardados num signal porque a lista muda com os dados da tabela
+   * (nova carga, novo período) e o painel precisa refletir a lista da vez, não a da primeira vez.
+   */
+  private readonly distinct = signal<{ value: string; label: string }[]>([]);
+  @Input() set distinctValues(v: { value: string; label: string }[]) { this.distinct.set(v ?? []); }
+  get distinctValues(): { value: string; label: string }[] { return this.distinct(); }
   @Input() currentSort = '';
   @Input() currentDir = '';
   @Output() sortChange = new EventEmitter<{ sort: string; direction: string }>();
@@ -164,7 +171,7 @@ export class ColumnFilterComponent {
   private selectedValues = signal<string[] | null>(null); // null = all
   private needsPosition = false;
 
-  distinctItems = computed(() => this.distinctValues || []);
+  distinctItems = computed(() => this.distinct());
 
   filteredItems = computed(() => {
     const items = this.distinctItems();

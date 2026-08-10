@@ -214,14 +214,14 @@ interface DadosFolha {
             @if (isStatus(l)) {
               <div class="status-cell">{{ l.ent1 }}</div>
             } @else {
-              <div class="cel c-ent1"><span class="lbl">Ent. 1</span><span class="val">{{ l.ent1 || '—' }}</span></div>
-              <div class="cel c-sai1"><span class="lbl">Saí. 1</span><span class="val">{{ l.sai1 || '—' }}</span></div>
-              <div class="cel c-ent2"><span class="lbl">Ent. 2</span><span class="val">{{ l.ent2 || '—' }}</span></div>
-              <div class="cel c-sai2"><span class="lbl">Saí. 2</span><span class="val">{{ l.sai2 || '—' }}</span></div>
+              <div class="cel c-ent1"><span class="lbl">Ent. 1</span><span class="val" [class.hora]="!!l.ent1">{{ l.ent1 || '—' }}</span></div>
+              <div class="cel c-sai1"><span class="lbl">Saí. 1</span><span class="val" [class.hora]="!!l.sai1">{{ l.sai1 || '—' }}</span></div>
+              <div class="cel c-ent2"><span class="lbl">Ent. 2</span><span class="val" [class.hora]="!!l.ent2">{{ l.ent2 || '—' }}</span></div>
+              <div class="cel c-sai2"><span class="lbl">Saí. 2</span><span class="val" [class.hora]="!!l.sai2">{{ l.sai2 || '—' }}</span></div>
             }
 
-            <div class="resumo total"><span class="lbl">Total dia</span><strong>{{ l.total_dia || '—' }}</strong></div>
-            <div class="resumo banco"><span class="lbl">Banco</span><strong>{{ l.banco || '—' }}</strong></div>
+            <div class="resumo total"><span class="lbl">Total dia</span><span class="val" [class.hora]="!!l.total_dia">{{ l.total_dia || '—' }}</span></div>
+            <div class="resumo banco"><span class="lbl">Banco</span><span class="val" [class.hora]="!!l.banco">{{ l.banco || '—' }}</span></div>
           </div>
           @if (l.aberto || (l.ja_retificado && l.retifExpandida)) {
             <div class="retif-area retif-area-mobile">
@@ -344,6 +344,8 @@ interface DadosFolha {
       .cel { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
       .cel .lbl { font-size: .6rem; font-weight: 600; color: #64748b; }
       .cel .val { font-size: .82rem; font-variant-numeric: tabular-nums; }
+      /* Só o horário registrado ganha destaque; dia sem batida e rótulos ficam leves. */
+      .dia-card .val.hora { font-weight: 700; }
       .c-ent1 { grid-column: 2; grid-row: 1; }
       .c-sai1 { grid-column: 3; grid-row: 1; }
       .c-ent2 { grid-column: 4; grid-row: 1; }
@@ -357,7 +359,7 @@ interface DadosFolha {
         background: #f1f5f9; border-radius: 6px; padding: 4px 8px; font-size: .76rem;
       }
       .resumo .lbl { color: #475569; }
-      .resumo strong { font-variant-numeric: tabular-nums; color: var(--text); }
+      .resumo .val { font-variant-numeric: tabular-nums; color: var(--text); }
       .total { grid-column: 2 / 4; grid-row: 2; }
       .banco { grid-column: 4 / 6; grid-row: 2; }
     }

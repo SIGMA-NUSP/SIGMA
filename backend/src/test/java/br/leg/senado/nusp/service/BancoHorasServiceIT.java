@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -69,6 +70,10 @@ class BancoHorasServiceIT {
     @Autowired
     private AdministradorRepository administradorRepo;
 
+    /** Real: é dele que a listagem tira os DIAS de cada solicitação (a linha é o envio). */
+    @Autowired
+    private PontoSolicitacaoFolgaRepository solicitacaoRepo;
+
     /** Mesmo dia canônico do unitário (quarta-feira): 14/07 é "ontem", 16/07 é "amanhã". */
     private static final LocalDate HOJE = LocalDate.of(2026, 7, 15);
     private static final ZoneId ZONA = ZoneId.of("America/Sao_Paulo");
@@ -94,11 +99,14 @@ class BancoHorasServiceIT {
         vigiaDeFacetas.exigirZeroWarns();
     }
 
-    /** As listagens só usam o EM (SQL nativo) e o administradorRepo (anotação de deliberação). */
+    /**
+     * As listagens usam o EM (SQL nativo), o repositório das solicitações (os dias de cada envio) e
+     * o administradorRepo (anotação de deliberação).
+     */
     private BancoHorasService criarService(AdministradorRepository adminRepo) {
         return new BancoHorasService(emReal(),
                 mock(PontoBancoSaldoRepository.class),
-                mock(PontoSolicitacaoFolgaRepository.class),
+                solicitacaoRepo,
                 mock(PontoDiaMarcacaoRepository.class),
                 mock(PontoPessoaMarcacaoRepository.class),
                 mock(PontoTipoMarcacaoRepository.class),
@@ -116,13 +124,21 @@ class BancoHorasServiceIT {
         return r.data().stream().map(linha -> (String) linha.get("id")).toList();
     }
 
-    /** {@code "2026-07-14 00:00:00.0"} → {@code 2026-07-14} (o DATE do Oracle vem com hora). */
-    private static LocalDate dia(Map<String, Object> linha) {
-        return LocalDate.parse(String.valueOf(linha.get("data_folga")).substring(0, 10));
+    /** Os dias que a solicitação carrega — uma linha da listagem é um ENVIO, não um dia. */
+    @SuppressWarnings("unchecked")
+    private static List<LocalDate> diasDaLinha(Map<String, Object> linha) {
+        return ((List<Map<String, Object>>) linha.get("dias")).stream()
+                .map(d -> LocalDate.parse(String.valueOf(d.get("data_folga")))).toList();
     }
 
+    /** Os dias de todas as linhas, na ordem em que a listagem as devolveu. */
     private static List<LocalDate> dias(PagedResult r) {
-        return r.data().stream().map(BancoHorasServiceIT::dia).toList();
+        return r.data().stream().flatMap(linha -> diasDaLinha(linha).stream()).toList();
+    }
+
+    /** Fixa o instante do envio de cada solicitação: é ele que ordena a listagem. */
+    private void envioHaSegundos(PontoSolicitacaoFolga s, int segundos) {
+        CenarioFactory.fixarTimestamp(emReal(), "PNT_SOLICITACAO_FOLGA", "CRIADO_EM", s.getId(), segundos);
     }
 
     private static List<String> valores(PagedResult r, String coluna) {
@@ -194,54 +210,104 @@ class BancoHorasServiceIT {
         }
 
         @Test
-        @DisplayName("ordenação default: DATA_FOLGA ASC com tiebreaker CRIADO_EM DESC no empate de dia")
-        void ordenacaoDefault_dataFolgaComTiebreaker() {
+        @DisplayName("ordenação default: a solicitação mais recente primeiro (DATA_SOLICITACAO DESC)")
+        void ordenacaoDefault_pelaDataDoEnvio() {
             Operador dono = CenarioFactory.novoOperador(emReal());
-            LocalDate empate = HOJE.plusDays(5);
             // Semeio FORA da ordem esperada: sem ORDER BY, viria na ordem de inserção (falso-verde).
-            PontoSolicitacaoFolga tarde = CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(), "OPERADOR",
+            PontoSolicitacaoFolga antiga = CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(), "OPERADOR",
                     HOJE.plusDays(9), StatusSolicitacaoFolga.PENDENTE);
-            // Mesmo dia, 2 linhas: a FBI só admite UMA viva por (pessoa, dia) — a outra é CANCELADA.
-            PontoSolicitacaoFolga antigaNoEmpate = CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(),
-                    "OPERADOR", empate, StatusSolicitacaoFolga.CANCELADO);
-            PontoSolicitacaoFolga novaNoEmpate = CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(),
-                    "OPERADOR", empate, StatusSolicitacaoFolga.PENDENTE);
-            // A cancelada nasce 1h ANTES — o tiebreaker CRIADO_EM DESC tem de pôr a nova na frente.
-            // As DUAS âncoras vêm do relógio do BANCO (SYSTIMESTAMP): o @PrePersist carimba pela JVM, e
+            PontoSolicitacaoFolga doMeio = CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(), "OPERADOR",
+                    HOJE.plusDays(2), StatusSolicitacaoFolga.PENDENTE);
+            PontoSolicitacaoFolga recente = CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(), "OPERADOR",
+                    HOJE.plusDays(5), StatusSolicitacaoFolga.PENDENTE);
+            // As âncoras vêm do relógio do BANCO (SYSTIMESTAMP): o @PrePersist carimba pela JVM, e
             // comparar os dois relógios só funcionaria enquanto ambos estivessem no mesmo fuso.
-            CenarioFactory.fixarTimestamp(emReal(), "PNT_SOLICITACAO_FOLGA", "CRIADO_EM",
-                    antigaNoEmpate.getId(), 7200);
-            CenarioFactory.fixarTimestamp(emReal(), "PNT_SOLICITACAO_FOLGA", "CRIADO_EM",
-                    novaNoEmpate.getId(), 3600);
+            envioHaSegundos(antiga, 10800);
+            envioHaSegundos(doMeio, 7200);
+            envioHaSegundos(recente, 3600);
+            emReal().flush();
+
+            PagedResult r = service.listMinhasSolicitacoes(dono.getId(), "operador", 1, 10,
+                    "data_solicitacao", "desc", null);
+
+            assertEquals(List.of(recente.getId(), doMeio.getId(), antiga.getId()), ids(r),
+                    "a lista abre pelo que foi pedido por último");
+        }
+
+        @Test
+        @DisplayName("os dias do mesmo envio viram UMA linha, com todos os dias dentro")
+        void diasDoMesmoEnvioViramUmaLinha() {
+            Operador dono = CenarioFactory.novoOperador(emReal());
+            String grupo = UUID.randomUUID().toString();
+            PontoSolicitacaoFolga dia1 = CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(), "OPERADOR",
+                    HOJE.plusDays(1), StatusSolicitacaoFolga.PENDENTE);
+            PontoSolicitacaoFolga dia2 = CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(), "OPERADOR",
+                    HOJE.plusDays(2), StatusSolicitacaoFolga.PENDENTE);
+            PontoSolicitacaoFolga avulsa = CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(), "OPERADOR",
+                    HOJE.plusDays(3), StatusSolicitacaoFolga.PENDENTE);
+            dia1.setGrupoId(grupo);
+            dia2.setGrupoId(grupo);
             emReal().flush();
 
             PagedResult r = service.listMinhasSolicitacoes(dono.getId(), "operador", 1, 10, null, null, null);
 
-            assertEquals(List.of(novaNoEmpate.getId(), antigaNoEmpate.getId(), tarde.getId()), ids(r),
-                    "dia mais próximo primeiro; no empate de dia, a criada há menos tempo vem antes");
-            assertEquals(List.of(empate, empate, HOJE.plusDays(9)), dias(r));
+            assertEquals(2, r.total(), "dois envios: o de dois dias e o avulso");
+            Map<String, Object> envio = r.data().stream()
+                    .filter(linha -> grupo.equals(linha.get("id"))).findFirst().orElseThrow();
+            assertEquals(List.of(HOJE.plusDays(1), HOJE.plusDays(2)), diasDaLinha(envio),
+                    "os dias do envio vêm juntos, em ordem cronológica");
+            // A linha antiga, sem grupo, continua sendo uma solicitação de um dia identificada pelo próprio id.
+            Map<String, Object> linhaAvulsa = linhaDe(r, avulsa);
+            assertEquals(List.of(HOJE.plusDays(3)), diasDaLinha(linhaAvulsa));
+        }
+
+        @Test
+        @DisplayName("parte aprovada e parte rejeitada: o envio inteiro fica 'PARCIAL'")
+        void envioParcialmenteAprovado() {
+            Operador dono = CenarioFactory.novoOperador(emReal());
+            Administrador chefe = CenarioFactory.novoAdministrador(emReal());
+            String grupo = UUID.randomUUID().toString();
+            PontoSolicitacaoFolga aprovado = CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(), "OPERADOR",
+                    HOJE.plusDays(1), StatusSolicitacaoFolga.APROVADO, chefe, null);
+            PontoSolicitacaoFolga rejeitado = CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(), "OPERADOR",
+                    HOJE.plusDays(2), StatusSolicitacaoFolga.REJEITADO, chefe, "Escala fechada");
+            aprovado.setGrupoId(grupo);
+            rejeitado.setGrupoId(grupo);
+            emReal().flush();
+
+            PagedResult r = service.listMinhasSolicitacoes(dono.getId(), "operador", 1, 10, null, null, null);
+
+            assertEquals(1, r.total());
+            Map<String, Object> linha = r.data().get(0);
+            assertEquals("PARCIAL", linha.get("status"));
+            assertEquals(chefe.getNomeCompleto(), linha.get("deliberado_por"), "o deliberador é um só por envio");
+            assertEquals("Escala fechada", linha.get("motivo"));
         }
 
         @Test
         @DisplayName("paginação: OFFSET/FETCH fatia os dados e o COUNT enxerga o conjunto inteiro")
         void paginacao_fatiaComTotalCompleto() {
             Operador dono = CenarioFactory.novoOperador(emReal());
+            List<PontoSolicitacaoFolga> envios = new ArrayList<>();
             for (int i = 1; i <= 5; i++) {
-                CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(), "OPERADOR",
+                PontoSolicitacaoFolga s = CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(), "OPERADOR",
                         HOJE.plusDays(i), StatusSolicitacaoFolga.PENDENTE);
+                envioHaSegundos(s, 3600 * i);   // o 1º é o mais antigo
+                envios.add(s);
             }
             emReal().flush();
 
-            PagedResult pagina2 = service.listMinhasSolicitacoes(dono.getId(), "operador", 2, 2, null, null, null);
+            PagedResult pagina2 = service.listMinhasSolicitacoes(dono.getId(), "operador", 2, 2,
+                    "data_solicitacao", "desc", null);
 
             assertEquals(5, pagina2.total(), "o COUNT não pagina");
-            assertEquals(List.of(HOJE.plusDays(3), HOJE.plusDays(4)), dias(pagina2),
-                    "página 2 de 2 em 2 = o 3º e o 4º dias");
+            assertEquals(List.of(envios.get(2).getId(), envios.get(3).getId()), ids(pagina2),
+                    "do mais recente ao mais antigo, a página 2 de 2 em 2 traz o 3º e o 4º envios");
         }
 
         @Test
-        @DisplayName("filtros: status (text, IN) e data_folga (date, range sargável) recortam dados E total")
-        void filtros_statusEData() {
+        @DisplayName("filtro de status (text, IN) recorta dados E total")
+        void filtro_porStatus() {
             Operador dono = CenarioFactory.novoOperador(emReal());
             Administrador chefe = CenarioFactory.novoAdministrador(emReal());
             PontoSolicitacaoFolga pendente = CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(), "OPERADOR",
@@ -250,24 +316,22 @@ class BancoHorasServiceIT {
                     HOJE.plusDays(2), StatusSolicitacaoFolga.APROVADO, chefe, null);
             CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(), "OPERADOR",
                     HOJE.plusDays(3), StatusSolicitacaoFolga.CANCELADO);
+            envioHaSegundos(pendente, 7200);
+            envioHaSegundos(aprovada, 3600);
             emReal().flush();
 
-            PagedResult porStatus = service.listMinhasSolicitacoes(dono.getId(), "operador", 1, 10, null, null,
-                    filtroValores("status", "PENDENTE", "APROVADO"));
-            assertEquals(2, porStatus.total());
-            assertEquals(List.of(pendente.getId(), aprovada.getId()), ids(porStatus));
+            PagedResult porStatus = service.listMinhasSolicitacoes(dono.getId(), "operador", 1, 10,
+                    "data_solicitacao", "desc", filtroValores("status", "PENDENTE", "APROVADO"));
 
-            PagedResult porDia = service.listMinhasSolicitacoes(dono.getId(), "operador", 1, 10, null, null,
-                    Map.of("data_folga", Map.of("values", List.of(HOJE.plusDays(2).toString()))));
-            assertEquals(1, porDia.total(), "o filtro de data casa o dia exato (range [d, d+1))");
-            assertEquals(List.of(aprovada.getId()), ids(porDia));
+            assertEquals(2, porStatus.total());
+            assertEquals(List.of(aprovada.getId(), pendente.getId()), ids(porStatus));
         }
 
         @Test
-        @DisplayName("ordenação explícita: sort/dir do controller (data_folga DESC), status e deliberado_por (LEFT JOIN)")
+        @DisplayName("ordenação explícita: data_solicitacao ASC, status e deliberado_por (LEFT JOIN)")
         void ordenacaoExplicita_pelasColunasDoMS_SORT() {
-            // O PontoController SEMPRE manda sort/dir (default data_folga/desc) — nenhum caso os exercitava,
-            // e as demais entradas do MS_SORT são SQL literal que só a integração alcança.
+            // O PontoController SEMPRE manda sort/dir (default data_solicitacao/desc) — as demais entradas
+            // do MS_SORT são SQL literal que só a integração alcança.
             Operador dono = CenarioFactory.novoOperador(emReal());
             Administrador zulu = CenarioFactory.novoAdministrador(emReal(), "Zulu Deliberador");
             Administrador alfa = CenarioFactory.novoAdministrador(emReal(), "Alfa Deliberador");
@@ -277,12 +341,15 @@ class BancoHorasServiceIT {
                     "OPERADOR", HOJE.plusDays(2), StatusSolicitacaoFolga.APROVADO, zulu, null);
             PontoSolicitacaoFolga rejeitadaPorAlfa = CenarioFactory.novaSolicitacaoFolga(emReal(), dono.getId(),
                     "OPERADOR", HOJE.plusDays(3), StatusSolicitacaoFolga.REJEITADO, alfa, "não");
+            envioHaSegundos(pendente, 10800);
+            envioHaSegundos(aprovadaPorZulu, 7200);
+            envioHaSegundos(rejeitadaPorAlfa, 3600);
             emReal().flush();
 
-            PagedResult porDiaDesc = service.listMinhasSolicitacoes(dono.getId(), "operador", 1, 10,
-                    "data_folga", "desc", null);
-            assertEquals(List.of(rejeitadaPorAlfa.getId(), aprovadaPorZulu.getId(), pendente.getId()),
-                    ids(porDiaDesc), "data_folga DESC — o par (sort, dir) que o controller manda de verdade");
+            PagedResult maisAntigaPrimeiro = service.listMinhasSolicitacoes(dono.getId(), "operador", 1, 10,
+                    "data_solicitacao", "asc", null);
+            assertEquals(List.of(pendente.getId(), aprovadaPorZulu.getId(), rejeitadaPorAlfa.getId()),
+                    ids(maisAntigaPrimeiro), "ASC inverte a lista: o envio mais antigo abre");
 
             PagedResult porDeliberador = service.listMinhasSolicitacoes(dono.getId(), "operador", 1, 10,
                     "deliberado_por", "asc", null);
@@ -293,7 +360,7 @@ class BancoHorasServiceIT {
             PagedResult porStatus = service.listMinhasSolicitacoes(dono.getId(), "operador", 1, 10,
                     "status", "asc", null);
             assertEquals(List.of("APROVADO", "PENDENTE", "REJEITADO"), valores(porStatus, "status"),
-                    "ORDER BY s.STATUS ASC — ordem alfabética do literal, não a do enum");
+                    "ORDER BY do status derivado ASC — ordem alfabética do literal, não a do enum");
         }
 
         @Test
@@ -393,25 +460,28 @@ class BancoHorasServiceIT {
         }
 
         @Test
-        @DisplayName("ordenação default composta (D-4.1): PENDENTEs primeiro, depois por DATA_FOLGA")
-        void ordenacaoDefault_pendentesPrimeiro() {
+        @DisplayName("ordenação default: a fila abre pela solicitação mais recente")
+        void ordenacaoDefault_pelaDataDoEnvio() {
             Administrador caller = CenarioFactory.novoAdministrador(emReal());
             Administrador chefe = CenarioFactory.novoAdministrador(emReal());
             Operador operador = CenarioFactory.novoOperador(emReal());
 
-            // A pendente é a de dia MAIS DISTANTE: só a ordenação composta a põe na frente.
             PontoSolicitacaoFolga aprovadaCedo = CenarioFactory.novaSolicitacaoFolga(emReal(), operador.getId(),
                     "OPERADOR", HOJE.plusDays(1), StatusSolicitacaoFolga.APROVADO, chefe, null);
             PontoSolicitacaoFolga rejeitadaDepois = CenarioFactory.novaSolicitacaoFolga(emReal(), operador.getId(),
                     "OPERADOR", HOJE.plusDays(2), StatusSolicitacaoFolga.REJEITADO, chefe, "não");
             PontoSolicitacaoFolga pendenteTarde = CenarioFactory.novaSolicitacaoFolga(emReal(), operador.getId(),
                     "OPERADOR", HOJE.plusDays(9), StatusSolicitacaoFolga.PENDENTE);
+            envioHaSegundos(aprovadaCedo, 10800);
+            envioHaSegundos(rejeitadaDepois, 7200);
+            envioHaSegundos(pendenteTarde, 3600);
             emReal().flush();
 
-            PagedResult r = service.listSolicitacoesAdmin(caller.getId(), 1, 10, null, null, null, null);
+            PagedResult r = service.listSolicitacoesAdmin(caller.getId(), 1, 10,
+                    "data_solicitacao", "desc", null, null);
 
-            assertEquals(List.of(pendenteTarde.getId(), aprovadaCedo.getId(), rejeitadaDepois.getId()), ids(r),
-                    "CASE STATUS WHEN 'PENDENTE' THEN 0 ELSE 1 END, DATA_FOLGA — a pendente distante vem primeiro");
+            assertEquals(List.of(pendenteTarde.getId(), rejeitadaDepois.getId(), aprovadaCedo.getId()), ids(r),
+                    "DATA_SOLICITACAO DESC — quem pediu por último aparece primeiro");
 
             // A fila do admin tem DOIS joins na MESMA tabela (pa = solicitante admin, adm = deliberador):
             // sem esta asserção, trocar um alias pelo outro passaria verde e o relatório imprimiria o nome errado.
@@ -422,7 +492,7 @@ class BancoHorasServiceIT {
         }
 
         @Test
-        @DisplayName("tiebreaker s.ID: empate total (mesmo status e mesmo dia) tem ordem estável entre páginas")
+        @DisplayName("tiebreaker: envios do mesmo instante têm ordem estável entre páginas")
         void tiebreaker_mantemPaginacaoEstavel() {
             Administrador caller = CenarioFactory.novoAdministrador(emReal());
             LocalDate mesmoDia = HOJE.plusDays(2);
@@ -433,19 +503,23 @@ class BancoHorasServiceIT {
                         mesmoDia, StatusSolicitacaoFolga.PENDENTE);
             }
             emReal().flush();
+            // TODAS no mesmo instante (um UPDATE só, sem microssegundos a separar): sobra o desempate final.
+            emReal().createNativeQuery(
+                    "UPDATE PNT_SOLICITACAO_FOLGA SET CRIADO_EM = TIMESTAMP '2026-07-15 08:00:00'").executeUpdate();
 
             // ⚠️ A ordem esperada vem do BANCO, não de String.compareTo: a sessão JDBC ordena VARCHAR2 por
             // colação LINGUÍSTICA (WEST_EUROPEAN — o driver herda o locale pt-BR da JVM), onde LETRA vem
             // antes de DÍGITO. Comparar com o sort do Java daria falha fantasma.
             @SuppressWarnings("unchecked")
             List<String> ordemDoBanco = emReal()
-                    .createNativeQuery("SELECT s.ID FROM PNT_SOLICITACAO_FOLGA s ORDER BY s.ID")
+                    .createNativeQuery("SELECT COALESCE(s.GRUPO_ID, s.ID) FROM PNT_SOLICITACAO_FOLGA s "
+                            + "ORDER BY COALESCE(s.GRUPO_ID, s.ID)")
                     .getResultList();
             assertEquals(4, ordemDoBanco.size());
 
             PagedResult tudo = service.listSolicitacoesAdmin(caller.getId(), 1, 10, null, null, null, null);
             assertEquals(ordemDoBanco, ids(tudo),
-                    "empatadas no CASE e em DATA_FOLGA → quem decide é o tiebreaker s.ID");
+                    "empatadas no instante do envio → quem decide é o tiebreaker do id");
 
             // Paginar 1 a 1: sem desempate estável, o Oracle poderia repetir (ou pular) linhas entre páginas.
             List<String> paginando = new ArrayList<>();
@@ -456,8 +530,8 @@ class BancoHorasServiceIT {
         }
 
         @Test
-        @DisplayName("ordenação explícita: sort=nome varre o CASE dos 3 tipos; dir=desc na composta só inverte o DIA")
-        void ordenacaoExplicita_nomeEDirecaoNaComposta() {
+        @DisplayName("ordenação explícita: sort=nome varre o CASE dos 3 tipos")
+        void ordenacaoExplicita_porNome() {
             Administrador caller = CenarioFactory.novoAdministrador(emReal());
             Administrador chefe = CenarioFactory.novoAdministrador(emReal(), "Zzz Chefe");
             Operador operador = CenarioFactory.novoOperador(emReal(), "Bravo Operador");
@@ -477,11 +551,8 @@ class BancoHorasServiceIT {
             assertEquals(List.of(doTecnico.getId(), doOperador.getId(), doAdmin.getId()), ids(porNome),
                     "o sort por Nome atravessa os 3 tipos — uma coluna crua deixaria 2 deles nulos");
 
-            // dir=desc com o sort default COMPOSTO: o DESC cola só no último termo (s.DATA_FOLGA), então os
-            // PENDENTEs continuam na frente. Comportamento surpreendente, mas é o contrato atual.
-            PagedResult padraoDesc = service.listSolicitacoesAdmin(caller.getId(), 1, 10, "padrao", "desc", null, null);
-            assertEquals(List.of(doTecnico.getId(), doOperador.getId(), doAdmin.getId()), ids(padraoDesc),
-                    "PENDENTEs primeiro (dia DESC entre eles), a deliberada por último");
+            PagedResult porNomeDesc = service.listSolicitacoesAdmin(caller.getId(), 1, 10, "nome", "desc", null, null);
+            assertEquals(List.of(doAdmin.getId(), doOperador.getId(), doTecnico.getId()), ids(porNomeDesc));
         }
 
         @Test
@@ -531,7 +602,7 @@ class BancoHorasServiceIT {
             assertEquals(List.of(doOperador.getId()), ids(filtrado));
 
             PagedResult tudo = service.listSolicitacoesAdmin(caller.getId(), 1, 10, null, null, null, null);
-            assertEquals(Set.of("nome", "data_folga", "status"), tudo.distinct().keySet());
+            assertEquals(Set.of("nome", "data_solicitacao", "status"), tudo.distinct().keySet());
             assertEquals(List.of(operador.getNomeCompleto(), tecnico.getNomeCompleto()),
                     valoresDaFaceta(tudo, "nome"),
                     "a faceta do Nome é uma EXPRESSÃO dentro do GROUPING SETS — e enxerga os 2 tipos");
@@ -544,19 +615,23 @@ class BancoHorasServiceIT {
             Administrador caller = CenarioFactory.novoAdministrador(emReal());
             Administrador chefe = CenarioFactory.novoAdministrador(emReal());
             Operador operador = CenarioFactory.novoOperador(emReal());
+            List<PontoSolicitacaoFolga> pendentes = new ArrayList<>();
             for (int i = 1; i <= 4; i++) {
-                CenarioFactory.novaSolicitacaoFolga(emReal(), operador.getId(), "OPERADOR",
+                PontoSolicitacaoFolga s = CenarioFactory.novaSolicitacaoFolga(emReal(), operador.getId(), "OPERADOR",
                         HOJE.plusDays(i), StatusSolicitacaoFolga.PENDENTE);
+                envioHaSegundos(s, 3600 * i);
+                pendentes.add(s);
             }
             CenarioFactory.novaSolicitacaoFolga(emReal(), operador.getId(), "OPERADOR",
                     HOJE.plusDays(8), StatusSolicitacaoFolga.REJEITADO, chefe, "não");
             emReal().flush();
 
-            PagedResult pendentes = service.listSolicitacoesAdmin(caller.getId(), 2, 3, null, null, null,
-                    filtroValores("status", "PENDENTE"));
+            PagedResult pagina2 = service.listSolicitacoesAdmin(caller.getId(), 2, 3,
+                    "data_solicitacao", "desc", null, filtroValores("status", "PENDENTE"));
 
-            assertEquals(4, pendentes.total(), "4 pendentes no filtro (a rejeitada fica fora do COUNT)");
-            assertEquals(List.of(HOJE.plusDays(4)), dias(pendentes), "página 2 de 3 em 3 = a 4ª pendente");
+            assertEquals(4, pagina2.total(), "4 pendentes no filtro (a rejeitada fica fora do COUNT)");
+            assertEquals(List.of(pendentes.get(3).getId()), ids(pagina2),
+                    "página 2 de 3 em 3 = o envio mais antigo dos quatro");
         }
 
         @Test

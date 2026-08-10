@@ -1,8 +1,8 @@
-import { Component, computed, inject, OnInit, signal } from '@angular/core';
+import { Component, computed, effect, inject, input, OnInit, signal } from '@angular/core';
 import { ApiService } from '../../core/services/api.service';
 import { TableStateController } from '../../core/helpers/table-state.controller';
 import { getDistinct } from '../../core/helpers/table.helpers';
-import { formatarSaldoMin } from '../../core/helpers/format.helpers';
+import { formatarSaldoMin, rotuloStatusSolicitacao } from '../../core/helpers/format.helpers';
 import { formatarDataBr, toISODate } from '../../core/helpers/date.helpers';
 import { erroCargaMsg, httpErrorMsg } from '../../core/helpers/http.helpers';
 import { ColumnFilterComponent, ColumnFilterDef } from './column-filter.component';
@@ -42,12 +42,24 @@ interface BancoInfo {
   dias_bloqueados: { data: string; motivo?: string | null }[];
 }
 
-interface SolicitacaoRow {
+/** Um dia dentro da solicitação — o envio é a linha; os dias, o detalhe dela. */
+interface DiaSolicitado {
   id: string;
   data_folga: string;
   status: 'PENDENTE' | 'APROVADO' | 'REJEITADO' | 'CANCELADO';
+  motivo?: string | null;
+}
+
+interface SolicitacaoRow {
+  id: string;
+  data_solicitacao: string;
+  /** Da solicitação inteira; PARCIAL = parte dos dias aprovada, parte rejeitada. */
+  status: 'PENDENTE' | 'APROVADO' | 'REJEITADO' | 'CANCELADO' | 'PARCIAL';
   deliberado_por?: string;
   motivo?: string;
+  dias: DiaSolicitado[];
+  /** Linha expandida (acordeão) — campo de tela, não vem do backend. */
+  _exp?: boolean;
 }
 
 /**
@@ -74,6 +86,11 @@ interface SolicitacaoRow {
         <div class="saldo-row">
           <span class="saldo-label">Saldo:
             <strong class="saldo-valor" [class.negativo]="saldoVisualMin() < 0">{{ saldoVisualFmt() }}</strong>
+            <!-- Os dias marcados acompanham o saldo: a seleção atravessa os meses, e sem eles à vista
+                 o desconto exibido não teria explicação ao voltar de outro mês. -->
+            @if (diasSelecionadosFmt(); as marcados) {
+              <span class="dias-marcados">({{ marcados }})</span>
+            }
           </span>
           @if (recarregando()) {
             <!-- F45: o saldo na tela ainda é o do payload anterior enquanto a recarga voa -->
@@ -133,7 +150,8 @@ interface SolicitacaoRow {
           <table class="data-table">
             <thead>
               <tr>
-                <th><app-column-filter [col]="cols[0]" [distinctValues]="gd(ctrl.meta(), 'data_folga')"
+                <th style="width:34px"></th>
+                <th><app-column-filter [col]="cols[0]" [distinctValues]="gd(ctrl.meta(), 'data_solicitacao')"
                       [currentSort]="ctrl.state.sort" [currentDir]="ctrl.state.direction"
                       (sortChange)="ctrl.onSort($event)" (filterChange)="ctrl.onFilter($event)" /></th>
                 <th><app-column-filter [col]="cols[1]" [distinctValues]="gd(ctrl.meta(), 'status')"
@@ -146,28 +164,50 @@ interface SolicitacaoRow {
             </thead>
             <tbody>
               @if (ctrl.loading()) {
-                <tr><td colspan="5" class="empty-state">Carregando solicitações...</td></tr>
+                <tr><td colspan="6" class="empty-state">Carregando solicitações...</td></tr>
               } @else if (ctrl.erro()) {
                 <!-- Canal de erro (C7): a leitura que falhou NÃO pode se passar por "nenhuma
                      solicitação" — o usuário pediria de novo um dia que já tem pedido vivo. -->
-                <tr><td colspan="5">
+                <tr><td colspan="6">
                   <app-erro-carga [mensagem]="ctrl.erro()" (tentarNovamente)="ctrl.load()" />
                 </td></tr>
               } @else if (ctrl.rows().length === 0) {
-                <tr><td colspan="5" class="empty-state">Nenhuma solicitação registrada.</td></tr>
+                <tr><td colspan="6" class="empty-state">Nenhuma solicitação registrada.</td></tr>
               } @else {
                 @for (r of ctrl.rows(); track r.id) {
-                  <tr>
-                    <td>{{ r.data_folga | fmtDate }}</td>
+                  <!-- A linha é o ENVIO; os dias dele abrem na expansão. Deliberador e motivo valem
+                       para a solicitação inteira e por isso ficam aqui. -->
+                  <tr class="row-clickable" (click)="toggleSolicitacao(r)">
+                    <td><span class="btn-toggle">{{ r._exp ? '▼' : '▶' }}</span></td>
+                    <td>{{ r.data_solicitacao | fmtDate }}</td>
                     <td><span class="st" [attr.data-st]="r.status">{{ statusLabel(r.status) }}</span></td>
                     <td>{{ r.deliberado_por || '—' }}</td>
                     <td>{{ r.motivo || '—' }}</td>
                     <td>
                       @if (r.status === 'PENDENTE') {
-                        <button class="btn-xs" [disabled]="cancelando()" (click)="cancelarSolicitacao(r)">Cancelar</button>
+                        <!-- stopPropagation: a linha inteira é o acordeão -->
+                        <button class="btn-xs" [disabled]="cancelando()"
+                                (click)="$event.stopPropagation(); cancelarSolicitacao(r)">Cancelar</button>
                       } @else { — }
                     </td>
                   </tr>
+                  @if (r._exp) {
+                    <tr class="accordion-row">
+                      <td colspan="6">
+                        <table class="data-table sub">
+                          <thead><tr><th>Dia solicitado</th><th>Status</th></tr></thead>
+                          <tbody>
+                            @for (d of r.dias; track d.id) {
+                              <tr>
+                                <td>{{ d.data_folga | fmtDate }}</td>
+                                <td><span class="st" [attr.data-st]="d.status">{{ statusLabel(d.status) }}</span></td>
+                              </tr>
+                            }
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  }
                 }
               }
             </tbody>
@@ -186,6 +226,7 @@ interface SolicitacaoRow {
     .saldo-label { font-size:1.05rem; }
     .saldo-valor { font-variant-numeric: tabular-nums; }
     .saldo-valor.negativo { color: var(--color-red); }
+    .dias-marcados { font-size:.85rem; color: var(--muted); margin-left:6px; }
     .saldo-acoes { display:flex; gap:8px; margin-left:auto; }
     .folgas { margin:0 0 10px; text-align:center; }
     .cal-wrap { display:flex; justify-content:center; margin-bottom:18px; }
@@ -194,6 +235,10 @@ interface SolicitacaoRow {
     .st[data-st="APROVADO"]  { color: var(--color-blue); }
     .st[data-st="REJEITADO"] { color: var(--color-red); }
     .st[data-st="CANCELADO"] { color: #9ca3af; }
+    .st[data-st="PARCIAL"]   { color: #b45309; }
+    .row-clickable { cursor: pointer; }
+    .sub { margin: 0; }
+    .sub th, .sub td { padding: 6px 10px; font-size: .85rem; }
     .table-footer {
       display:flex; align-items:center; justify-content:flex-end;
       gap:12px; flex-wrap:wrap; margin-top:10px;
@@ -266,6 +311,12 @@ export class BancoHorasPessoalComponent implements OnInit {
   /** Sem saldo para mais um dia, os dias ainda não marcados ficam desabilitados. */
   private podeMarcarMais = computed(() => this.saldoVisualMin() >= this.debitoPorDia());
 
+  /** Os dias marcados, em {@code dd/MM} e em ordem — inclusive os de outros meses. */
+  diasSelecionadosFmt = computed(() =>
+    [...this.selecionados()].sort()
+      .map(iso => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`)
+      .join(', '));
+
   private bloqueadosPorDia = computed(() => {
     const m = new Map<string, string | null>();
     for (const b of this.dados()?.dias_bloqueados ?? []) m.set(b.data, b.motivo ?? null);
@@ -301,11 +352,11 @@ export class BancoHorasPessoalComponent implements OnInit {
 
   // ── Tabela "Minhas Solicitações" (C-4) ──
   cols: ColumnFilterDef[] = [
-    { key: 'data_folga', label: 'Dia solicitado', type: 'date' },
-    { key: 'status',     label: 'Status',         type: 'text' },
+    { key: 'data_solicitacao', label: 'Data da solicitação', type: 'date' },
+    { key: 'status',           label: 'Status',              type: 'text' },
   ];
   ctrl = new TableStateController<SolicitacaoRow>(this.api, {
-    endpoint: '/api/ponto/banco/solicitacoes', defaultSort: 'data_folga', defaultDir: 'desc',
+    endpoint: '/api/ponto/banco/solicitacoes', defaultSort: 'data_solicitacao', defaultDir: 'desc',
     erroMsg: GUIA_SOLICITACOES,
   });
   gd = getDistinct;
@@ -315,9 +366,28 @@ export class BancoHorasPessoalComponent implements OnInit {
     this.ctrl.load();
   }
 
+  /**
+   * O card foi fechado (ou outro foi aberto): a seleção não sobrevive a isso. O componente não é
+   * destruído — o acordeão do pai só o esconde —, então quem avisa é este input.
+   */
+  aberto = input(true);
+
+  constructor() {
+    effect(() => {
+      if (!this.aberto()) this.limparSelecao();
+    });
+  }
+
+  /** Abre e fecha os dias de uma solicitação. */
+  toggleSolicitacao(r: SolicitacaoRow): void {
+    r._exp = !r._exp;
+    this.ctrl.rows.set([...this.ctrl.rows()]);
+  }
+
   onMesAno(ma: MesAno): void {
     this.anoMes.set(ma);
-    this.limparSelecao();   // a seleção pertence ao mês exibido — navegar desmarca (restaura o saldo)
+    // A seleção ATRAVESSA os meses: quem pede dias de agosto e setembro navega entre eles antes de
+    // enviar, e desmarcar na virada faria o usuário recomeçar.
     this.carregarBanco();
   }
 
@@ -399,10 +469,11 @@ export class BancoHorasPessoalComponent implements OnInit {
     });
   }
 
-  /** Cancela uma solicitação PENDENTE (Q19) — o saldo volta (estorno implícito). */
+  /** Cancela a solicitação PENDENTE inteira (Q19) — o saldo volta (estorno implícito). */
   cancelarSolicitacao(r: SolicitacaoRow): void {
     if (this.cancelando()) return;
-    if (!confirm(`Cancelar a solicitação do dia ${formatarDataBr(r.data_folga)}?`)) return;
+    const dias = r.dias.map(d => formatarDataBr(d.data_folga)).join(', ');
+    if (!confirm(`Cancelar a solicitação do(s) dia(s) ${dias}?`)) return;
     this.cancelando.set(true);
     this.api.patch<any>(`/api/ponto/banco/solicitacao/${r.id}/cancelar`, {}).subscribe({
       next: () => {
@@ -419,12 +490,6 @@ export class BancoHorasPessoalComponent implements OnInit {
   }
 
   protected statusLabel(s: string): string {
-    switch (s) {
-      case 'PENDENTE':  return 'Pendente';
-      case 'APROVADO':  return 'Aprovado';
-      case 'REJEITADO': return 'Rejeitado';
-      case 'CANCELADO': return 'Cancelado';
-      default: return s;
-    }
+    return rotuloStatusSolicitacao(s);
   }
 }

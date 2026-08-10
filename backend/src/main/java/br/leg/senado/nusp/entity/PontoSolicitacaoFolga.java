@@ -35,6 +35,14 @@ public class PontoSolicitacaoFolga extends AuditableEntity {
     @Column(name = "DATA_FOLGA", nullable = false)
     private LocalDate dataFolga;
 
+    /**
+     * Envio a que este dia pertence — a pessoa pede vários dias de uma vez, e é o envio inteiro que
+     * se lista, delibera e cancela. Nulo nas linhas anteriores à coluna: cada uma delas é uma
+     * solicitação de um dia, identificada pelo próprio id.
+     */
+    @Column(name = "GRUPO_ID")
+    private String grupoId;
+
     /** Débito congelado na criação: 360 (carga 30) ou 480 (carga 40) — Q3. */
     @Column(name = "MINUTOS_DEBITADOS", nullable = false)
     private Integer minutosDebitados;

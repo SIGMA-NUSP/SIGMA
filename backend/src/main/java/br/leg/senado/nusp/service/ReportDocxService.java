@@ -84,7 +84,7 @@ public class ReportDocxService {
                     ReportConfig.SolicitacaoStatusView st = solicitacaoStatusView(str(r, "status"));
                     setText(tbl, i, 0, nonEmpty(r, "nome", "--"), false, null, ParagraphAlignment.LEFT, 8);
                     setText(tbl, i, 1, str(r, "saldo"), false, null, ParagraphAlignment.CENTER, 8);
-                    setText(tbl, i, 2, fmtDate(r.get("data_folga")), false, null, ParagraphAlignment.LEFT, 8);
+                    setText(tbl, i, 2, nonEmpty(r, "dias_fmt", "--"), false, null, ParagraphAlignment.LEFT, 8);
                     setText(tbl, i, 3, st.label(), true, st.corHex(), ParagraphAlignment.CENTER, 8);
                     setText(tbl, i, 4, nonEmpty(r, "deliberado_por", "--"), false, null, ParagraphAlignment.LEFT, 8);
                     setText(tbl, i, 5, nonEmpty(r, "motivo", "--"), false, null, ParagraphAlignment.LEFT, 8);

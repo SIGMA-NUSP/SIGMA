@@ -17,6 +17,8 @@ public enum SubtipoAviso {
     FOLHA_REGISTRO_INCOMPLETO(CategoriaAviso.NOTIFICACAO, "Folha disponível", "Registros incompletos"),
     SOLICITACAO_APROVADA(CategoriaAviso.NOTIFICACAO, "Solicitação aprovada", "Solicitação Banco"),
     SOLICITACAO_REJEITADA(CategoriaAviso.NOTIFICACAO, "Solicitação rejeitada", "Solicitação Banco"),
+    /** Envio em que parte dos dias foi aprovada e parte rejeitada. */
+    SOLICITACAO_MISTA(CategoriaAviso.NOTIFICACAO, "Solicitação parcialmente aprovada", "Solicitação Banco"),
     ESCALA(CategoriaAviso.AVISO, "Escala", "Escala"),
     AGENDA(CategoriaAviso.COMUNICADO, "Agenda Legislativa", "Agenda"),
     /** Do administrador para pessoas específicas: a categoria já a identifica — sem contexto. */

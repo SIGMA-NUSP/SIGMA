@@ -39,7 +39,10 @@ function payloadBanco(over: Record<string, unknown> = {}) {
 }
 
 /** Linha da tabela "Minhas Solicitações" (`GET /api/ponto/banco/solicitacoes`). */
-const SOLIC_PENDENTE = { id: 'sol-1', data_folga: '2026-07-15', status: 'PENDENTE' as const };
+const SOLIC_PENDENTE = {
+  id: 'env-1', data_solicitacao: '2026-07-10', status: 'PENDENTE' as const,
+  dias: [{ id: 'dia-1', data_folga: '2026-07-15', status: 'PENDENTE' as const, motivo: null }],
+};
 const META = { page: 1, limit: 10, total: 1, pages: 1 };
 
 // ── Erros, no shape REAL do backend: `{ok:false, error:"…"}` (GlobalExceptionHandler) ──
@@ -124,7 +127,7 @@ describe('BancoHorasPessoalComponent', () => {
       criarCarregado();
       expect(apiGet).toHaveBeenCalledWith('/api/ponto/banco', { ano: 2026, mes: 7 });
       expect(apiGetList).toHaveBeenCalledWith('/api/ponto/banco/solicitacoes',
-        expect.objectContaining({ page: 1, limit: 10, sort: 'data_folga', direction: 'desc' }));
+        expect.objectContaining({ page: 1, limit: 10, sort: 'data_solicitacao', direction: 'desc' }));
     });
 
     it('aplica o payload: dados, mês carregado e fim do carregando', () => {
@@ -212,7 +215,7 @@ describe('BancoHorasPessoalComponent', () => {
       apiGet.mockReturnValueOnce(recargaA).mockReturnValueOnce(recargaB);
 
       comp.cancelarSolicitacao(SOLIC_PENDENTE);                        // recarga A (1 folga cancelada)
-      comp.cancelarSolicitacao({ ...SOLIC_PENDENTE, id: 'sol-2' });    // recarga B (2 folgas canceladas)
+      comp.cancelarSolicitacao({ ...SOLIC_PENDENTE, id: 'env-2' });    // recarga B (2 folgas canceladas)
 
       recargaB.next({ data: payloadBanco({ saldo_min: 1620 }) });      // estado após os DOIS cancelamentos
       recargaA.next({ data: payloadBanco({ saldo_min: 1260 }) });      // resposta atrasada da 1ª
@@ -568,8 +571,8 @@ describe('BancoHorasPessoalComponent', () => {
     it('pede confirmação com a data em dd/mm/aaaa e só então chama a API', () => {
       const comp = criarCarregado();
       comp.cancelarSolicitacao(SOLIC_PENDENTE);
-      expect(confirmSpy).toHaveBeenCalledWith('Cancelar a solicitação do dia 15/07/2026?');
-      expect(apiPatch).toHaveBeenCalledWith('/api/ponto/banco/solicitacao/sol-1/cancelar', {});
+      expect(confirmSpy).toHaveBeenCalledWith('Cancelar a solicitação do(s) dia(s) 15/07/2026?');
+      expect(apiPatch).toHaveBeenCalledWith('/api/ponto/banco/solicitacao/env-1/cancelar', {});
     });
 
     it('confirmação negada: nenhuma chamada e nenhum estado alterado', () => {
@@ -634,7 +637,7 @@ describe('BancoHorasPessoalComponent', () => {
   // onMesAno — o seletor mês/ano manda; a seleção pertence ao mês exibido
   // ═══════════════════════════════════════════════════════════════════
   describe('onMesAno', () => {
-    it('troca o mês, desmarca os dias do mês anterior e pede o banco do mês novo', () => {
+    it('troca o mês PRESERVANDO os dias marcados: o pedido pode juntar meses diferentes', () => {
       const comp = criarCarregado();
       marcar(comp, '2026-07-13');
       apiGet.mockClear(); apiGetList.mockClear();
@@ -642,8 +645,9 @@ describe('BancoHorasPessoalComponent', () => {
       comp.onMesAno({ ano: 2026, mes: 6 });
 
       expect(comp.anoMes()).toEqual({ ano: 2026, mes: 6 });
-      expect(comp.selecionados().size).toBe(0);
-      expect(comp.saldoVisualMin()).toBe(900);   // saldo restaurado
+      expect(comp.selecionados()).toEqual(new Set(['2026-07-13']));
+      expect(comp.saldoVisualMin()).toBe(540);   // o desconto do dia marcado continua valendo
+      expect(comp.diasSelecionadosFmt()).toBe('13/07');
       expect(apiGet).toHaveBeenCalledWith('/api/ponto/banco', { ano: 2026, mes: 6 });
       expect(apiGetList).not.toHaveBeenCalled(); // a tabela "Minhas Solicitações" não é filtrada por mês
     });
@@ -840,7 +844,7 @@ describe('BancoHorasPessoalComponent', () => {
 
       expect(apiGetList).toHaveBeenCalledTimes(1);
       const tbody = fixture.debugElement.query(By.css('tbody')).nativeElement as HTMLElement;
-      expect(tbody.textContent).toContain('15/07/2026');
+      expect(tbody.textContent).toContain('10/07/2026');   // a linha é o envio, não o dia
       expect(fixture.debugElement.query(By.css('tbody app-erro-carga'))).toBeNull();
     });
   });
@@ -874,8 +878,8 @@ describe('BancoHorasPessoalComponent', () => {
       expect(seletor(fixture).anos()).toEqual([2026, 2027]);
       expect(seta(fixture, 'Mês anterior').disabled).toBe(false);
 
-      comp.toggleDia(new Date(2027, 0, 8));        // um dia marcado ANTES de navegar (senão a
-      expect(comp.selecionados().size).toBe(1);    // asserção de limpeza abaixo seria vazia)
+      comp.toggleDia(new Date(2027, 0, 8));        // marcado ANTES de navegar: a seleção acompanha
+      expect(comp.selecionados().size).toBe(1);
       apiGet.mockClear();
 
       seta(fixture, 'Mês anterior').click();       // clique real na seta ‹
@@ -883,7 +887,7 @@ describe('BancoHorasPessoalComponent', () => {
 
       expect(comp.anoMes()).toEqual({ ano: 2026, mes: 12 });
       expect(apiGet).toHaveBeenCalledWith('/api/ponto/banco', { ano: 2026, mes: 12 });
-      expect(comp.selecionados().size).toBe(0);    // idioma da tela: navegar limpa a seleção
+      expect(comp.selecionados().size).toBe(1);    // navegar preserva a seleção (o pedido junta meses)
     });
 
     it('em 20/12/2026 o › está habilitado e o clique carrega o banco de JANEIRO/2027 (flanco simétrico na TELA)', () => {

@@ -1,0 +1,39 @@
+databaseChangeLog:
+  # ============================================================
+  # 054 — Banco de horas: a solicitação como unidade
+  #
+  # PNT_SOLICITACAO_FOLGA.GRUPO_ID amarra os dias de um mesmo envio; linha sem
+  # grupo é solicitação de um dia. O domínio do SUBTIPO da comunicação ganha
+  # SOLICITACAO_MISTA — o desfecho em que parte dos dias é aprovada e parte
+  # rejeitada.
+  # ============================================================
+  - changeSet:
+      id: 054-banco-solicitacao-por-grupo
+      author: douglas.antunes
+      comment: "Banco de horas: GRUPO_ID na solicitação de folga e SOLICITACAO_MISTA no domínio do subtipo"
+      changes:
+        - sqlFile:
+            path: db/changelog/054-banco-solicitacao-por-grupo.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        # O domínio ENCOLHE na volta: sem sanear antes, a constraint antiga seria recusada por
+        # qualquer cadastro já gravado com o subtipo novo — e a tabela ficaria sem CHECK nenhum,
+        # porque o DROP de DDL já teria commitado. A comunicação mista volta a ser a de rejeição,
+        # que é a metade que exige leitura.
+        - sql:
+            sql: >-
+              UPDATE FRM_AVISO_CADASTRO SET SUBTIPO = 'SOLICITACAO_REJEITADA'
+              WHERE SUBTIPO = 'SOLICITACAO_MISTA'
+        - sql:
+            sql: "ALTER TABLE FRM_AVISO_CADASTRO DROP CONSTRAINT CK_FRM_AVISO_CAD_SUBTIPO"
+        - sql:
+            sql: >-
+              ALTER TABLE FRM_AVISO_CADASTRO ADD CONSTRAINT CK_FRM_AVISO_CAD_SUBTIPO CHECK (SUBTIPO IS NULL OR
+              SUBTIPO IN ('FOLHA_SEMANAL','FOLHA_MENSAL','FOLHA_REGISTRO_INCOMPLETO','SOLICITACAO_APROVADA',
+              'SOLICITACAO_REJEITADA','ESCALA','AGENDA','PESSOAL','GRUPO_OPERADORES',
+              'GRUPO_TECNICOS','GRUPO_TODOS','GRUPO_ADMINISTRADORES'))
+        - sql:
+            sql: "DROP INDEX IX_PNT_SOLF_GRUPO"
+        - sql:
+            sql: "ALTER TABLE PNT_SOLICITACAO_FOLGA DROP COLUMN GRUPO_ID"

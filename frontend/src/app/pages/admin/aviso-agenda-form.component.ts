@@ -25,7 +25,7 @@ import { httpErrorMsg } from '../../core/helpers/http.helpers';
 
       <div class="painel-actions">
         <button class="btn-primary-custom" [disabled]="saving()" (click)="onSubmit()">
-          {{ saving() ? 'Salvando...' : 'Cadastrar Aviso' }}
+          {{ saving() ? 'Salvando...' : 'Cadastrar Comunicado' }}
         </button>
       </div>
     </section>

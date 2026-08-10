@@ -9,7 +9,9 @@ import { FolhasPontoListaComponent, MinhaFolha } from './folhas-ponto-lista.comp
  * FolhasPontoListaComponent (shared — lista reutilizável das folhas de ponto de uma pessoa;
  * usada em /ponto e embutida em /admin/ponto). O componente NÃO carrega as folhas da API —
  * recebe-as por `input<MinhaFolha[]>()` (quem busca é o pai, `ponto-banco`); o `ApiService`
- * aqui só serve aos downloads (`getBlob` + `abrirBlobInline`/`baixarBlob`).
+ * aqui só serve às ações da linha: Visualizar abre a URL da API na hora do clique
+ * (`abrirEmNovaAba`, sem passo assíncrono — é o que o celular exige) e Baixar continua pelo blob
+ * (`getBlob` + `baixarBlob`), que é o que dá nome ao arquivo salvo.
  * Lógica exercitada por chamada direta, sem `detectChanges()` — a exceção é o rótulo de natureza
  * ao lado do período, que só existe no template e por isso é conferido no DOM; `ApiService`/`Router`
  * mockados via `useValue`; o input é semeado com `componentRef.setInput` — o `ClientPager` é
@@ -19,7 +21,7 @@ import { FolhasPontoListaComponent, MinhaFolha } from './folhas-ponto-lista.comp
  */
 describe('FolhasPontoListaComponent', () => {
   let apiGetBlob: ReturnType<typeof vi.fn>;
-  let abrirBlobInline: ReturnType<typeof vi.fn>;
+  let abrirEmNovaAba: ReturnType<typeof vi.fn>;
   let baixarBlob: ReturnType<typeof vi.fn>;
   let navigate: ReturnType<typeof vi.fn>;
   let alertSpy: ReturnType<typeof vi.spyOn>;
@@ -45,14 +47,14 @@ describe('FolhasPontoListaComponent', () => {
 
   beforeEach(async () => {
     apiGetBlob = vi.fn().mockReturnValue(of(BLOB));
-    abrirBlobInline = vi.fn();
+    abrirEmNovaAba = vi.fn().mockReturnValue(true);
     baixarBlob = vi.fn();
     navigate = vi.fn();
 
     await TestBed.configureTestingModule({
       imports: [FolhasPontoListaComponent],
       providers: [
-        { provide: ApiService, useValue: { getBlob: apiGetBlob, abrirBlobInline, baixarBlob } },
+        { provide: ApiService, useValue: { getBlob: apiGetBlob, abrirEmNovaAba, baixarBlob } },
         { provide: Router, useValue: { navigate } },
       ],
     }).compileComponents(); // com timers reais — só depois falsificamos
@@ -209,20 +211,19 @@ describe('FolhasPontoListaComponent', () => {
   // ver() — abre o PDF da folha inline (nova aba)
   // ═══════════════════════════════════════════════════════════════════
   describe('ver', () => {
-    it('baixa o blob da folha e abre inline', () => {
+    it('abre a URL da folha na hora do clique, pedindo a exibição no navegador', () => {
       const { comp } = criar([FOLHA]);
       comp.ver(FOLHA);
-      expect(apiGetBlob).toHaveBeenCalledWith('/api/ponto/folha/f-1/download');
-      expect(abrirBlobInline).toHaveBeenCalledWith(BLOB);
+      expect(abrirEmNovaAba).toHaveBeenCalledWith('/api/ponto/folha/f-1/download?inline=true');
+      expect(apiGetBlob).not.toHaveBeenCalled();   // nada de assíncrono antes de abrir a aba
       expect(alertSpy).not.toHaveBeenCalled();
     });
 
-    it('erro: alerta e não abre nada', () => {
+    it('aba recusada pelo navegador: alerta em vez de falhar em silêncio', () => {
       const { comp } = criar([FOLHA]);
-      apiGetBlob.mockReturnValue(throwError(() => new Error('rede')));
+      abrirEmNovaAba.mockReturnValue(false);
       comp.ver(FOLHA);
       expect(alertSpy).toHaveBeenCalledWith('Não foi possível abrir a folha de ponto.');
-      expect(abrirBlobInline).not.toHaveBeenCalled();
     });
   });
 

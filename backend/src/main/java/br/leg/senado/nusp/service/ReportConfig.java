@@ -54,7 +54,7 @@ public final class ReportConfig {
     public static final String[] HDR_OPERACOES_SESSOES_ENT_NORMAL = {"Nº", "Operador", "Início Op.", "Fim Op.", "Observações", "Anom?"};
     public static final String[] HDR_OPERACOES_SESSOES_ENT_PLENARIO = {"Operador", "Anom?"};
     public static final String[] HDR_OPERACOES_ENTRADAS      = {"Local", "Data", "Operador", "Tipo", "Evento", "Pauta", "Início", "Fim", "Anormalidade?"};
-    public static final String[] HDR_SOLICITACOES_ADMIN      = {"Nome", "Saldo", "Dia solicitado", "Status", "Deliberado por", "Motivo"};
+    public static final String[] HDR_SOLICITACOES_ADMIN      = {"Nome", "Saldo", "Dias solicitados", "Status", "Deliberado por", "Motivo"};
 
     // ── Helpers ────────────────────────────────────────────────────
 

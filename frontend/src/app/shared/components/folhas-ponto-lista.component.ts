@@ -104,10 +104,9 @@ export class FolhasPontoListaComponent {
   }
 
   ver(f: MinhaFolha): void {
-    this.api.getBlob(`/api/ponto/folha/${f.id}/download`).subscribe({
-      next: blob => this.api.abrirBlobInline(blob),
-      error: () => alert('Não foi possível abrir a folha de ponto.'),
-    });
+    if (!this.api.abrirEmNovaAba(`/api/ponto/folha/${f.id}/download?inline=true`)) {
+      alert('Não foi possível abrir a folha de ponto.');
+    }
   }
 
   /** Nome do PDF baixado: mensal = "ponto-mensal-junho-2026.pdf"; semanal mantém as datas. */

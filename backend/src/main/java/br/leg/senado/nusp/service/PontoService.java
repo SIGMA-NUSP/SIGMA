@@ -331,12 +331,42 @@ public class PontoService {
         extrairDadosDasFolhas(paginas);
         paginaRepo.saveAll(paginas);
         reancorarPessoas(paginas);
+        encerrarAvisosDasFolhasSubstituidas(vinculadas, substituicoes.pessoas());
         // O lote oculto publica em silêncio absoluto: folha que ninguém vê não anuncia nada — nem o
         // aviso da publicação, nem o alerta de dia incompleto (não há retificação a provocar).
         if (!Boolean.TRUE.equals(lote.getOculto())) {
             criarAvisosPessoais(lote, paginas, emitirAviso);
         }
         return detalheLote(lote, paginas, pessoas);
+    }
+
+    /**
+     * A folha nova tomou o lugar da antiga: as comunicações daquela publicação antiga apontam para
+     * um documento que o dono não alcança mais, e por isso são encerradas — quem não foi substituído
+     * segue recebendo a dele.
+     *
+     * <p>Quais folhas saíram de cena é a MESMA pergunta que a lista do dono responde ({@link
+     * FolhaSubstituida}), feita depois das escritas: a folha recém-publicada já está no conjunto. Um
+     * lote novo pode atingir folhas de vários lotes antigos, e cada um deles é limpo por inteiro.
+     */
+    private void encerrarAvisosDasFolhasSubstituidas(List<PontoLotePagina> vinculadas, Set<String> pessoasSubstituidas) {
+        if (pessoasSubstituidas.isEmpty()) return;
+        Map<String, Set<String>> pessoasPorLoteAntigo = new LinkedHashMap<>();
+        Set<String> jaVistas = new HashSet<>();
+        for (PontoLotePagina p : vinculadas) {
+            if (!pessoasSubstituidas.contains(chavePessoa(p.getPessoaId(), p.getPessoaTipo()))) continue;
+            if (!jaVistas.add(p.getPessoaId())) continue;   // a pessoa pode ocupar mais de uma página do lote
+            List<Object[]> publicadas = paginaRepo.findFolhasPublicadasByPessoa(p.getPessoaId());
+            Set<String> substituidas = FolhaSubstituida.paginasSubstituidas(publicadas);
+            for (Object[] row : publicadas) {
+                PontoLotePagina antiga = (PontoLotePagina) row[0];
+                if (!substituidas.contains(antiga.getId())) continue;
+                pessoasPorLoteAntigo
+                        .computeIfAbsent(((PontoLote) row[1]).getId(), k -> new LinkedHashSet<>())
+                        .add(p.getPessoaId());
+            }
+        }
+        avisoService.encerrarComunicacoesDeFolhasSubstituidas(pessoasPorLoteAntigo);
     }
 
     // ══════════════════════════════════════════════════════════════

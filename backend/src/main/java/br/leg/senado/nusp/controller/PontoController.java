@@ -338,11 +338,13 @@ public class PontoController {
         return ResponseEntity.ok(Map.of("ok", true, "data", pontoService.minhasFolhas(principal.getId())));
     }
 
+    /** A folha da pessoa: baixada como arquivo ou, com {@code inline}, exibida no visualizador do navegador. */
     @GetMapping("/api/ponto/folha/{paginaId}/download")
     public ResponseEntity<?> download(@PathVariable String paginaId,
+                                      @RequestParam(defaultValue = "false") boolean inline,
                                       @AuthenticationPrincipal UserPrincipal principal) {
         return streamPdf(pontoService.baixarFolha(paginaId, principal.getId(), principal.getRole(),
-                principal.getUsername()), true);
+                principal.getUsername()), !inline);
     }
 
     /** Dados parseados da folha (7 colunas por dia) para a tela de retificação. */
@@ -407,7 +409,7 @@ public class PontoController {
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("ok", true, "data", data));
     }
 
-    /** Cancela uma solicitação PENDENTE do próprio dono (Q19). */
+    /** Cancela a solicitação do próprio dono (Q19): todos os dias pendentes daquele envio. */
     @PatchMapping("/api/ponto/banco/solicitacao/{id}/cancelar")
     public ResponseEntity<?> cancelarSolicitacao(@PathVariable String id,
                                                  @AuthenticationPrincipal UserPrincipal principal) {
@@ -420,7 +422,7 @@ public class PontoController {
     public ResponseEntity<?> minhasSolicitacoes(
             @RequestParam(defaultValue = "1") String page,
             @RequestParam(defaultValue = "25") String limit,
-            @RequestParam(defaultValue = "data_folga") String sort,
+            @RequestParam(defaultValue = "data_solicitacao") String sort,
             @RequestParam(defaultValue = "desc") String direction,
             @RequestParam(required = false) String filters,
             @AuthenticationPrincipal UserPrincipal principal) {
@@ -432,7 +434,7 @@ public class PontoController {
     /** "Gerar Relatório" das Minhas Solicitações — PDF com os filtros aplicados (C-4.1). */
     @GetMapping("/api/ponto/banco/solicitacoes/relatorio")
     public ResponseEntity<?> minhasSolicitacoesRelatorio(
-            @RequestParam(defaultValue = "data_folga") String sort,
+            @RequestParam(defaultValue = "data_solicitacao") String sort,
             @RequestParam(defaultValue = "desc") String direction,
             @RequestParam(required = false) String filters,
             @AuthenticationPrincipal UserPrincipal principal) {
@@ -450,8 +452,8 @@ public class PontoController {
     public ResponseEntity<?> solicitacoesAdmin(
             @RequestParam(defaultValue = "1") String page,
             @RequestParam(defaultValue = "25") String limit,
-            @RequestParam(defaultValue = "padrao") String sort,
-            @RequestParam(defaultValue = "asc") String direction,
+            @RequestParam(defaultValue = "data_solicitacao") String sort,
+            @RequestParam(defaultValue = "desc") String direction,
             @RequestParam(required = false) String search,
             @RequestParam(required = false) String filters,
             @AuthenticationPrincipal UserPrincipal principal) {
@@ -460,27 +462,28 @@ public class PontoController {
                 p, l, sort, direction, search, parseJson(objectMapper, filters)), p, l);
     }
 
-    /** Aprova uma solicitação PENDENTE (confirmação na UI — Q14; T-1.2/T-1.3 no service — T-1.4). */
-    @AdminOnly
-    @PostMapping("/api/admin/ponto/banco/solicitacao/{id}/aprovar")
-    public ResponseEntity<?> aprovarSolicitacao(@PathVariable String id,
-                                                @AuthenticationPrincipal UserPrincipal principal) {
-        return ResponseEntity.ok(Map.of("ok", true, "data", bancoHorasService.aprovar(id, principal.getId())));
-    }
-
     /**
-     * Rejeita uma solicitação PENDENTE — motivo obrigatório (D-3.2); T-1.2/T-1.3 no service (T-1.4).
-     * A obrigatoriedade e o teto de 300 caracteres continuam no service; aqui só se exige que o campo,
-     * quando vier, seja TEXTO: um {@code {"motivo":{"a":1}}} gravava o literal {@code "{a=1}"} como
-     * motivo da rejeição (F35).
+     * Delibera a solicitação inteira: {@code {aprovados:[dia…], rejeitados:[dia…], motivo}}. Os dois
+     * conjuntos juntos têm de ser exatamente os dias pendentes — a validação, como o motivo
+     * obrigatório havendo rejeição e o T-1.2/T-1.3, mora no service (T-1.4).
+     *
+     * <p>O motivo, quando vier, precisa ser TEXTO: um {@code {"motivo":{"a":1}}} gravava o literal
+     * {@code "{a=1}"} como motivo da rejeição (F35).
      */
     @AdminOnly
-    @PostMapping("/api/admin/ponto/banco/solicitacao/{id}/rejeitar")
-    public ResponseEntity<?> rejeitarSolicitacao(@PathVariable String id,
-                                                 @RequestBody(required = false) Map<String, Object> body,
-                                                 @AuthenticationPrincipal UserPrincipal principal) {
-        String motivo = optTexto(body, "motivo");
-        return ResponseEntity.ok(Map.of("ok", true, "data", bancoHorasService.rejeitar(id, principal.getId(), motivo)));
+    @PostMapping("/api/admin/ponto/banco/solicitacao/{id}/deliberar")
+    public ResponseEntity<?> deliberarSolicitacao(@PathVariable String id,
+                                                  @RequestBody(required = false) Map<String, Object> body,
+                                                  @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(Map.of("ok", true, "data", bancoHorasService.deliberar(id, principal.getId(),
+                listaDeTextos(body, "aprovados"), listaDeTextos(body, "rejeitados"), optTexto(body, "motivo"))));
+    }
+
+    /** Lista de ids do corpo: só entradas textuais entram (o resto do payload é ignorado, como no F35). */
+    private static List<String> listaDeTextos(Map<String, Object> body, String campo) {
+        Object raw = body != null ? body.get(campo) : null;
+        if (!(raw instanceof List<?> lista)) return List.of();
+        return lista.stream().filter(String.class::isInstance).map(String.class::cast).toList();
     }
 
     /** Relatório "Solicitações" (D-1.3) — PDF/DOCX com os filtros aplicados (Q27). */
@@ -488,8 +491,8 @@ public class PontoController {
     @GetMapping("/api/admin/ponto/banco/solicitacoes/relatorio")
     public ResponseEntity<?> solicitacoesAdminRelatorio(
             @RequestParam(defaultValue = "pdf") String format,
-            @RequestParam(defaultValue = "padrao") String sort,
-            @RequestParam(defaultValue = "asc") String direction,
+            @RequestParam(defaultValue = "data_solicitacao") String sort,
+            @RequestParam(defaultValue = "desc") String direction,
             @RequestParam(required = false) String search,
             @RequestParam(required = false) String filters,
             @AuthenticationPrincipal UserPrincipal principal) {

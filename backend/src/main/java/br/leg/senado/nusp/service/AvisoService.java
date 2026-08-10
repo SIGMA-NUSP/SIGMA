@@ -455,7 +455,19 @@ public class AvisoService {
                                        String criadoPorId, SubtipoAviso subtipo, String origemLoteId) {
         if (mensagem == null || mensagem.isBlank())
             throw new ServiceValidationException("Mensagem do aviso é obrigatória.");
-        List<String> textos = validarMensagens(List.of(mensagem));
+        criarPessoalIndividual(destinatarios, List.of(mensagem), criadoPorId, subtipo, origemLoteId);
+    }
+
+    /**
+     * Variante com mais de um texto: o desfecho de uma solicitação parcialmente aprovada diz duas
+     * coisas — o que foi aprovado e o que foi rejeitado —, e cada uma delas é lida na sua caixa.
+     */
+    @Transactional
+    public void criarPessoalIndividual(List<DestinatarioAviso> destinatarios, List<String> mensagens,
+                                       String criadoPorId, SubtipoAviso subtipo, String origemLoteId) {
+        if (mensagens == null || mensagens.isEmpty())
+            throw new ServiceValidationException("Mensagem do aviso é obrigatória.");
+        List<String> textos = validarMensagens(mensagens);
         validarAutor(criadoPorId);
 
         // Dedup por (papel, pessoa) — o primeiro complemento da pessoa é o que vale; ignora entradas incompletas.
@@ -496,6 +508,120 @@ public class AvisoService {
         }
         alvoRepo.saveAll(alvos);
         log.info("Aviso PESSOAL #{} criado com {} destinatário(s) por {}", cad.getNumero(), alvos.size(), criadoPorId);
+    }
+
+    /**
+     * Encerra as comunicações das folhas que saíram de cena. Publicar uma folha por cima de outra
+     * deixa a comunicação da antiga falando de um documento que o dono não alcança mais — e o popup
+     * dela continuaria pedindo ciência de algo que não existe.
+     *
+     * <p>Recebe, por lote de origem, quem teve a folha daquele lote substituída. Cada cadastro
+     * nascido daquela publicação é olhado uma vez:
+     *
+     * <ul>
+     *   <li>nenhum destinatário atingido → fica como está;</li>
+     *   <li>todos atingidos → desativado;</li>
+     *   <li>parte atingida → desativado, e um cadastro <b>remanescente</b> nasce com os
+     *       destinatários que não foram substituídos, carregando as mesmas mensagens, o complemento
+     *       de cada um e as ciências já registradas — quem já leu não vê o popup de novo, quem não
+     *       leu continua devendo. O antigo fica no histórico do admin.</li>
+     * </ul>
+     */
+    @Transactional
+    public void encerrarComunicacoesDeFolhasSubstituidas(Map<String, Set<String>> pessoasPorLoteOrigem) {
+        if (pessoasPorLoteOrigem == null || pessoasPorLoteOrigem.isEmpty()) return;
+        for (Map.Entry<String, Set<String>> origem : pessoasPorLoteOrigem.entrySet()) {
+            for (AvisoCadastro cad : cadastroRepo.findByOrigemLoteId(origem.getKey())) {
+                if (cad.getStatus() != StatusAviso.ATIVO) continue;
+                List<AvisoAlvo> alvos = alvoRepo.findByCadastroId(cad.getId());
+                List<AvisoAlvo> remanescentes = alvos.stream()
+                        .filter(a -> !origem.getValue().contains(pessoaDoAlvo(a)))
+                        .toList();
+                if (remanescentes.size() == alvos.size()) continue;   // ninguém deste cadastro foi substituído
+
+                cad.setStatus(StatusAviso.DESATIVADO);
+                cad.setDesativadoEm(LocalDateTime.now());
+                cadastroRepo.save(cad);
+                log.info("Aviso cadastro #{} desativado: folha substituída", cad.getNumero());
+                if (!remanescentes.isEmpty()) criarRemanescente(cad, remanescentes);
+            }
+        }
+    }
+
+    /** A pessoa de um alvo individual; nulo nos alvos coletivos, que não nomeiam ninguém. */
+    private static String pessoaDoAlvo(AvisoAlvo a) {
+        if (a.getOperadorId() != null) return a.getOperadorId();
+        if (a.getTecnicoId() != null) return a.getTecnicoId();
+        return a.getAdminId();
+    }
+
+    /**
+     * Recria o cadastro só com quem sobrou. Mantém o vínculo com o lote de origem — a exclusão
+     * daquele lote continua levando embora tudo o que nasceu dele — e copia as ciências, para que
+     * ninguém receba de novo o que já leu. Nascendo com todos já cientes, encerra-se de imediato.
+     */
+    private void criarRemanescente(AvisoCadastro antigo, List<AvisoAlvo> remanescentes) {
+        AvisoCadastro novo = new AvisoCadastro();
+        novo.setNumero(proximoNumeroCadastro());
+        novo.setTipo(antigo.getTipo());
+        novo.setSubtipo(antigo.getSubtipo());
+        novo.setPermanente(antigo.getPermanente());
+        novo.setDuracaoDias(antigo.getDuracaoDias());
+        novo.setManterAposCiencia(antigo.getManterAposCiencia());
+        novo.setExigeCiencia(antigo.getExigeCiencia());
+        novo.setStatus(StatusAviso.ATIVO);
+        novo.setCriadoPorId(antigo.getCriadoPorId());
+        novo.setExpiraEm(antigo.getExpiraEm());
+        novo.setEscalaId(antigo.getEscalaId());
+        novo.setOrigemLoteId(antigo.getOrigemLoteId());
+        novo = cadastroRepo.save(novo);
+
+        List<AvisoMensagem> mensagens = new ArrayList<>();
+        for (AvisoMensagem m : mensagemRepo.findByCadastroIdOrderByOrdem(antigo.getId())) {
+            AvisoMensagem copia = new AvisoMensagem();
+            copia.setCadastroId(novo.getId());
+            copia.setOrdem(m.getOrdem());
+            copia.setTexto(m.getTexto());
+            mensagens.add(copia);
+        }
+        mensagemRepo.saveAll(mensagens);
+
+        Set<String> pessoas = new HashSet<>();
+        List<AvisoAlvo> alvos = new ArrayList<>();
+        for (AvisoAlvo a : remanescentes) {
+            AvisoAlvo copia = new AvisoAlvo();
+            copia.setCadastroId(novo.getId());
+            copia.setAlvoTipo(a.getAlvoTipo());
+            copia.setSalaId(a.getSalaId());
+            copia.setOperadorId(a.getOperadorId());
+            copia.setTecnicoId(a.getTecnicoId());
+            copia.setAdminId(a.getAdminId());
+            copia.setComplemento(a.getComplemento());
+            alvos.add(copia);
+            if (pessoaDoAlvo(a) != null) pessoas.add(pessoaDoAlvo(a));
+        }
+        alvoRepo.saveAll(alvos);
+
+        List<AvisoCiencia> ciencias = new ArrayList<>();
+        for (AvisoCiencia c : cienciaRepo.findByCadastroIdOrderByCienteEm(antigo.getId())) {
+            String pessoa = c.getOperadorId() != null ? c.getOperadorId()
+                    : c.getTecnicoId() != null ? c.getTecnicoId() : c.getAdminId();
+            if (pessoa == null || !pessoas.contains(pessoa)) continue;
+            AvisoCiencia copia = new AvisoCiencia();
+            copia.setCadastroId(novo.getId());
+            copia.setSalaId(c.getSalaId());
+            copia.setOperadorId(c.getOperadorId());
+            copia.setTecnicoId(c.getTecnicoId());
+            copia.setAdminId(c.getAdminId());
+            copia.setCienteEm(c.getCienteEm());
+            ciencias.add(copia);
+        }
+        cienciaRepo.saveAll(ciencias);
+
+        log.info("Aviso cadastro #{} criado com os {} destinatário(s) restantes do #{}",
+                novo.getNumero(), alvos.size(), antigo.getNumero());
+        entityManager.flush();   // a conta de pendentes é feita em SQL: ela precisa enxergar o que acabou de nascer
+        desativarSeTodosCientes(novo);
     }
 
     // ═══ Listagem (admin) ═══════════════════════════════════════
@@ -919,6 +1045,91 @@ public class AvisoService {
         if (temCiencia(cadastroId, salaId, pessoaId, papel)) return;
 
         inserirCienciaIdempotente(cad, salaId, pessoaId, papel);
+        desativarSeTodosCientes(cad);
+    }
+
+    /**
+     * Comunicação que se encerra sozinha quando o último destinatário registra ciência: ela já
+     * cumpriu o que tinha a fazer e não precisa continuar na lista de ativas. Ficam de fora a que
+     * pede para ser mantida (essa volta a cada login, por escolha do admin), a que não pede ciência
+     * e o aviso de escala, cujo fim é a data da escala.
+     */
+    private boolean encerraComACienciaDeTodos(AvisoCadastro cad) {
+        return Boolean.TRUE.equals(cad.getExigeCiencia())
+                && !Boolean.TRUE.equals(cad.getManterAposCiencia())
+                && cad.getTipo() != TipoAviso.ESCALA;
+    }
+
+    /**
+     * Desativa o cadastro se não restou destinatário pendente. O UPDATE é condicionado ao status
+     * ativo: duas últimas ciências simultâneas contam zero pendentes cada uma, e só a primeira
+     * encontra o cadastro para desativar.
+     */
+    private void desativarSeTodosCientes(AvisoCadastro cad) {
+        if (!encerraComACienciaDeTodos(cad)) return;
+        if (destinatariosSemCiencia(cad) > 0) return;
+        int n = entityManager.createNativeQuery("""
+                UPDATE FRM_AVISO_CADASTRO
+                   SET STATUS = 'Desativado', DESATIVADO_EM = SYSTIMESTAMP
+                 WHERE ID = ? AND STATUS = 'Ativo'
+                """).setParameter(1, cad.getId()).executeUpdate();
+        if (n > 0) log.info("Aviso cadastro #{} desativado: todos os destinatários deram ciência", cad.getNumero());
+    }
+
+    /**
+     * Quantos destinatários ainda não registraram ciência. A verificação de sala conta SALAS (a
+     * ciência é por sala, não por pessoa); a comunicação a um grupo conta o público ATUAL dele —
+     * quem for cadastrado depois não entra na conta.
+     */
+    private long destinatariosSemCiencia(AvisoCadastro cad) {
+        return switch (cad.getTipo()) {
+            case VERIFICACAO -> contarUm("""
+                    SELECT COUNT(*) FROM FRM_AVISO_ALVO al
+                     WHERE al.CADASTRO_ID = ? AND al.ALVO_TIPO = 'SALA'
+                       AND NOT EXISTS (SELECT 1 FROM FRM_AVISO_CIENCIA ci
+                                        WHERE ci.CADASTRO_ID = al.CADASTRO_ID AND ci.SALA_ID = al.SALA_ID)
+                    """, cad.getId());
+            case PESSOAL -> contarUm("""
+                    SELECT COUNT(*) FROM FRM_AVISO_ALVO al
+                     WHERE al.CADASTRO_ID = ? AND al.ALVO_TIPO IN ('OPERADOR','TECNICO','ADMIN')
+                       AND NOT EXISTS (SELECT 1 FROM FRM_AVISO_CIENCIA ci
+                                        WHERE ci.CADASTRO_ID = al.CADASTRO_ID
+                                          AND (ci.OPERADOR_ID = al.OPERADOR_ID
+                                            OR ci.TECNICO_ID = al.TECNICO_ID
+                                            OR ci.ADMIN_ID = al.ADMIN_ID))
+                    """, cad.getId());
+            case GERAL -> publicoDoGrupoSemCiencia(cad);
+            default -> 1;   // tipo que não se encerra por ciência: nunca chega a zero
+        };
+    }
+
+    /** Pessoas do público de cada grupo-alvo que ainda não deram ciência, somadas. */
+    private long publicoDoGrupoSemCiencia(AvisoCadastro cad) {
+        long faltam = 0;
+        for (AvisoAlvo al : alvoRepo.findByCadastroId(cad.getId())) {
+            if (al.getAlvoTipo() == null) continue;
+            faltam += switch (al.getAlvoTipo()) {
+                case TODOS_OPERADORES -> semCiencia("PES_OPERADOR", "OPERADOR_ID", cad.getId());
+                case TODOS_TECNICOS -> semCiencia("PES_TECNICO", "TECNICO_ID", cad.getId());
+                case TODOS_ADMIN -> semCiencia("PES_ADMINISTRADOR", "ADMIN_ID", cad.getId());
+                case TODOS -> semCiencia("PES_OPERADOR", "OPERADOR_ID", cad.getId())
+                            + semCiencia("PES_TECNICO", "TECNICO_ID", cad.getId());
+                default -> 0;
+            };
+        }
+        return faltam;
+    }
+
+    /** Quantas pessoas da tabela do papel ainda não constam na ciência do cadastro. */
+    private long semCiencia(String tabelaPessoa, String colunaCiencia, String cadastroId) {
+        return contarUm("SELECT COUNT(*) FROM " + tabelaPessoa + " p "
+                + " WHERE NOT EXISTS (SELECT 1 FROM FRM_AVISO_CIENCIA ci "
+                + "                    WHERE ci.CADASTRO_ID = ? AND ci." + colunaCiencia + " = p.ID)", cadastroId);
+    }
+
+    private long contarUm(String sql, String cadastroId) {
+        Object n = entityManager.createNativeQuery(sql).setParameter(1, cadastroId).getSingleResult();
+        return ((Number) n).longValue();
     }
 
     /**

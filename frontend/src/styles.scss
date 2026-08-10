@@ -227,7 +227,6 @@ input[type="date"], input[type="time"] {
   background: var(--cat-fundo, #fff8db); border-left: 4px solid var(--cat-cor, #f2c94c);
   border-radius: 6px; padding: 14px 18px; margin: 14px 0;
 }
-.aviso-header { font-weight: 700; color: var(--cat-texto, #7a5d00); font-size: .85rem; letter-spacing: .5px; text-transform: uppercase; margin-bottom: 6px; }
 .aviso-msg { margin: 0; white-space: pre-wrap; color: var(--text); font-size: 1rem; line-height: 1.4; }
 .aviso-ciente { display: flex; align-items: center; gap: 8px; font-weight: 500; cursor: pointer; margin: 8px 0; }
 .aviso-ciente input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }

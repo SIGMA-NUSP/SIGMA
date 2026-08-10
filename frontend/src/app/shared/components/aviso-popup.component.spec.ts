@@ -118,13 +118,13 @@ describe('AvisoPopupComponent', () => {
     expect(classesDoCard()).toContain('cat-aviso');
   });
 
-  it('caixas de vários textos são numeradas como "Texto nº X"', async () => {
+  it('cada texto sai na sua caixa, sem numeração', async () => {
     pendentes = [{ ...GERAL, mensagens: [{ ordem: 1, texto: 'Primeiro' }, { ordem: 2, texto: 'Segundo' }] }];
     await montar();
-    const cabecalhos = Array.from<HTMLElement>(fixture.nativeElement.querySelectorAll('.aviso-header'))
+    const caixas = Array.from<HTMLElement>(fixture.nativeElement.querySelectorAll('.aviso-box .aviso-msg'))
       .map(el => el.textContent?.trim());
-    expect(cabecalhos).toEqual(['Texto nº 1', 'Texto nº 2']);
-    expect(fixture.nativeElement.textContent).not.toContain('Aviso nº');
+    expect(caixas).toEqual(['Primeiro', 'Segundo']);
+    expect(fixture.nativeElement.textContent).not.toContain('Texto nº');
   });
 
   // ── Visto na exibição das comunicações sem ciência ─────────────

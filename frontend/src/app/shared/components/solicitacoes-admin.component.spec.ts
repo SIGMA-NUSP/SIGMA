@@ -7,32 +7,43 @@ import { SolicitacoesAdminComponent } from './solicitacoes-admin.component';
 import { ToastService } from './toast.component';
 
 /**
- * SolicitacoesAdminComponent (card "Banco de Horas" do /admin/ponto): fila de deliberação —
- * aprovar (confirm nativo), rejeitar (modal com motivação obrigatória, teto de 300
- * caracteres), canal de erro da fila com retry (distinto de "fila vazia", `meta` limpo),
- * recarga pós-deliberação e relatório PDF/DOCX honrando sort/busca/filtros. TestBed sem
- * `detectChanges()` por padrão — `ngOnInit` à mão; `ApiService`/`ToastService` via `useValue`;
- * `window.confirm` espionado (o jsdom não o implementa). O `TableStateController` é REAL,
+ * SolicitacoesAdminComponent (card "Banco de Horas" do /admin/ponto): fila de deliberação com uma
+ * linha por SOLICITAÇÃO — os dias do envio abrem na expansão, e a resposta é sempre do envio
+ * inteiro (✅/❌ na linha-mãe, ou marca dia a dia concluída no "Deliberar"). Cobre o canal de erro
+ * da fila com retry (distinto de "fila vazia", `meta` limpo), a janela "Confirmar ação" com
+ * motivação obrigatória só havendo rejeição (teto de 300 caracteres), a recarga pós-deliberação e
+ * o relatório PDF/DOCX honrando sort/busca/filtros. TestBed sem `detectChanges()` por padrão —
+ * `ngOnInit` à mão; `ApiService`/`ToastService` via `useValue`. O `TableStateController` é REAL,
  * instanciado no field initializer com o `ApiService` mockado — as recargas são observadas por
- * `api.getList`. Falsifica-se só `Date` (nada de `setTimeout` no caminho testado; preserva os
- * timers do scheduler zoneless); `formatarDataExtensoBr` monta um `Date` local a partir do ISO.
- * Contrato: `pode_deliberar` só desabilita botões no template — quem barra é o backend.
+ * `api.getList`. Falsifica-se só `Date`; `formatarDataExtensoBr` monta um `Date` local a partir do
+ * ISO. Contrato: `pode_deliberar` só desabilita botões no template — quem barra é o backend.
  */
 
-/** Linha de `GET /api/admin/ponto/banco/solicitacoes`. */
+/** Dia dentro do envio. */
+function dia(over: Record<string, unknown> = {}) {
+  return { id: 'dia-1', data_folga: '2026-07-16', status: 'PENDENTE' as const, motivo: null, ...over };
+}
+
+/** Linha de `GET /api/admin/ponto/banco/solicitacoes` — uma solicitação. */
 function linha(over: Record<string, unknown> = {}) {
   return {
-    id: 'sol-1',
+    id: 'env-1',
     pessoa_id: 'op-1',
     pessoa_tipo: 'OPERADOR' as const,
     nome: 'Maria Souza',
     saldo_min: 930,
-    data_folga: '2026-07-16',
+    data_solicitacao: '2026-07-10',
     status: 'PENDENTE' as const,
+    dias: [dia()],
     pode_deliberar: true,
     atrasada: false,
     ...over,
   };
+}
+
+/** Envio de dois dias — o alvo dos fluxos misto e total. */
+function envioDeDoisDias(over: Record<string, unknown> = {}) {
+  return linha({ dias: [dia(), dia({ id: 'dia-2', data_folga: '2026-07-17' })], ...over });
 }
 
 describe('SolicitacoesAdminComponent', () => {
@@ -41,9 +52,9 @@ describe('SolicitacoesAdminComponent', () => {
   let downloadReport: ReturnType<typeof vi.fn>;
   let toastSuccess: ReturnType<typeof vi.fn>;
   let toastError: ReturnType<typeof vi.fn>;
-  let confirmSpy: ReturnType<typeof vi.spyOn>;
 
   const META = { page: 1, limit: 10, total: 1, pages: 1 };
+  const ROTA_DELIBERAR = '/api/admin/ponto/banco/solicitacao/env-1/deliberar';
 
   beforeEach(async () => {
     apiGetList = vi.fn().mockReturnValue(of({ data: [linha()], meta: META }));
@@ -59,8 +70,6 @@ describe('SolicitacoesAdminComponent', () => {
         { provide: ToastService, useValue: { success: toastSuccess, error: toastError } },
       ],
     }).compileComponents(); // com timers reais — só depois falsificamos
-
-    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -81,198 +90,201 @@ describe('SolicitacoesAdminComponent', () => {
     return comp;
   }
 
+  /** Fixture renderizada com a fila informada — para os testes de DOM. */
+  function renderizar(linhas: unknown[] = [linha()]): ComponentFixture<SolicitacoesAdminComponent> {
+    apiGetList.mockReturnValue(of({ data: linhas, meta: { ...META, total: linhas.length } }));
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-07-12T10:00:00-03:00'));
+    const fixture = TestBed.createComponent(SolicitacoesAdminComponent);
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  const primeira = (comp: SolicitacoesAdminComponent) => comp.ctrl.rows()[0] as any;
+
   // ═══════════════════════════════════════════════════════════════════
   // Fila (GET /api/admin/ponto/banco/solicitacoes)
   // ═══════════════════════════════════════════════════════════════════
   describe('carga da fila', () => {
-    it('pede a fila com a ordenação composta do backend (pendentes primeiro — D-4.1)', () => {
+    it('pede a fila pela data da solicitação, da mais recente para a mais antiga', () => {
       criarCarregado();
       expect(apiGetList).toHaveBeenCalledWith('/api/admin/ponto/banco/solicitacoes',
-        expect.objectContaining({ page: 1, limit: 10, sort: 'padrao', direction: 'asc' }));
+        expect.objectContaining({ page: 1, limit: 10, sort: 'data_solicitacao', direction: 'desc' }));
     });
 
     it('aplica o payload na tabela (linhas + meta) e encerra o loading', () => {
       const comp = criarCarregado();
-      expect(comp.ctrl.rows()).toEqual([linha()]);
+      expect(comp.ctrl.rows()).toHaveLength(1);
+      expect(primeira(comp).nome).toBe('Maria Souza');
       expect(comp.ctrl.meta()).toEqual(META);
       expect(comp.ctrl.loading()).toBe(false);
+      expect(comp.ctrl.erro()).toBe('');
     });
 
     it('falha na leitura da fila vira estado de ERRO (distinto de "fila vazia"), com o meta limpo', () => {
-      // Canal de erro do `TableStateController`: a fila que falhou não pode se passar
-      // por fila vazia — o admin concluiria que não há nada a deliberar e pedidos de folga ficariam
-      // sem resposta. O erro é preenchido (o template troca "Nenhuma solicitação registrada." pela
-      // caixa com retry) e o `meta` é LIMPO (o rodapé não pode seguir exibindo o total anterior).
-      const comp = criarCarregado();                         // 1ª carga OK (1 linha, meta total=1)
-      apiGetList.mockReturnValue(throwError(() => ({ status: 502, error: { message: 'Bad gateway' } })));
-
-      comp.ctrl.load();                                      // recarga (paginação/filtro/deliberação)
-
-      expect(comp.ctrl.erro()).toContain('Bad gateway');     // canal preenchido → tela NÃO diz "nenhuma solicitação"
-      expect(comp.ctrl.rows()).toEqual([]);
-      expect(comp.ctrl.loading()).toBe(false);
-      expect(comp.ctrl.meta()).toBeNull();                   // meta obsoleto não sobrevive ao erro
-    });
-
-    it('sem mensagem do backend, o canal traz a mensagem da própria fila', () => {
+      apiGetList.mockReturnValue(throwError(() => ({ status: 500, error: { error: 'Erro interno do servidor' } })));
       const comp = criarCarregado();
-      apiGetList.mockReturnValue(throwError(() => ({ status: 500 })));
 
-      comp.ctrl.load();
-
-      expect(comp.ctrl.erro()).toBe(
-        'Não foi possível carregar as solicitações. A fila pode ter pedidos aguardando deliberação.');
+      expect(comp.ctrl.rows()).toEqual([]);
+      expect(comp.ctrl.meta()).toBeNull();
+      expect(comp.ctrl.erro()).toContain('Não foi possível carregar as solicitações.');
+      expect(comp.ctrl.erro()).toContain('Erro interno do servidor');
     });
 
     it('o retry re-dispara a carga e o sucesso limpa o erro e repovoa a fila', () => {
+      apiGetList.mockReturnValue(throwError(() => ({ status: 0 })));
       const comp = criarCarregado();
-      apiGetList.mockReturnValue(throwError(() => ({ status: 502 })));
-      comp.ctrl.load();
       expect(comp.ctrl.erro()).not.toBe('');
 
       apiGetList.mockReturnValue(of({ data: [linha()], meta: META }));
-      comp.ctrl.load();                                      // o botão "Tentar novamente" da caixa
+      comp.ctrl.load();
 
       expect(comp.ctrl.erro()).toBe('');
-      expect(comp.ctrl.rows()).toEqual([linha()]);
-      expect(comp.ctrl.meta()).toEqual(META);
+      expect(comp.ctrl.rows()).toHaveLength(1);
     });
 
-    it('nenhum modal aberto e nenhuma deliberação em curso no início', () => {
+    it('nenhuma janela aberta e nenhuma deliberação em curso no início', () => {
       const comp = criarCarregado();
-      expect(comp.alvoRejeicao()).toBeNull();
+      expect(comp.alvo()).toBeNull();
       expect(comp.deliberando()).toBe(false);
-      expect(comp.motivoRejeicao).toBe('');
     });
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // O que a TELA mostra no erro — exceção de render deliberada
+  // Render
   // ═══════════════════════════════════════════════════════════════════
-  describe('render do estado de erro', () => {
-    // O canal de erro só cumpre seu papel se o TEMPLATE o consumir: sem estes testes,
-    // apagar o ramo `@else if (ctrl.erro())` deixaria a suíte verde e a tela voltaria a afirmar
-    // "Nenhuma solicitação registrada." numa falha de leitura. Mesma família das exceções de render
-    // já autorizadas no módulo (presença/ausência de um estado, não disposição/CSS).
-    function renderizar() {
-      vi.useFakeTimers({ toFake: ['Date'] });
-      vi.setSystemTime(new Date('2026-07-12T10:00:00-03:00'));
-      const fixture = TestBed.createComponent(SolicitacoesAdminComponent);
-      fixture.detectChanges();   // ngOnInit + render
-      return fixture;
-    }
-
+  describe('render da fila', () => {
     const textoDaTabela = (f: ComponentFixture<SolicitacoesAdminComponent>) =>
       (f.debugElement.query(By.css('tbody')).nativeElement as HTMLElement).textContent ?? '';
 
+    it('a linha é o ENVIO: nome, saldo, data da solicitação e status', () => {
+      const fixture = renderizar([envioDeDoisDias()]);
+      const texto = textoDaTabela(fixture);
+
+      expect(texto).toContain('Maria Souza');
+      expect(texto).toContain('+15:30');
+      expect(texto).toContain('10/07/2026');
+      expect(texto).toContain('Pendente');
+      expect(fixture.debugElement.queryAll(By.css('tbody > tr'))).toHaveLength(1);
+    });
+
+    it('expandir mostra os dias do envio, um por linha', () => {
+      const fixture = renderizar([envioDeDoisDias()]);
+
+      (fixture.debugElement.query(By.css('tbody > tr')).nativeElement as HTMLElement).click();
+      fixture.detectChanges();
+
+      const sub = fixture.debugElement.queryAll(By.css('.sub tbody tr'));
+      expect(sub).toHaveLength(2);
+      expect((sub[0].nativeElement as HTMLElement).textContent).toContain('16/07/2026');
+      expect((sub[1].nativeElement as HTMLElement).textContent).toContain('17/07/2026');
+    });
+
     it('fila vazia de verdade: a frase do vazio, sem caixa de erro', () => {
-      apiGetList.mockReturnValue(of({ data: [], meta: { ...META, total: 0 } }));
-      const fixture = renderizar();
+      const fixture = renderizar([]);
       expect(textoDaTabela(fixture)).toContain('Nenhuma solicitação registrada.');
       expect(fixture.debugElement.query(By.directive(ErroCargaComponent))).toBeNull();
     });
 
     it('erro na carga: caixa de erro com a mensagem e SEM a frase do vazio', () => {
-      apiGetList.mockReturnValue(throwError(() => ({ status: 502, error: { ok: false, error: 'Erro interno do servidor' } })));
       const fixture = renderizar();
-
-      const caixa = fixture.debugElement.query(By.directive(ErroCargaComponent));
-      expect(caixa).not.toBeNull();
-      expect(caixa.componentInstance.mensagem()).toBe(
-        'Não foi possível carregar as solicitações. A fila pode ter pedidos aguardando deliberação. (Erro interno do servidor)');
-      expect(textoDaTabela(fixture)).not.toContain('Nenhuma solicitação registrada.');
-    });
-
-    it('o botão da caixa re-dispara a carga (o retry chega no controller)', () => {
-      apiGetList.mockReturnValue(throwError(() => ({ status: 502 })));
-      const fixture = renderizar();
-      apiGetList.mockClear().mockReturnValue(of({ data: [linha()], meta: META }));
-
-      const botao = fixture.debugElement.query(By.css('app-erro-carga button')).nativeElement as HTMLButtonElement;
-      botao.click();
+      apiGetList.mockReturnValue(throwError(() => ({ status: 500, error: { error: 'Erro interno do servidor' } })));
+      fixture.componentInstance.ctrl.load();
       fixture.detectChanges();
 
-      expect(apiGetList).toHaveBeenCalledTimes(1);                                    // ctrl.load()
-      expect(fixture.debugElement.query(By.directive(ErroCargaComponent))).toBeNull(); // erro limpo
-      expect(textoDaTabela(fixture)).toContain('Maria Souza');                        // fila de volta
-    });
-
-    it('busca e relatórios continuam na tela durante o erro', () => {
-      apiGetList.mockReturnValue(throwError(() => ({ status: 500 })));
-      const fixture = renderizar();
+      expect(fixture.debugElement.query(By.directive(ErroCargaComponent))).not.toBeNull();
+      expect(textoDaTabela(fixture)).not.toContain('Nenhuma solicitação registrada.');
+      // A busca e os relatórios continuam na tela durante o erro.
       expect(fixture.debugElement.query(By.css('.search-input'))).not.toBeNull();
       expect(fixture.debugElement.queryAll(By.css('.btn-report'))).toHaveLength(2);
     });
-  });
 
-  // ═══════════════════════════════════════════════════════════════════
-  // Formatação das células (saldo, dia, status)
-  // ═══════════════════════════════════════════════════════════════════
-  describe('formatação das células', () => {
+    it('status traduzidos, inclusive o parcial; desconhecido volta cru', () => {
+      const comp = criarCarregado();
+      expect((comp as any).statusLabel('PENDENTE')).toBe('Pendente');
+      expect((comp as any).statusLabel('APROVADO')).toBe('Aprovado');
+      expect((comp as any).statusLabel('REJEITADO')).toBe('Rejeitado');
+      expect((comp as any).statusLabel('CANCELADO')).toBe('Cancelado');
+      expect((comp as any).statusLabel('PARCIAL')).toBe('Parcialmente aprovado');
+      expect((comp as any).statusLabel('ZZZ')).toBe('ZZZ');
+    });
+
     it('saldo em ±HH:MM; saldo nulo (sem folha oficial) vira "--"', () => {
-      const comp = criar();
-      const fmt = (r: any) => (comp as any).saldoFmt(r);
-      expect(fmt(linha({ saldo_min: 930 }))).toBe('+15:30');
-      expect(fmt(linha({ saldo_min: -75 }))).toBe('-01:15');
-      expect(fmt(linha({ saldo_min: 0 }))).toBe('+00:00');
-      expect(fmt(linha({ saldo_min: null }))).toBe('--');
+      const comp = criarCarregado();
+      expect((comp as any).saldoFmt({ saldo_min: 930 })).toBe('+15:30');
+      expect((comp as any).saldoFmt({ saldo_min: -75 })).toBe('-01:15');
+      expect((comp as any).saldoFmt({ saldo_min: null })).toBe('--');
     });
 
     it('dia solicitado vem como "Dia-da-semana, dd/mm/aaaa" (D-1.2), sem deslocar o dia', () => {
-      const comp = criar();
+      const comp = criarCarregado();
       expect((comp as any).diaSolicitado('2026-07-16')).toBe('Quinta-feira, 16/07/2026');
-    });
-
-    it('status traduzidos; desconhecido volta cru', () => {
-      const comp = criar();
-      const label = (s: string) => (comp as any).statusLabel(s);
-      expect(label('PENDENTE')).toBe('Pendente');
-      expect(label('APROVADO')).toBe('Aprovado');
-      expect(label('REJEITADO')).toBe('Rejeitado');
-      expect(label('CANCELADO')).toBe('Cancelado');
-      expect(label('OUTRO')).toBe('OUTRO');
     });
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Aprovar — confirm() nativo (Q14) → POST .../aprovar → recarga
+  // Fluxo total: ✅/❌ na linha-mãe respondem o envio inteiro
   // ═══════════════════════════════════════════════════════════════════
-  describe('aprovar', () => {
-    it('confirma com nome + dia e chama a via de lote com 1 id (Q18)', () => {
+  describe('deliberação total', () => {
+    it('aprovar tudo: a janela lista os dias e o POST leva todos como aprovados', () => {
       const comp = criarCarregado();
-      apiGetList.mockClear();
+      apiGetList.mockReturnValue(of({ data: [envioDeDoisDias()], meta: META }));
+      comp.ctrl.load();
+      const r = primeira(comp);
 
-      comp.aprovar(linha());
+      comp.aprovarTudo(r);
+      expect(comp.alvo()).toBe(r);
+      expect((comp as any).diasAprovados(r).map((d: any) => d.id)).toEqual(['dia-1', 'dia-2']);
+      expect((comp as any).diasRejeitados(r)).toEqual([]);
+      expect((comp as any).podeEnviar()).toBe(true);
 
-      expect(confirmSpy).toHaveBeenCalledWith('Aprovar a folga de Maria Souza em 16/07/2026?');
-      expect(apiPost).toHaveBeenCalledWith('/api/admin/ponto/banco/solicitacao/sol-1/aprovar', {});
-      expect(toastSuccess).toHaveBeenCalledWith('Solicitação aprovada.');
-      expect(apiGetList).toHaveBeenCalledTimes(1);   // recarga pós-deliberação (traz o saldo novo)
-      expect(comp.deliberando()).toBe(false);
+      comp.confirmar();
+
+      expect(apiPost).toHaveBeenCalledWith(ROTA_DELIBERAR,
+        { aprovados: ['dia-1', 'dia-2'], rejeitados: [] });
+      expect(toastSuccess).toHaveBeenCalledWith('Solicitação deliberada.');
+      expect(comp.alvo()).toBeNull();
+      expect(apiGetList).toHaveBeenCalledTimes(3);   // carga, recarga do teste e a de pós-deliberação
     });
 
-    it('confirmação negada: nenhum POST e nenhuma recarga', () => {
-      confirmSpy.mockReturnValue(false);
+    it('rejeitar tudo: sem motivo o envio fica travado; com motivo, ele acompanha o POST', () => {
       const comp = criarCarregado();
-      apiGetList.mockClear();
+      const r = primeira(comp);
 
-      comp.aprovar(linha());
-
+      comp.rejeitarTudo(r);
+      expect((comp as any).podeEnviar()).toBe(false);
+      comp.confirmar();
       expect(apiPost).not.toHaveBeenCalled();
-      expect(apiGetList).not.toHaveBeenCalled();
-      expect(toastSuccess).not.toHaveBeenCalled();
+
+      comp.motivoRejeicao = '   Escala fechada   ';
+      expect((comp as any).podeEnviar()).toBe(true);
+      comp.confirmar();
+
+      expect(apiPost).toHaveBeenCalledWith(ROTA_DELIBERAR,
+        { aprovados: [], rejeitados: ['dia-1'], motivo: 'Escala fechada' });
     });
 
-    it('mantém "deliberando" durante o voo e barra o duplo clique (sem 2º confirm)', () => {
+    it('sem permissão de deliberar, os botões da linha-mãe não abrem nada', () => {
+      const comp = criarCarregado();
+      apiGetList.mockReturnValue(of({ data: [linha({ pode_deliberar: false })], meta: META }));
+      comp.ctrl.load();
+
+      comp.aprovarTudo(primeira(comp));
+
+      expect(comp.alvo()).toBeNull();
+      expect(apiPost).not.toHaveBeenCalled();
+    });
+
+    it('a trava barra o duplo clique: o 2º confirmar não dispara outro POST', () => {
       const emVoo = new Subject<any>();
       apiPost.mockReturnValue(emVoo);
       const comp = criarCarregado();
+      const r = primeira(comp);
 
-      comp.aprovar(linha());
+      comp.aprovarTudo(r);
+      comp.confirmar();
       expect(comp.deliberando()).toBe(true);
-
-      comp.aprovar(linha());                       // 2º clique enquanto voa
-      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      comp.confirmar();
       expect(apiPost).toHaveBeenCalledTimes(1);
 
       emVoo.next({ ok: true });
@@ -281,191 +293,136 @@ describe('SolicitacoesAdminComponent', () => {
     });
 
     it('erro: toast com a mensagem do backend, trava liberada e lista recarregada mesmo assim', () => {
-      apiPost.mockReturnValue(throwError(() => ({ status: 409, error: { message: 'Solicitação já deliberada.' } })));
+      apiPost.mockReturnValue(throwError(() => ({ status: 400, error: { error: 'Delibere todos os dias pendentes da solicitação.' } })));
       const comp = criarCarregado();
-      apiGetList.mockClear();
 
-      comp.aprovar(linha());
+      comp.aprovarTudo(primeira(comp));
+      comp.confirmar();
 
-      expect(toastError).toHaveBeenCalledWith('Solicitação já deliberada.');
-      expect(toastSuccess).not.toHaveBeenCalled();
+      expect(toastError).toHaveBeenCalledWith(expect.stringContaining('Delibere todos os dias pendentes'));
       expect(comp.deliberando()).toBe(false);
-      expect(apiGetList).toHaveBeenCalledTimes(1);   // reflete o que porventura tenha sido processado
-    });
-
-    it('erro sem corpo cai no fallback', () => {
-      apiPost.mockReturnValue(throwError(() => ({ status: 500 })));
-      const comp = criarCarregado();
-      comp.aprovar(linha());
-      expect(toastError).toHaveBeenCalledWith('Erro ao processar a deliberação.');
-    });
-
-    it('caracteriza o contrato Q34: a lógica NÃO checa pode_deliberar (quem barra é o backend — T-1.4)', () => {
-      const comp = criarCarregado();
-      comp.aprovar(linha({ pode_deliberar: false }));   // no template o botão estaria desabilitado
-      expect(apiPost).toHaveBeenCalledWith('/api/admin/ponto/banco/solicitacao/sol-1/aprovar', {});
+      expect(comp.alvo()).toBeNull();
+      expect(apiGetList).toHaveBeenCalledTimes(2);
     });
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Rejeitar — modal com motivação obrigatória (D-3)
+  // Fluxo misto: marca dia a dia e conclui no "Deliberar"
   // ═══════════════════════════════════════════════════════════════════
-  describe('rejeitar', () => {
-    it('abrir o modal guarda o alvo e zera o motivo herdado da vez anterior', () => {
+  describe('deliberação mista', () => {
+    it('só destrava com TODOS os dias marcados — meia deliberação não existe', () => {
       const comp = criarCarregado();
-      comp.motivoRejeicao = 'texto antigo';
+      apiGetList.mockReturnValue(of({ data: [envioDeDoisDias()], meta: META }));
+      comp.ctrl.load();
+      const r = primeira(comp);
 
-      comp.abrirRejeicao(linha());
+      comp.votar(r, r.dias[0], 'aprovar');
+      expect((comp as any).temVoto(r)).toBe(true);
+      expect((comp as any).podeConcluir(r)).toBe(false);
+      comp.abrirConfirmacao(r);
+      expect(comp.alvo()).toBeNull();   // a janela não abre pela metade
 
-      expect(comp.alvoRejeicao()).toEqual(linha());
-      expect(comp.motivoRejeicao).toBe('');
-      expect(apiPost).not.toHaveBeenCalled();   // abrir não delibera
+      comp.votar(r, r.dias[1], 'rejeitar');
+      expect((comp as any).podeConcluir(r)).toBe(true);
     });
 
-    it('não abre o modal com uma deliberação em curso', () => {
-      const emVoo = new Subject<any>();
-      apiPost.mockReturnValue(emVoo);
+    it('reclicar desmarca o dia', () => {
       const comp = criarCarregado();
-      comp.aprovar(linha());                    // trava ligada
+      const r = primeira(comp);
 
-      comp.abrirRejeicao(linha({ id: 'sol-2' }));
-
-      expect(comp.alvoRejeicao()).toBeNull();
+      comp.votar(r, r.dias[0], 'aprovar');
+      expect(r.dias[0]._voto).toBe('aprovar');
+      comp.votar(r, r.dias[0], 'aprovar');
+      expect(r.dias[0]._voto).toBeUndefined();
+      expect((comp as any).temVoto(r)).toBe(false);
     });
 
-    it('fechar o modal descarta o alvo (sem chamar a API)', () => {
+    it('envia cada dia para o seu lado, com o motivo das rejeições', () => {
       const comp = criarCarregado();
-      comp.abrirRejeicao(linha());
-      comp.fecharRejeicao();
-      expect(comp.alvoRejeicao()).toBeNull();
+      apiGetList.mockReturnValue(of({ data: [envioDeDoisDias()], meta: META }));
+      comp.ctrl.load();
+      const r = primeira(comp);
+
+      comp.votar(r, r.dias[0], 'aprovar');
+      comp.votar(r, r.dias[1], 'rejeitar');
+      comp.abrirConfirmacao(r);
+      comp.motivoRejeicao = 'Sem cobertura';
+      comp.confirmar();
+
+      expect(apiPost).toHaveBeenCalledWith(ROTA_DELIBERAR,
+        { aprovados: ['dia-1'], rejeitados: ['dia-2'], motivo: 'Sem cobertura' });
+    });
+
+    it('fechar a janela desfaz as marcas — a linha volta aos ✅/❌', () => {
+      const comp = criarCarregado();
+      const r = primeira(comp);
+
+      comp.votar(r, r.dias[0], 'rejeitar');
+      comp.abrirConfirmacao(r);
+      comp.fecharConfirmacao();
+
+      expect(comp.alvo()).toBeNull();
+      expect(r.dias[0]._voto).toBeUndefined();
+      expect((comp as any).temVoto(r)).toBe(false);
       expect(apiPost).not.toHaveBeenCalled();
     });
 
-    it('confirmar sem alvo não faz nada', () => {
+    it('dias já deliberados não entram na conta do que falta marcar', () => {
       const comp = criarCarregado();
-      comp.motivoRejeicao = 'qualquer';
-      comp.confirmarRejeicao();
-      expect(apiPost).not.toHaveBeenCalled();
+      apiGetList.mockReturnValue(of({
+        data: [linha({ dias: [dia(), dia({ id: 'dia-2', status: 'APROVADO' })] })], meta: META,
+      }));
+      comp.ctrl.load();
+      const r = primeira(comp);
+
+      comp.votar(r, r.dias[0], 'aprovar');
+
+      expect((comp as any).podeConcluir(r)).toBe(true);
+      comp.abrirConfirmacao(r);
+      comp.confirmar();
+      expect(apiPost).toHaveBeenCalledWith(ROTA_DELIBERAR, { aprovados: ['dia-1'], rejeitados: [] });
     });
 
-    it('motivo só com espaços é recusado no front (não chama a API)', () => {
-      const comp = criarCarregado();
-      comp.abrirRejeicao(linha());
-      comp.motivoRejeicao = '   ';
-      comp.confirmarRejeicao();
-      expect(apiPost).not.toHaveBeenCalled();
-      expect(comp.alvoRejeicao()).not.toBeNull();   // modal continua aberto
-    });
+    it('o textarea da motivação só existe havendo rejeição, com maxlength 300 (render)', () => {
+      const fixture = renderizar([envioDeDoisDias()]);
+      const comp = fixture.componentInstance;
+      const r = primeira(comp);
 
-    it('sucesso: envia o motivo (trimado), fecha o modal, avisa e recarrega', () => {
-      const comp = criarCarregado();
-      apiGetList.mockClear();
-      comp.abrirRejeicao(linha());
-      comp.motivoRejeicao = '  escala do dia  ';
-
-      comp.confirmarRejeicao();
-
-      expect(apiPost).toHaveBeenCalledWith('/api/admin/ponto/banco/solicitacao/sol-1/rejeitar',
-        { motivo: 'escala do dia' });
-      expect(toastSuccess).toHaveBeenCalledWith('Solicitação rejeitada.');
-      expect(comp.alvoRejeicao()).toBeNull();
-      expect(apiGetList).toHaveBeenCalledTimes(1);   // reload traz o estorno do saldo
-      expect(confirmSpy).not.toHaveBeenCalled();     // rejeição não usa confirm nativo
-      expect(comp.deliberando()).toBe(false);
-    });
-
-    it('a rejeição não passa pelo confirm nativo, mas usa a mesma trava do aprovar', () => {
-      const emVoo = new Subject<any>();
-      apiPost.mockReturnValue(emVoo);
-      const comp = criarCarregado();
-      comp.abrirRejeicao(linha());
-      comp.motivoRejeicao = 'motivo';
-
-      comp.confirmarRejeicao();
-      expect(comp.deliberando()).toBe(true);
-
-      comp.confirmarRejeicao();                      // 2º clique enquanto voa
-      expect(apiPost).toHaveBeenCalledTimes(1);
-    });
-
-    it('o textarea do motivo tem maxlength="300" (render)', () => {
-      // `MOTIVO_REJEICAO` é VARCHAR2(1000) em BYTES (changelog 036) e NADA limitava o texto — nem o
-      // textarea, nem o componente, nem o service. Um motivo colado de um e-mail/norma estourava a
-      // coluna → ORA-12899 → 500 com um toast genérico, e a rejeição ficava impossível sem que o
-      // admin descobrisse que a causa era o tamanho. O teto vive no template: sem este render, apagar
-      // o atributo deixaria a suíte verde e devolveria o defeito.
-      vi.useFakeTimers({ toFake: ['Date'] });
-      vi.setSystemTime(new Date('2026-07-12T10:00:00-03:00'));
-      const fixture = TestBed.createComponent(SolicitacoesAdminComponent);
-      fixture.detectChanges();                          // ngOnInit + render
-      fixture.componentInstance.abrirRejeicao(linha()); // o modal só existe com alvo
+      comp.aprovarTudo(r);
       fixture.detectChanges();
+      expect(fixture.debugElement.query(By.css('#motivo-rejeicao'))).toBeNull();
 
-      const textarea = fixture.debugElement.query(By.css('#motivo-rejeicao')).nativeElement as HTMLTextAreaElement;
-      expect(textarea.getAttribute('maxlength')).toBe('300');
-    });
-
-    it('o 400 do backend (motivo longo) chega ao admin com a causa, e o modal fica aberto', () => {
-      // O backend agora recusa antes de tocar o banco; o admin precisa LER a causa para encurtar o
-      // texto — o toast genérico de 500 não dizia nada.
-      apiPost.mockReturnValue(throwError(() => ({
-        status: 400,
-        error: { ok: false, error: 'O motivo da rejeição excede o máximo de 300 caracteres (foram 1500).' },
-      })));
-      const comp = criarCarregado();
-      comp.abrirRejeicao(linha());
-      comp.motivoRejeicao = 'x'.repeat(1500);
-
-      comp.confirmarRejeicao();
-
-      expect(toastError).toHaveBeenCalledWith('O motivo da rejeição excede o máximo de 300 caracteres (foram 1500).');
-      expect(comp.alvoRejeicao()).not.toBeNull();   // o texto continua lá para ser encurtado
-      expect(comp.deliberando()).toBe(false);
-    });
-
-    it('erro: toast, trava liberada e o modal PERMANECE aberto (o admin pode reenviar)', () => {
-      apiPost.mockReturnValue(throwError(() => ({ status: 400, error: { message: 'Motivo obrigatório.' } })));
-      const comp = criarCarregado();
-      apiGetList.mockClear();
-      comp.abrirRejeicao(linha());
-      comp.motivoRejeicao = 'motivo';
-
-      comp.confirmarRejeicao();
-
-      expect(toastError).toHaveBeenCalledWith('Motivo obrigatório.');
-      expect(comp.alvoRejeicao()).not.toBeNull();   // onSucesso só roda no next
-      expect(comp.deliberando()).toBe(false);
-      expect(apiGetList).toHaveBeenCalledTimes(1);
+      comp.fecharConfirmacao();
+      comp.rejeitarTudo(r);
+      fixture.detectChanges();
+      const textarea = fixture.debugElement.query(By.css('#motivo-rejeicao'));
+      expect(textarea).not.toBeNull();
+      expect((textarea.nativeElement as HTMLTextAreaElement).maxLength).toBe(300);
+      expect((fixture.debugElement.query(By.css('.modal-title')).nativeElement as HTMLElement).textContent)
+        .toBe('Confirmar ação');
     });
   });
 
-  // ═══════════════════════════════════════════════════════════════════
-  // Relatório PDF/DOCX (D-1.3/Q27) — honra sort, busca e filtros de coluna
   // ═══════════════════════════════════════════════════════════════════
   describe('gerarRelatorio', () => {
     it('leva o formato e a ordenação corrente', () => {
       const comp = criarCarregado();
       comp.gerarRelatorio('pdf');
       expect(downloadReport).toHaveBeenCalledWith('/api/admin/ponto/banco/solicitacoes/relatorio',
-        { format: 'pdf', sort: 'padrao', direction: 'asc' });
+        { format: 'pdf', sort: 'data_solicitacao', direction: 'desc' });
     });
 
     it('inclui busca e filtros de coluna aplicados', () => {
       const comp = criarCarregado();
       comp.ctrl.state.search = 'maria';
-      comp.ctrl.state.sort = 'nome';
-      comp.ctrl.state.direction = 'desc';
-      comp.ctrl.filters = { status: { values: ['PENDENTE'] } as any };
+      comp.ctrl.filters['status'] = { values: ['PENDENTE'] };
 
       comp.gerarRelatorio('docx');
 
-      expect(downloadReport).toHaveBeenCalledWith('/api/admin/ponto/banco/solicitacoes/relatorio', {
-        format: 'docx',
-        sort: 'nome',
-        direction: 'desc',
-        search: 'maria',
-        filters: JSON.stringify({ status: { values: ['PENDENTE'] } }),
-      });
+      expect(downloadReport).toHaveBeenCalledWith('/api/admin/ponto/banco/solicitacoes/relatorio',
+        expect.objectContaining({
+          format: 'docx', search: 'maria', filters: JSON.stringify({ status: { values: ['PENDENTE'] } }),
+        }));
     });
   });
 });

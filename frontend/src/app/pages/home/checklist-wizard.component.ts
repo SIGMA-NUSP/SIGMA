@@ -205,17 +205,13 @@ interface EditItem {
         @if (step() === 'aviso' && avisoPendente()) {
           @if (avisoPendente()!.mensagens.length === 1) {
             <p class="text-muted-sm">Há um aviso para o {{ salaNome }}</p>
-            <div class="aviso-box">
-              <p class="aviso-msg">{{ avisoPendente()!.mensagens[0].texto }}</p>
-            </div>
           } @else {
             <p class="text-muted-sm">Há {{ avisoPendente()!.mensagens.length }} avisos para o {{ salaNome }}</p>
-            @for (m of avisoPendente()!.mensagens; track m.ordem) {
-              <div class="aviso-box">
-                <div class="aviso-header">Texto nº {{ m.ordem }}</div>
-                <p class="aviso-msg">{{ m.texto }}</p>
-              </div>
-            }
+          }
+          @for (m of avisoPendente()!.mensagens; track m.ordem) {
+            <div class="aviso-box">
+              <p class="aviso-msg">{{ m.texto }}</p>
+            </div>
           }
           <label class="aviso-ciente">
             <input type="checkbox" [(ngModel)]="avisoCiente">

@@ -36,9 +36,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 import static br.leg.senado.nusp.service.NativeQueryUtils.textoLimitado;
 
@@ -72,9 +74,35 @@ public class BancoHorasService {
     private static final String MSG_CARGA_INVALIDA =
             "Carga horária cadastrada incorretamente. Procure o supervisor.";
 
+    /**
+     * Status da SOLICITAÇÃO inteira, deduzido dos dias dela. A deliberação é atômica — o
+     * administrador decide o envio de uma vez —, então não existe mistura com pendente: ou todos os
+     * dias estão no mesmo estado, ou parte foi aprovada e parte rejeitada.
+     */
+    private static final String STATUS_DA_SOLICITACAO =
+            "CASE WHEN COUNT(*) = SUM(CASE WHEN s.STATUS = 'PENDENTE' THEN 1 ELSE 0 END) THEN 'PENDENTE' " +
+            "WHEN COUNT(*) = SUM(CASE WHEN s.STATUS = 'APROVADO' THEN 1 ELSE 0 END) THEN 'APROVADO' " +
+            "WHEN COUNT(*) = SUM(CASE WHEN s.STATUS = 'REJEITADO' THEN 1 ELSE 0 END) THEN 'REJEITADO' " +
+            "WHEN COUNT(*) = SUM(CASE WHEN s.STATUS = 'CANCELADO' THEN 1 ELSE 0 END) THEN 'CANCELADO' " +
+            "ELSE 'PARCIAL' END";
+
+    /**
+     * Uma linha por SOLICITAÇÃO: os dias do mesmo envio, resumidos. A chave é o grupo do envio e,
+     * nas linhas anteriores à coluna de grupo — solicitações de um dia —, o próprio id. Data da
+     * solicitação, autor da deliberação e motivo são únicos por envio; o atraso basta um dia ter.
+     */
+    private static final String SOLICITACOES_AGRUPADAS =
+            "SELECT COALESCE(s.GRUPO_ID, s.ID) AS ID, MIN(s.PESSOA_ID) AS PESSOA_ID, " +
+            "MIN(s.PESSOA_TIPO) AS PESSOA_TIPO, MIN(s.CRIADO_EM) AS DATA_SOLICITACAO, " +
+            "MAX(s.DELIBERADO_POR_ID) AS DELIBERADO_POR_ID, MAX(s.MOTIVO_REJEICAO) AS MOTIVO, " +
+            STATUS_DA_SOLICITACAO + " AS STATUS " +
+            "FROM PNT_SOLICITACAO_FOLGA s ";
+
+    private static final String MS_GROUP_BY = " GROUP BY COALESCE(s.GRUPO_ID, s.ID)";
+
     private static final Map<String, String> MS_SORT = new LinkedHashMap<>() {{
-        put("data_folga", "s.DATA_FOLGA");
-        put("status", "s.STATUS");
+        put("data_solicitacao", "g.DATA_SOLICITACAO");
+        put("status", "g.STATUS");
         put("deliberado_por", "adm.NOME_COMPLETO");
     }};
 
@@ -87,20 +115,18 @@ public class BancoHorasService {
      * colunas; o CASE não tem vírgulas de topo.
      */
     private static final String NOME_SOLICITANTE =
-            "CASE s.PESSOA_TIPO WHEN 'OPERADOR' THEN po.NOME_COMPLETO " +
+            "CASE g.PESSOA_TIPO WHEN 'OPERADOR' THEN po.NOME_COMPLETO " +
             "WHEN 'TECNICO' THEN pt.NOME_COMPLETO ELSE pa.NOME_COMPLETO END";
 
     /**
-     * Colunas ordenáveis da tabela "Solicitações" do admin (D-1). A 1ª entrada
-     * é a ordenação default COMPOSTA (D-4.1): pendentes primeiro, depois por
-     * dia; os filtros/cliques de coluna a sobrepõem (D-4.2). Desempate estável
-     * final via tiebreaker s.ID (paginação consistente).
+     * Colunas ordenáveis da tabela "Solicitações" do admin (D-1): a fila abre pela data do envio,
+     * do mais recente ao mais antigo, e os cliques de coluna a sobrepõem (D-4.2). Desempate estável
+     * final via tiebreaker (paginação consistente).
      */
     private static final Map<String, String> SOL_ADMIN_SORT = new LinkedHashMap<>() {{
-        put("padrao", "CASE s.STATUS WHEN 'PENDENTE' THEN 0 ELSE 1 END, s.DATA_FOLGA");
+        put("data_solicitacao", "g.DATA_SOLICITACAO");
         put("nome", NOME_SOLICITANTE);
-        put("data_folga", "s.DATA_FOLGA");
-        put("status", "s.STATUS");
+        put("status", "g.STATUS");
     }};
 
     private final EntityManager em;
@@ -190,6 +216,8 @@ public class BancoHorasService {
             throw new ServiceValidationException("Saldo insuficiente.");
         }
 
+        // Os dias de um mesmo envio nascem amarrados: é o envio que se lista, delibera e cancela.
+        String grupoId = UUID.randomUUID().toString();
         List<PontoSolicitacaoFolga> novas = new ArrayList<>();
         for (LocalDate d : dias) {
             PontoSolicitacaoFolga s = new PontoSolicitacaoFolga();
@@ -197,6 +225,7 @@ public class BancoHorasService {
             s.setPessoaTipo(pessoaTipo);
             s.setDataFolga(d);
             s.setMinutosDebitados(debitoPorDia);
+            s.setGrupoId(grupoId);
             novas.add(s);
         }
         try {
@@ -219,6 +248,7 @@ public class BancoHorasService {
             criadas.add(c);
         }
         Map<String, Object> out = new LinkedHashMap<>();
+        out.put("id", grupoId);
         out.put("criadas", criadas);
         out.put("saldo_min", atualizado.getSaldoBancoMin());
         out.put("saldo_fmt", formatarSaldo(atualizado.getSaldoBancoMin()));
@@ -228,29 +258,35 @@ public class BancoHorasService {
     // ══ PATCH /api/ponto/banco/solicitacao/{id}/cancelar ══════════
 
     /**
-     * Cancela uma solicitação PENDENTE do próprio dono (Q19): muda o status
-     * para CANCELADO (sem delete físico) — a linha sai da soma do saldo
-     * ("estorno" implícito) e libera o dia na FBI. Re-ancora o cache.
+     * Cancela a SOLICITAÇÃO do próprio dono (Q19): todos os dias pendentes daquele envio passam a
+     * CANCELADO (sem delete físico) — as linhas saem da soma do saldo ("estorno" implícito) e
+     * liberam os dias na FBI. Re-ancora o cache.
      */
     @Transactional
-    public Map<String, Object> cancelar(String solicitacaoId, String pessoaId, String role) {
+    public Map<String, Object> cancelar(String chave, String pessoaId, String role) {
         String pessoaTipo = pessoaTipoDeRole(role);
-        PontoSolicitacaoFolga s = solicitacaoRepo.findById(solicitacaoId)
-                .orElseThrow(() -> new ServiceValidationException("Solicitação não encontrada.", HttpStatus.NOT_FOUND));
+        List<PontoSolicitacaoFolga> dias = solicitacaoRepo.findDaSolicitacao(chave);
+        if (dias.isEmpty()) {
+            throw new ServiceValidationException("Solicitação não encontrada.", HttpStatus.NOT_FOUND);
+        }
         // 403 depois do 404 (anti-enumeração); dono via principal, nunca payload (gotcha 5).
-        if (!s.getPessoaId().equals(pessoaId) || !s.getPessoaTipo().equals(pessoaTipo)) {
+        PontoSolicitacaoFolga primeira = dias.get(0);
+        if (!primeira.getPessoaId().equals(pessoaId) || !primeira.getPessoaTipo().equals(pessoaTipo)) {
             throw new ServiceValidationException("Acesso negado a esta solicitação.", HttpStatus.FORBIDDEN);
         }
-        if (s.getStatus() != StatusSolicitacaoFolga.PENDENTE) {
+        List<PontoSolicitacaoFolga> pendentes = dias.stream()
+                .filter(s -> s.getStatus() == StatusSolicitacaoFolga.PENDENTE).toList();
+        if (pendentes.isEmpty()) {
             throw new ServiceValidationException("Apenas solicitações pendentes podem ser canceladas.");
         }
-        s.setStatus(StatusSolicitacaoFolga.CANCELADO);
-        solicitacaoRepo.save(s);
+        pendentes.forEach(s -> s.setStatus(StatusSolicitacaoFolga.CANCELADO));
+        solicitacaoRepo.saveAll(pendentes);
         PontoBancoSaldo saldo = saldoAberturaService.reancorar(pessoaId, pessoaTipo);
 
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("id", s.getId());
-        out.put("status", s.getStatus().getValor());
+        out.put("id", chave);
+        out.put("status", StatusSolicitacaoFolga.CANCELADO.getValor());
+        out.put("dias", pendentes.size());
         out.put("saldo_min", saldo.getSaldoBancoMin());
         out.put("saldo_fmt", formatarSaldo(saldo.getSaldoBancoMin()));
         return out;
@@ -263,21 +299,57 @@ public class BancoHorasService {
         return listMinhasSolicitacoes(pessoaId, role, page, limit, sort, dir, filters, false);
     }
 
+    /**
+     * "Minhas Solicitações": uma linha por ENVIO, com os dias dele dentro. Ownership do dono no
+     * fromJoins com binds via baseParams (nunca interpolados — Q13 db-plan).
+     */
     public PagedResult listMinhasSolicitacoes(String pessoaId, String role, int page, int limit,
                                               String sort, String dir, Map<String, Object> filters, boolean somenteDados) {
         String pessoaTipo = pessoaTipoDeRole(role);
-        // Ownership do dono no fromJoins com binds via baseParams (nunca interpolados — Q13 db-plan).
-        return DashboardQueryHelper.executePagedQuery(em,
-                "s.ID, s.DATA_FOLGA AS data_folga, s.STATUS, " +
-                "adm.NOME_COMPLETO AS deliberado_por, s.MOTIVO_REJEICAO AS motivo",
-                "FROM PNT_SOLICITACAO_FOLGA s " +
-                "LEFT JOIN PES_ADMINISTRADOR adm ON adm.ID = s.DELIBERADO_POR_ID " +
-                "WHERE s.PESSOA_ID = ? AND s.PESSOA_TIPO = ?",
-                "s.DATA_FOLGA", MS_SORT, List.of(),
-                Map.of("data_folga", "s.DATA_FOLGA", "status", "s.STATUS"),
-                Map.of("data_folga", "date", "status", "text"),
+        PagedResult result = DashboardQueryHelper.executePagedQuery(em,
+                "g.ID, g.DATA_SOLICITACAO AS data_solicitacao, g.STATUS, " +
+                "adm.NOME_COMPLETO AS deliberado_por, g.MOTIVO AS motivo",
+                "FROM (" + SOLICITACOES_AGRUPADAS
+                + " WHERE s.PESSOA_ID = ? AND s.PESSOA_TIPO = ?" + MS_GROUP_BY + ") g "
+                + "LEFT JOIN PES_ADMINISTRADOR adm ON adm.ID = g.DELIBERADO_POR_ID WHERE 1 = 1",
+                null, MS_SORT, List.of(),
+                Map.of("data_solicitacao", "g.DATA_SOLICITACAO", "status", "g.STATUS"),
+                Map.of("data_solicitacao", "date", "status", "text"),
                 page, limit, null, sort, dir, null, filters,
-                "s.CRIADO_EM DESC", somenteDados, List.of(pessoaId, pessoaTipo));
+                "g.ID", somenteDados, List.of(pessoaId, pessoaTipo));
+        anexarDias(result.data());
+        return result;
+    }
+
+    /**
+     * Os dias de cada solicitação da página, numa consulta só. É a lista que o funcionário vê
+     * expandida e a que o administrador delibera — por isso cada dia leva o próprio id.
+     */
+    private void anexarDias(List<Map<String, Object>> rows) {
+        if (rows.isEmpty()) return;
+        List<String> chaves = rows.stream().map(r -> String.valueOf(r.get("id"))).toList();
+        Map<String, List<Map<String, Object>>> porSolicitacao = new LinkedHashMap<>();
+        for (PontoSolicitacaoFolga s : solicitacaoRepo.findDasSolicitacoes(chaves)) {
+            Map<String, Object> dia = new LinkedHashMap<>();
+            dia.put("id", s.getId());
+            dia.put("data_folga", s.getDataFolga().toString());
+            dia.put("status", s.getStatus().getValor());
+            dia.put("motivo", s.getMotivoRejeicao());
+            porSolicitacao.computeIfAbsent(chaveDe(s), k -> new ArrayList<>()).add(dia);
+        }
+        for (Map<String, Object> r : rows) {
+            List<Map<String, Object>> dias = porSolicitacao.getOrDefault(String.valueOf(r.get("id")), List.of());
+            r.put("dias", dias);
+            // Os dias em uma linha só: é assim que a solicitação cabe numa célula de relatório.
+            r.put("dias_fmt", dias.stream()
+                    .map(d -> ReportConfig.fmtDate(LocalDate.parse(String.valueOf(d.get("data_folga")))))
+                    .collect(java.util.stream.Collectors.joining(", ")));
+        }
+    }
+
+    /** A chave da solicitação a que a linha pertence: o grupo do envio ou, sem ele, o próprio id. */
+    private static String chaveDe(PontoSolicitacaoFolga s) {
+        return s.getGrupoId() != null ? s.getGrupoId() : s.getId();
     }
 
     // ══ Deliberação do admin (Bloco D / E8) ═══════════════════════
@@ -301,26 +373,34 @@ public class BancoHorasService {
                                              String dir, String search, Map<String, Object> filters,
                                              boolean somenteDados) {
         PagedResult result = DashboardQueryHelper.executePagedQuery(em,
-                "s.ID, s.PESSOA_ID AS pessoa_id, s.PESSOA_TIPO AS pessoa_tipo, " +
+                "g.ID, g.PESSOA_ID AS pessoa_id, g.PESSOA_TIPO AS pessoa_tipo, " +
                 NOME_SOLICITANTE + " AS nome, sal.SALDO_BANCO_MIN AS saldo_min, " +
-                "s.DATA_FOLGA AS data_folga, s.STATUS, " +
-                "adm.NOME_COMPLETO AS deliberado_por, s.MOTIVO_REJEICAO AS motivo",
-                "FROM PNT_SOLICITACAO_FOLGA s " +
-                "LEFT JOIN PES_OPERADOR po ON po.ID = s.PESSOA_ID AND s.PESSOA_TIPO = 'OPERADOR' " +
-                "LEFT JOIN PES_TECNICO pt ON pt.ID = s.PESSOA_ID AND s.PESSOA_TIPO = 'TECNICO' " +
-                "LEFT JOIN PES_ADMINISTRADOR pa ON pa.ID = s.PESSOA_ID AND s.PESSOA_TIPO = 'ADMINISTRADOR' " +
-                "LEFT JOIN PES_ADMINISTRADOR adm ON adm.ID = s.DELIBERADO_POR_ID " +
-                "LEFT JOIN PNT_BANCO_SALDO sal ON sal.PESSOA_ID = s.PESSOA_ID AND sal.PESSOA_TIPO = s.PESSOA_TIPO",
-                "s.DATA_FOLGA", SOL_ADMIN_SORT, List.of(NOME_SOLICITANTE),
-                Map.of("nome", NOME_SOLICITANTE, "data_folga", "s.DATA_FOLGA", "status", "s.STATUS"),
-                Map.of("nome", "text", "data_folga", "date", "status", "text"),
+                "g.DATA_SOLICITACAO AS data_solicitacao, g.STATUS, " +
+                "adm.NOME_COMPLETO AS deliberado_por, g.MOTIVO AS motivo",
+                "FROM (" + SOLICITACOES_AGRUPADAS + MS_GROUP_BY + ") g " +
+                "LEFT JOIN PES_OPERADOR po ON po.ID = g.PESSOA_ID AND g.PESSOA_TIPO = 'OPERADOR' " +
+                "LEFT JOIN PES_TECNICO pt ON pt.ID = g.PESSOA_ID AND g.PESSOA_TIPO = 'TECNICO' " +
+                "LEFT JOIN PES_ADMINISTRADOR pa ON pa.ID = g.PESSOA_ID AND g.PESSOA_TIPO = 'ADMINISTRADOR' " +
+                "LEFT JOIN PES_ADMINISTRADOR adm ON adm.ID = g.DELIBERADO_POR_ID " +
+                "LEFT JOIN PNT_BANCO_SALDO sal ON sal.PESSOA_ID = g.PESSOA_ID AND sal.PESSOA_TIPO = g.PESSOA_TIPO " +
+                "WHERE 1 = 1",
+                null, SOL_ADMIN_SORT, List.of(NOME_SOLICITANTE),
+                Map.of("nome", NOME_SOLICITANTE, "data_solicitacao", "g.DATA_SOLICITACAO", "status", "g.STATUS"),
+                Map.of("nome", "text", "data_solicitacao", "date", "status", "text"),
                 page, limit, search, sort, dir, null, filters,
-                "s.ID", somenteDados, List.of());
+                "g.ID", somenteDados, List.of());
+        anexarDias(result.data());
         if (!somenteDados) anotarDeliberacao(result.data(), callerId);
         return result;
     }
 
-    /** Injeta {@code pode_deliberar} e {@code atrasada} por linha (T-1.2/T-1.3/Q11) — 1 leitura do servidorPublico do caller. */
+    /**
+     * Injeta {@code pode_deliberar} (T-1.2/T-1.3) e {@code atrasada} por linha — 1 leitura do
+     * servidorPublico do caller. A solicitação está atrasada quando algum dia dela ainda pendente
+     * já passou (Q11); "hoje" vem do Clock da aplicação, e não do relógio do banco, que não conhece
+     * o fuso do contrato.
+     */
+    @SuppressWarnings("unchecked")
     private void anotarDeliberacao(List<Map<String, Object>> rows, String callerId) {
         boolean callerSp = Boolean.TRUE.equals(
                 administradorRepo.findById(callerId).map(Administrador::getServidorPublico).orElse(false));
@@ -328,10 +408,10 @@ public class BancoHorasService {
         for (Map<String, Object> r : rows) {
             String pessoaId = String.valueOf(r.get("pessoa_id"));
             String pessoaTipo = String.valueOf(r.get("pessoa_tipo"));
-            boolean pendente = "PENDENTE".equals(String.valueOf(r.get("status")));
-            LocalDate dia = parseDataFolga(r.get("data_folga"));
             r.put("pode_deliberar", podeDeliberar(callerId, callerSp, pessoaId, pessoaTipo));
-            r.put("atrasada", pendente && dia != null && dia.isBefore(hoje));
+            r.put("atrasada", ((List<Map<String, Object>>) r.getOrDefault("dias", List.of())).stream()
+                    .anyMatch(d -> "PENDENTE".equals(d.get("status"))
+                            && LocalDate.parse(String.valueOf(d.get("data_folga"))).isBefore(hoje)));
         }
     }
 
@@ -356,60 +436,85 @@ public class BancoHorasService {
     // ── POST .../solicitacao/{id}/aprovar · /rejeitar ──
 
     /**
-     * Aprova uma solicitação PENDENTE (T-1.4: validação sempre no service): 404 →
-     * 403 (T-1.2/T-1.3) → só PENDENTE. Aprovar mantém o débito na soma dos vivos
-     * (o saldo não muda), mas re-ancora para reprecificar o cache; dispara aviso
-     * PESSOAL ao solicitante (Q15).
+     * Delibera a SOLICITAÇÃO inteira numa transação (T-1.4: validação sempre no service): 404 →
+     * 403 (T-1.2/T-1.3) → só PENDENTE. O administrador diz, dia a dia, o que aprova e o que
+     * rejeita, mas responde ao envio de uma vez: os dois conjuntos juntos têm de ser exatamente os
+     * dias pendentes, e nenhum dia pode ficar de fora — meia deliberação deixaria a pessoa sem
+     * resposta sobre o resto do que pediu.
+     *
+     * <p>Aprovar mantém o débito na soma dos vivos (o saldo não muda) e rejeitar o devolve
+     * (estorno implícito, C-5.6); em qualquer caso re-ancora o cache e o solicitante recebe UMA
+     * comunicação com o desfecho (Q15).
+     *
+     * <p>O motivo é obrigatório havendo rejeição e tem TETO (F47): {@code MOTIVO_REJEICAO} é
+     * VARCHAR2(1000) em bytes, e um texto colado de um e-mail/norma estourava a coluna — ORA-12899
+     * → handler genérico → 500 com um toast que não dizia ao admin que a causa era o tamanho.
      */
     @Transactional
-    public Map<String, Object> aprovar(String solicitacaoId, String callerId) {
-        PontoSolicitacaoFolga s = deliberavel(solicitacaoId, callerId);
-        s.setStatus(StatusSolicitacaoFolga.APROVADO);
-        s.setDeliberadoPorId(callerId);
-        s.setDeliberadoEm(LocalDateTime.now(clock));
-        s.setMotivoRejeicao(null);
-        solicitacaoRepo.save(s);
-        saldoAberturaService.reancorar(s.getPessoaId(), s.getPessoaTipo());
-        notificarDeliberacao(s, callerId, true, null);
-        return deliberacaoResposta(s);
+    public Map<String, Object> deliberar(String chave, String callerId,
+                                         List<String> aprovados, List<String> rejeitados, String motivo) {
+        List<PontoSolicitacaoFolga> dias = solicitacaoRepo.findDaSolicitacao(chave);
+        if (dias.isEmpty()) {
+            throw new ServiceValidationException("Solicitação não encontrada.", HttpStatus.NOT_FOUND);
+        }
+        validarDeliberacao(dias.get(0), callerId);
+        List<PontoSolicitacaoFolga> pendentes = dias.stream()
+                .filter(s -> s.getStatus() == StatusSolicitacaoFolga.PENDENTE).toList();
+        if (pendentes.isEmpty()) {
+            throw new ServiceValidationException("Apenas solicitações pendentes podem ser deliberadas.");
+        }
+
+        Set<String> aprovar = new LinkedHashSet<>(aprovados == null ? List.of() : aprovados);
+        Set<String> rejeitar = new LinkedHashSet<>(rejeitados == null ? List.of() : rejeitados);
+        exigirDeliberacaoCompleta(pendentes, aprovar, rejeitar);
+
+        String m = motivo == null ? "" : motivo.strip();
+        if (!rejeitar.isEmpty()) {
+            if (m.isEmpty()) throw new ServiceValidationException("Informe o motivo da rejeição.");
+            textoLimitado(m, MAX_MOTIVO_REJEICAO, "O motivo da rejeição");
+        }
+
+        LocalDateTime agora = LocalDateTime.now(clock);
+        List<LocalDate> diasAprovados = new ArrayList<>();
+        List<LocalDate> diasRejeitados = new ArrayList<>();
+        for (PontoSolicitacaoFolga s : pendentes) {
+            boolean aprovado = aprovar.contains(s.getId());
+            s.setStatus(aprovado ? StatusSolicitacaoFolga.APROVADO : StatusSolicitacaoFolga.REJEITADO);
+            s.setDeliberadoPorId(callerId);
+            s.setDeliberadoEm(agora);
+            s.setMotivoRejeicao(aprovado ? null : m);
+            (aprovado ? diasAprovados : diasRejeitados).add(s.getDataFolga());
+        }
+        solicitacaoRepo.saveAll(pendentes);
+        PontoSolicitacaoFolga qualquer = pendentes.get(0);
+        saldoAberturaService.reancorar(qualquer.getPessoaId(), qualquer.getPessoaTipo());
+        notificarDeliberacao(qualquer, callerId, diasAprovados, diasRejeitados, m);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("id", chave);
+        out.put("aprovados", diasAprovados.size());
+        out.put("rejeitados", diasRejeitados.size());
+        if (!diasRejeitados.isEmpty()) out.put("motivo", m);
+        return out;
     }
 
     /**
-     * Rejeita uma solicitação PENDENTE com motivo obrigatório (D-3.2): a linha
-     * sai da soma dos vivos — o saldo volta a subir (estorno implícito, C-5.6) —
-     * e re-ancora o cache; dispara aviso PESSOAL com o motivo (Q15).
-     *
-     * <p>O motivo tem TETO (F47): {@code MOTIVO_REJEICAO} é VARCHAR2(1000) em bytes, e um texto
-     * colado de um e-mail/norma estourava a coluna — ORA-12899 → handler genérico → 500 com um
-     * toast que não dizia ao admin que a causa era o tamanho, deixando a rejeição impossível.
+     * A deliberação é do envio inteiro: os dias aprovados e os rejeitados, juntos, têm de ser
+     * exatamente os pendentes — nem um dia repetido nos dois lados, nem um dia estranho ao envio,
+     * nem um pendente esquecido.
      */
-    @Transactional
-    public Map<String, Object> rejeitar(String solicitacaoId, String callerId, String motivo) {
-        String m = motivo == null ? "" : motivo.strip();
-        if (m.isEmpty()) {
-            throw new ServiceValidationException("Informe o motivo da rejeição.");
+    private static void exigirDeliberacaoCompleta(List<PontoSolicitacaoFolga> pendentes,
+                                                  Set<String> aprovar, Set<String> rejeitar) {
+        if (aprovar.stream().anyMatch(rejeitar::contains)) {
+            throw new ServiceValidationException("Cada dia da solicitação só pode ser aprovado ou rejeitado.");
         }
-        textoLimitado(m, MAX_MOTIVO_REJEICAO, "O motivo da rejeição");
-        PontoSolicitacaoFolga s = deliberavel(solicitacaoId, callerId);
-        s.setStatus(StatusSolicitacaoFolga.REJEITADO);
-        s.setDeliberadoPorId(callerId);
-        s.setDeliberadoEm(LocalDateTime.now(clock));
-        s.setMotivoRejeicao(m);
-        solicitacaoRepo.save(s);
-        saldoAberturaService.reancorar(s.getPessoaId(), s.getPessoaTipo());
-        notificarDeliberacao(s, callerId, false, m);
-        return deliberacaoResposta(s);
-    }
-
-    /** Carrega a solicitação e aplica a ordem 404 → 403 (T-1.2/T-1.3) → só PENDENTE (deliberável). */
-    private PontoSolicitacaoFolga deliberavel(String solicitacaoId, String callerId) {
-        PontoSolicitacaoFolga s = solicitacaoRepo.findById(solicitacaoId)
-                .orElseThrow(() -> new ServiceValidationException("Solicitação não encontrada.", HttpStatus.NOT_FOUND));
-        validarDeliberacao(s, callerId);
-        if (s.getStatus() != StatusSolicitacaoFolga.PENDENTE) {
-            throw new ServiceValidationException("Apenas solicitações pendentes podem ser deliberadas.");
+        Set<String> deliberados = new LinkedHashSet<>(aprovar);
+        deliberados.addAll(rejeitar);
+        Set<String> idsPendentes = new LinkedHashSet<>();
+        for (PontoSolicitacaoFolga s : pendentes) idsPendentes.add(s.getId());
+        if (!deliberados.equals(idsPendentes)) {
+            throw new ServiceValidationException("Delibere todos os dias pendentes da solicitação.");
         }
-        return s;
     }
 
     /** Autorização fina da deliberação (T-1.2/T-1.3), no service — nunca só na UI (T-1.4). */
@@ -428,18 +533,40 @@ public class BancoHorasService {
         }
     }
 
-    /** Aviso PESSOAL do desfecho ao solicitante (Q15/gotcha 6) — reusa {@link AvisoService#criarPessoalIndividual}. */
-    private void notificarDeliberacao(PontoSolicitacaoFolga s, String adminId, boolean aprovado, String motivo) {
+    /**
+     * UMA comunicação por solicitação deliberada (Q15/gotcha 6) — reusa
+     * {@link AvisoService#criarPessoalIndividual}. Aprovada e rejeitada dizem o desfecho e os dias;
+     * a mista diz as duas coisas, na mesma janela, e o motivo aparece uma vez, ao final.
+     */
+    private void notificarDeliberacao(PontoSolicitacaoFolga s, String adminId,
+                                      List<LocalDate> aprovados, List<LocalDate> rejeitados, String motivo) {
         PapelPessoa papel = papelDePessoaTipo(s.getPessoaTipo());
         if (papel == null) return;   // tipo já validado no fluxo; guarda contra o no-op silencioso
-        String dia = ReportConfig.fmtDate(s.getDataFolga());
-        String mensagem = aprovado
-                ? "Solicitação para " + dia + " APROVADA."
-                : "Solicitação para " + dia + " REJEITADA."
-                        + (motivo != null && !motivo.isBlank() ? " Motivo: " + motivo.trim() + "." : "");
-        SubtipoAviso subtipo = aprovado ? SubtipoAviso.SOLICITACAO_APROVADA : SubtipoAviso.SOLICITACAO_REJEITADA;
+        String textoAprovados = "Solicitação para o(s) dia(s) " + diasEmTexto(aprovados) + " APROVADA.";
+        String textoRejeitados = "Solicitação para o(s) dia(s) " + diasEmTexto(rejeitados) + " REJEITADA."
+                + (motivo != null && !motivo.isBlank() ? "\nMotivo: " + motivo.trim() + "." : "");
+
+        SubtipoAviso subtipo;
+        List<String> textos;
+        if (rejeitados.isEmpty()) {
+            subtipo = SubtipoAviso.SOLICITACAO_APROVADA;
+            textos = List.of(textoAprovados);
+        } else if (aprovados.isEmpty()) {
+            subtipo = SubtipoAviso.SOLICITACAO_REJEITADA;
+            textos = List.of(textoRejeitados);
+        } else {
+            subtipo = SubtipoAviso.SOLICITACAO_MISTA;
+            textos = List.of(textoAprovados, textoRejeitados);
+        }
         avisoService.criarPessoalIndividual(
-                List.of(new AvisoService.DestinatarioAviso(s.getPessoaId(), papel)), mensagem, adminId, subtipo);
+                List.of(new AvisoService.DestinatarioAviso(s.getPessoaId(), papel)), textos, adminId, subtipo, null);
+    }
+
+    /** Os dias como a pessoa os lê: {@code dd/MM}, em ordem cronológica, separados por vírgula. */
+    private static String diasEmTexto(List<LocalDate> dias) {
+        return dias.stream().sorted()
+                .map(d -> String.format("%02d/%02d", d.getDayOfMonth(), d.getMonthValue()))
+                .collect(java.util.stream.Collectors.joining(", "));
     }
 
     private static PapelPessoa papelDePessoaTipo(String pessoaTipo) {
@@ -449,26 +576,6 @@ public class BancoHorasService {
             case "ADMINISTRADOR" -> PapelPessoa.ADMIN;
             default -> null;
         };
-    }
-
-    private Map<String, Object> deliberacaoResposta(PontoSolicitacaoFolga s) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("id", s.getId());
-        out.put("status", s.getStatus().getValor());
-        if (s.getMotivoRejeicao() != null) out.put("motivo", s.getMotivoRejeicao());
-        return out;
-    }
-
-    /** DATE nativo (String {@code "yyyy-MM-dd..."}) → LocalDate; null/inválido → null. */
-    private static LocalDate parseDataFolga(Object v) {
-        if (v == null) return null;
-        String s = v.toString().trim();
-        if (s.length() >= 10) s = s.substring(0, 10);
-        try {
-            return LocalDate.parse(s);
-        } catch (Exception e) {
-            return null;
-        }
     }
 
     // ══ Helpers ═══════════════════════════════════════════════════

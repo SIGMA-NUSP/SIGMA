@@ -180,6 +180,23 @@ describe('AvisoPessoalFormComponent', () => {
     expect(check('manter')).not.toBeNull();
   });
 
+  it('o botão e o "manter" nomeiam a categoria do destinatário: Mensagem para pessoas, Comunicado para grupo', async () => {
+    await montar();
+    const botao = () => fixture.nativeElement.querySelector('.painel-actions button') as HTMLButtonElement;
+    const labelManter = () => fixture.nativeElement.querySelector('.check-sub')?.textContent?.trim();
+
+    expect(botao().textContent).toContain('Cadastrar Mensagem');
+    expect(labelManter()).toContain('Manter mensagem após ciência');
+
+    (fixture.nativeElement.querySelector('input[name="modo"][value="grupo"]') as HTMLInputElement).click();
+    fixture.detectChanges();
+    await fixture.whenStable();   // o ngModel só desmarca a ciência do modo grupo na microtask
+    (fixture.nativeElement.querySelector('input[name="ciencia"]') as HTMLInputElement).click();
+    fixture.detectChanges();
+    expect(botao().textContent).toContain('Cadastrar Comunicado');
+    expect(labelManter()).toContain('Manter comunicado após ciência');
+  });
+
   it('fail-closed no modo pessoas: erro ao carregar pessoas bloqueia o envio', async () => {
     respostaPessoas = () => throwError(() => ({ status: 500, error: { error: 'x' } }));
     await montar();

@@ -3,40 +3,21 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { ApiService } from '../../core/services/api.service';
 import { LookupService } from '../../core/services/lookup.service';
-import { PaginationComponent } from '../../shared/components/pagination.component';
-import { ColumnFilterComponent, ColumnFilterDef } from '../../shared/components/column-filter.component';
 import { MultiSelectDropdownComponent, MultiSelectOption } from '../../shared/components/multi-select-dropdown.component';
 import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
-import { CategoriaSeloComponent } from '../../shared/components/categoria-selo.component';
 import { AvisoEscalaFormComponent } from './aviso-escala-form.component';
 import { AvisoAgendaFormComponent } from './aviso-agenda-form.component';
 import { AvisoPessoalFormComponent } from './aviso-pessoal-form.component';
-import { getDistinct } from '../../core/helpers/table.helpers';
+import { AvisoRow, ComunicacoesTabelaComponent, STATUS_ATIVOS, STATUS_INATIVOS } from './comunicacoes-tabela.component';
 import { TableStateController } from '../../core/helpers/table-state.controller';
 import { erroCargaMsg, httpErrorMsg } from '../../core/helpers/http.helpers';
 import { ToastService } from '../../shared/components/toast.component';
-import { FmtDatePipe } from '../../shared/pipes/fmt-date.pipe';
-
-interface AvisoRow {
-  id: string;
-  numero: number;
-  // Categoria da comunicação (selo) + o contexto que a qualifica ("Escala"); Mensagem vem sem contexto.
-  categoria: string;
-  tipo: string | null;
-  criado_em: string;
-  criado_por: string;
-  expira_em: string | null;
-  // Verificação/Pessoal/Geral: gravado (Ativo/Expirado/Desativado). Escala: calculado das datas
-  // (Pendente/Ativo/Expirado). Agenda: '—' (sem ciclo temporal) ou Desativado.
-  status: string;
-  permanente: number;  // 0/1
-}
 
 @Component({
   selector: 'app-admin-avisos-sala',
   standalone: true,
-  imports: [FormsModule, RouterLink, PaginationComponent, ColumnFilterComponent, MultiSelectDropdownComponent,
-    ErroCargaComponent, CategoriaSeloComponent, FmtDatePipe, AvisoEscalaFormComponent, AvisoAgendaFormComponent,
+  imports: [FormsModule, RouterLink, MultiSelectDropdownComponent, ErroCargaComponent,
+    ComunicacoesTabelaComponent, AvisoEscalaFormComponent, AvisoAgendaFormComponent,
     AvisoPessoalFormComponent],
   template: `
     <h1>Comunicações</h1>
@@ -134,89 +115,28 @@ interface AvisoRow {
     @if (activeCard() === 'agenda') { <app-aviso-agenda-form (cadastrado)="onCadastrado()" /> }
     @if (activeCard() === 'pessoal') { <app-aviso-pessoal-form (cadastrado)="onCadastrado()" /> }
 
-    <!-- ════════════ LISTAGEM ════════════ -->
+    <!-- ════════════ LISTAGEM — as em curso à vista; as encerradas, ao alcance de um clique ════════════ -->
     <section>
       <div class="section-header">
-        <h2>Comunicações Cadastradas</h2>
-        <div class="header-actions">
-          <input type="text" [(ngModel)]="ctrl.searchText" (input)="ctrl.onSearch()" placeholder="Buscar por autor ou nº do cadastro..." class="search-input search-wide">
-        </div>
+        <h2>Comunicações Ativas</h2>
       </div>
-      <div class="table-container">
-        <table class="data-table">
-          <thead><tr>
-            <th>Cadastro nº</th>
-            <th>
-              <app-column-filter [col]="cols[0]"
-                [distinctValues]="gd(ctrl.meta(),'tipo')"
-                [currentSort]="ctrl.state.sort" [currentDir]="ctrl.state.direction"
-                (sortChange)="ctrl.onSort($event)" (filterChange)="ctrl.onFilter($event)" />
-            </th>
-            <th>
-              <app-column-filter [col]="cols[1]"
-                [distinctValues]="gd(ctrl.meta(),'data')"
-                [currentSort]="ctrl.state.sort" [currentDir]="ctrl.state.direction"
-                (sortChange)="ctrl.onSort($event)" (filterChange)="ctrl.onFilter($event)" />
-            </th>
-            <th>
-              <app-column-filter [col]="cols[2]"
-                [distinctValues]="gd(ctrl.meta(),'criado_por')"
-                [currentSort]="ctrl.state.sort" [currentDir]="ctrl.state.direction"
-                (sortChange)="ctrl.onSort($event)" (filterChange)="ctrl.onFilter($event)" />
-            </th>
-            <th>
-              <app-column-filter [col]="cols[3]"
-                [distinctValues]="gd(ctrl.meta(),'expira')"
-                [currentSort]="ctrl.state.sort" [currentDir]="ctrl.state.direction"
-                (sortChange)="ctrl.onSort($event)" (filterChange)="ctrl.onFilter($event)" />
-            </th>
-            <th>
-              <app-column-filter [col]="cols[4]"
-                [distinctValues]="gd(ctrl.meta(),'status')"
-                [currentSort]="ctrl.state.sort" [currentDir]="ctrl.state.direction"
-                (sortChange)="ctrl.onSort($event)" (filterChange)="ctrl.onFilter($event)" />
-            </th>
-            <th>Ação</th>
-          </tr></thead>
-          <tbody>
-            @if (ctrl.erro()) {
-              <!-- Canal de erro (C7/C13b): "Nenhum aviso cadastrado." numa carga que FALHOU esconde
-                   os avisos ATIVOS — e o admin cadastra por cima, ou deixa de desativar o que devia. -->
-              <tr><td colspan="7">
-                <app-erro-carga [mensagem]="ctrl.erro()" (tentarNovamente)="ctrl.load()" />
-              </td></tr>
-            } @else if (ctrl.rows().length === 0) {
-              <tr><td colspan="7" class="empty-state">{{ ctrl.loading() ? 'Carregando...' : 'Nenhum aviso cadastrado.' }}</td></tr>
-            } @else {
-              @for (a of ctrl.rows(); track a.id) {
-                <tr class="row-clickable" (dblclick)="abrirDetalhe(a)" title="Duplo-clique para ver o detalhe">
-                  <td>{{ a.numero }}</td>
-                  <td class="col-tipo">
-                    <app-categoria-selo [categoria]="a.categoria" />
-                    <span class="contexto">{{ a.tipo }}</span>
-                  </td>
-                  <td>{{ a.criado_em | fmtDate }}</td>
-                  <td>{{ a.criado_por }}</td>
-                  <!-- Escala manda DATA_FIM (permanente no banco); Agenda manda —. Exibe a data sempre que houver. -->
-                  <td>{{ a.expira_em ? (a.expira_em | fmtDate) : '—' }}</td>
-                  <td>
-                    @if (a.status !== '—') { <span class="status-dot" [attr.data-status]="a.status"></span> }
-                    {{ a.status }}
-                  </td>
-                  <td>
-                    @if (podeDesativar(a)) {
-                      <button class="btn-xs" (click)="desativar(a); $event.stopPropagation()">Desativar</button>
-                    } @else { — }
-                  </td>
-                </tr>
-              }
-            }
-          </tbody>
-        </table>
+      <app-comunicacoes-tabela [ctrl]="ctrlAtivas" [statusDaTabela]="ATIVOS"
+                               vazio="Nenhuma comunicação ativa."
+                               (abrir)="abrirDetalhe($event)" (desativar)="desativar($event)" />
+    </section>
+
+    <section>
+      <div class="section-header">
+        <h2 class="titulo-recolhivel" (click)="toggleInativas()">
+          <span class="ind">{{ inativasAbertas() ? '▼' : '▶' }}</span>
+          Comunicações Inativas@if (totalInativas() !== null) { ({{ totalInativas() }}) }
+        </h2>
       </div>
-      <app-pagination [meta]="ctrl.meta()!"
-                      (pageChange)="ctrl.onPage($event)"
-                      (limitChange)="ctrl.onLimit($event)" />
+      @if (inativasAbertas()) {
+        <app-comunicacoes-tabela [ctrl]="ctrlInativas" [statusDaTabela]="INATIVOS"
+                                 vazio="Nenhuma comunicação inativa."
+                                 (abrir)="abrirDetalhe($event)" (desativar)="desativar($event)" />
+      }
     </section>
   `,
   styles: [`
@@ -233,16 +153,8 @@ interface AvisoRow {
     .duracao-inline input { width:90px; }
     .check-opt { display:flex; align-items:center; gap:8px; font-weight:500; cursor:pointer; }
     .check-opt input { width:auto; }
-    .row-clickable { cursor: pointer; }
-    /* Selo em cima e contexto embaixo, em TODAS as linhas: a linha do contexto é reservada mesmo
-       quando ele não existe (Mensagem), para que a altura das linhas da tabela não varie. */
-    .col-tipo { display:flex; flex-direction:column; align-items:flex-start; gap:4px; }
-    .col-tipo .contexto { min-height:1.2em; line-height:1.2; }
-    .status-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
-    .status-dot[data-status="Ativo"]      { background: var(--color-green, #16a34a); }
-    .status-dot[data-status="Pendente"]   { background: #f59e0b; }
-    .status-dot[data-status="Expirado"]   { background: #9ca3af; }
-    .status-dot[data-status="Desativado"] { background: #111827; }
+    .titulo-recolhivel { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; }
+    .titulo-recolhivel .ind { font-size: .8rem; color: var(--muted); }
   `],
 })
 export class AdminAvisosSalaComponent implements OnInit {
@@ -281,22 +193,62 @@ export class AdminAvisosSalaComponent implements OnInit {
   salasOcupadasIndisponiveis = computed(() =>
     this.loadingSalasOcupadas() || !!this.erroSalasOcupadas());
 
-  // ── Listagem ──
-  cols: ColumnFilterDef[] = [
-    { key: 'tipo', label: 'Tipo', type: 'text' },
-    { key: 'data', label: 'Data', type: 'date' },
-    { key: 'criado_por', label: 'Cadastrado por', type: 'text' },
-    { key: 'expira', label: 'Expira em', type: 'date' },
-    { key: 'status', label: 'Status', type: 'text' },
-  ];
-  ctrl = new TableStateController<AvisoRow>(this.api, {
-    endpoint: '/api/admin/avisos/list', defaultSort: 'data', defaultDir: 'desc',
-  });
+  // ── Listagem: duas tabelas sobre o mesmo endpoint, separadas pelo status ──
+  protected readonly ATIVOS = STATUS_ATIVOS;
+  protected readonly INATIVOS = STATUS_INATIVOS;
+
+  ctrlAtivas = this.criarCtrl(STATUS_ATIVOS);
+  ctrlInativas = this.criarCtrl(STATUS_INATIVOS);
+
+  /** As inativas nascem recolhidas: quem abre a página quer ver o que está no ar. */
+  inativasAbertas = signal(false);
+  /** Quantas inativas existem — pedido só pelo total, para o título saber o número sem carregar a tabela. */
+  totalInativas = signal<number | null>(null);
+  private inativasCarregadas = false;
+
+  private criarCtrl(status: string[]): TableStateController<AvisoRow> {
+    const ctrl = new TableStateController<AvisoRow>(this.api, {
+      endpoint: '/api/admin/avisos/list', defaultSort: 'data', defaultDir: 'desc',
+    });
+    ctrl.filters['status'] = { values: status };
+    return ctrl;
+  }
 
   ngOnInit(): void {
     if (this.lookup.salas().length === 0) this.lookup.loadSalas();
     this.loadSalasOcupadas();
-    this.ctrl.load();
+    this.ctrlAtivas.load();
+    this.carregarTotalInativas();
+  }
+
+  /** Abre e fecha a lista de inativas; os dados só são buscados na primeira abertura. */
+  toggleInativas(): void {
+    const abrir = !this.inativasAbertas();
+    this.inativasAbertas.set(abrir);
+    if (abrir && !this.inativasCarregadas) {
+      this.inativasCarregadas = true;
+      this.ctrlInativas.load();
+    }
+  }
+
+  /**
+   * Só o total das inativas (1 linha pedida). Falha silenciosa: o título fica sem o número, e a
+   * tabela — que é o que importa — continua abrindo.
+   */
+  private carregarTotalInativas(): void {
+    this.api.getList('/api/admin/avisos/list', {
+      page: 1, limit: 1, filters: { status: { values: STATUS_INATIVOS } },
+    }).subscribe({
+      next: r => this.totalInativas.set(r.meta?.total ?? 0),
+      error: () => this.totalInativas.set(null),
+    });
+  }
+
+  /** Recarrega o que estiver à vista depois de uma mudança de status. */
+  private recarregarListagens(): void {
+    this.ctrlAtivas.load();
+    this.carregarTotalInativas();
+    if (this.inativasCarregadas) this.ctrlInativas.load();
   }
 
   /** Carga do lock "1 aviso ativo por sala"; também é o retry da caixa de erro (C18/F67). */
@@ -343,8 +295,6 @@ export class AdminAvisosSalaComponent implements OnInit {
     if (this.mensagens.length > 1) this.mensagens.pop();
   }
 
-  gd = getDistinct;
-
   onSubmit(): void {
     // FAIL-CLOSED (C18/F67): defesa dupla — o [disabled] do botão é só a camada de UI.
     if (this.salasOcupadasIndisponiveis()) return;
@@ -374,8 +324,7 @@ export class AdminAvisosSalaComponent implements OnInit {
           this.toast.success('Aviso cadastrado com sucesso.');
           this.resetForm();
           this.loadSalasOcupadas();
-          this.ctrl.state.page = 1;
-          this.ctrl.load();
+          this.onCadastrado();
         } else {
           this.errorMsg.set(res.message || res.error || 'Erro ao cadastrar.');
         }
@@ -403,13 +352,8 @@ export class AdminAvisosSalaComponent implements OnInit {
 
   /** Um sub-painel (Escala/Agenda/Pessoal) cadastrou um aviso → recarrega a listagem do topo. */
   onCadastrado(): void {
-    this.ctrl.state.page = 1;
-    this.ctrl.load();
-  }
-
-  /** Desativável = ainda não desativado nem expirado (cobre Ativo, Pendente e o Agenda "—"). */
-  podeDesativar(a: AvisoRow): boolean {
-    return a.status !== 'Desativado' && a.status !== 'Expirado';
+    this.ctrlAtivas.state.page = 1;
+    this.ctrlAtivas.load();
   }
 
   abrirDetalhe(a: AvisoRow): void {
@@ -419,7 +363,7 @@ export class AdminAvisosSalaComponent implements OnInit {
   desativar(a: AvisoRow): void {
     if (!confirm(`Desativar o cadastro nº ${a.numero}?`)) return;
     this.api.patch(`/api/admin/avisos/${a.id}/desativar`, {}).subscribe({
-      next: () => { this.toast.success('Aviso desativado.'); this.ctrl.load(); },
+      next: () => { this.toast.success('Aviso desativado.'); this.recarregarListagens(); },
       error: err => this.toast.error(httpErrorMsg(err, 'Erro ao desativar.', ['message'])),
     });
   }
