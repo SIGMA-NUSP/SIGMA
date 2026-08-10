@@ -459,7 +459,8 @@ public class AdminDashboardService {
                 "LEFT JOIN OPR_REGISTRO_AUDIO ra ON ra.ID = a.REGISTRO_ID " +
                 "LEFT JOIN PES_OPERADOR o ON o.ID = a.CRIADO_POR";
         if (salaId != null) {
-            fromJoins += " AND a.SALA_ID = " + salaId;  // safe: int value
+            // WHERE da query externa — emendada ao ON do LEFT JOIN, a condição não eliminaria linha.
+            fromJoins += " WHERE a.SALA_ID = " + salaId;  // safe: int value
         }
 
         return DashboardQueryHelper.executePagedQuery(em,
