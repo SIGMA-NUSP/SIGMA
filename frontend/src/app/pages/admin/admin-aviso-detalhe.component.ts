@@ -19,7 +19,7 @@ interface LinhaCiencia {
 /**
  * Detalhe de um cadastro de comunicação (somente leitura). Aberto por duplo-clique numa linha da
  * tabela "Comunicações Cadastradas" (query param `id`), consome GET /api/admin/avisos/{id}/detalhe.
- * O card de conteúdo (Identificação / Vigência / Destino / Mensagens) e a tabela de ciência/exibição
+ * O card de conteúdo (Identificação / Vigência / Mensagens) e a tabela de ciência/exibição
  * se adaptam ao TIPO; a categoria e o subtipo só mudam rótulos. A EXIGÊNCIA DE CIÊNCIA do cadastro
  * comanda o resto: com ela, a tabela registra quem deu ciência; sem ela, some o "manter após
  * ciência" e a tabela passa a registrar para quem a comunicação já foi exibida.
@@ -76,6 +76,16 @@ interface LinhaCiencia {
           <label>Criado em</label>
           <div class="field-value">{{ dd['criado_em'] | fmtDate }} {{ hora(dd['criado_em']) }}</div>
         </div>
+        <!-- Só a verificação de sala tem local, e ele vem do cadastro: aparece antes de qualquer ciência. -->
+        @if (tipo() === 'VERIFICACAO') {
+          <div class="field">
+            <label>Local</label>
+            <div class="chips">
+              @for (s of salasAlvo(); track $index) { <span class="chip">{{ s }}</span> }
+              @if (!salasAlvo().length) { <span class="text-muted-sm">—</span> }
+            </div>
+          </div>
+        }
 
         <!-- 2) Vigência (o efeito para o usuário, não o campo interno) -->
         <h3>2) Vigência</h3>
@@ -115,65 +125,6 @@ interface LinhaCiencia {
             <div class="field-value">{{ dd['manter_apos_ciencia'] ? 'Sim' : 'Não' }}</div>
           </div>
         }
-
-        <!-- 3) Destino (excluído pelo Douglas: item desnecessário, pois há a tabela de destinatários no final da página) -->
-        <!-- <h3>3) Destino</h3>
-        @switch (tipo()) {
-          @case ('VERIFICACAO') {
-            <div class="field">
-              <label>Locais</label>
-              <div class="chips">
-                @for (s of salasAlvo(); track $index) { <span class="chip">{{ s }}</span> }
-                @if (!salasAlvo().length) { <span class="text-muted-sm">—</span> }
-              </div>
-            </div>
-          }
-          @case ('ESCALA') {
-            <div class="field">
-              <label>Escala</label>
-              <div class="field-value">{{ dd['escala']?.['data_inicio'] | fmtDate }} — {{ dd['escala']?.['data_fim'] | fmtDate }}</div>
-            </div>
-            <div class="field">
-              <label>Plenários</label>
-              <div class="chips">
-                @for (p of plenarios(); track $index) { <span class="chip">{{ p }}</span> }
-              </div>
-            </div>
-            <p class="nota">Operadores escalados no(s) plenário(s) acima</p>
-          }
-          @case ('AGENDA') {
-            <div class="field">
-              <label>Público</label>
-              <div class="field-value">Todos os operadores e técnicos, nas telas de Agenda Legislativa.</div>
-            </div>
-          }
-          @case ('PESSOAL') {
-            @if (pessoasPorPapel().operadores.length) {
-              <div class="field">
-                <label>Operadores</label>
-                <div class="chips">@for (n of pessoasPorPapel().operadores; track $index) { <span class="chip">{{ n }}</span> }</div>
-              </div>
-            }
-            @if (pessoasPorPapel().tecnicos.length) {
-              <div class="field">
-                <label>Técnicos</label>
-                <div class="chips">@for (n of pessoasPorPapel().tecnicos; track $index) { <span class="chip">{{ n }}</span> }</div>
-              </div>
-            }
-            @if (pessoasPorPapel().admins.length) {
-              <div class="field">
-                <label>Administradores</label>
-                <div class="chips">@for (n of pessoasPorPapel().admins; track $index) { <span class="chip">{{ n }}</span> }</div>
-              </div>
-            }
-          }
-          @case ('GERAL') {
-            <div class="field">
-              <label>Destinatários</label>
-              <div class="field-value">{{ grupoDescricao() }}</div>
-            </div>
-          }
-        } -->
 
         <!-- 3) Mensagens -->
         <h3>3) Mensagens</h3>
@@ -225,7 +176,6 @@ interface LinhaCiencia {
     /* selo + contexto lado a lado no campo "Tipo" */
     .col-tipo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .chip { background: #eef2f7; border: 1px solid var(--border); border-radius: 14px; padding: 3px 10px; font-size: .82rem; }
-    .nota { font-size: .82rem; color: var(--muted); margin: 6px 0 0; line-height: 1.4; }
     .tabela-ciencia { max-width: 700px; margin: 20px auto 0; }
     .resumo { font-size: .85rem; color: var(--muted); font-weight: 600; margin: 0 0 8px; }
     .marca { font-size: .75rem; color: var(--muted); font-style: italic; margin-left: 6px; }
@@ -266,17 +216,10 @@ export class AdminAvisoDetalheComponent implements OnInit {
 
   mensagens = computed<Detalhe[]>(() => this.d()?.['mensagens'] ?? []);
 
-  // ── Destino ──
+  // ── Local ──
+  /** Salas do cadastro, exibidas no campo "Local" da verificação de sala. */
   salasAlvo = computed<string[]>(() =>
     (this.d()?.['alvos'] ?? []).filter((a: any) => a['alvo_tipo'] === 'SALA').map((a: any) => a['descricao']));
-  plenarios = computed<string[]>(() =>
-    (this.d()?.['escala']?.['plenarios'] ?? []).map((p: any) => p['sala_nome']));
-  pessoasPorPapel = computed<{ operadores: string[]; tecnicos: string[]; admins: string[] }>(() => {
-    const alvos = this.d()?.['alvos'] ?? [];
-    const nomes = (tp: string) => alvos.filter((a: any) => a['alvo_tipo'] === tp).map((a: any) => a['descricao']);
-    return { operadores: nomes('OPERADOR'), tecnicos: nomes('TECNICO'), admins: nomes('ADMIN') };
-  });
-  grupoDescricao = computed<string>(() => (this.d()?.['alvos'] ?? [])[0]?.['descricao'] ?? '');
 
   // ── Tabela (§4) ──
   colDois = computed<string>(() => {

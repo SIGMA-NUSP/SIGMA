@@ -35,9 +35,9 @@ import jakarta.persistence.EntityManager;
 
 /**
  * IT da comunicação que se encerra sozinha quando o último destinatário registra ciência. A conta
- * de quem falta depende do tipo — salas na verificação, pessoas nomeadas na mensagem, público atual
- * no comunicado a um grupo — e por isso vive contra Oracle real, com as ciências gravadas pela via
- * verdadeira ({@code registrarCiencia}).
+ * de quem falta depende do tipo — pessoas nomeadas na mensagem, público atual no comunicado a um
+ * grupo —, e escala e verificação de sala ficam de fora da regra; por isso vive contra Oracle real,
+ * com as ciências gravadas pela via verdadeira ({@code registrarCiencia}).
  *
  * <p>O {@code AvisoCienciaWriter} é instanciado à mão (sem o proxy do Spring): o REQUIRES_NEW não se
  * aplica, tudo corre na transação do teste e o rollback leva os dados embora — mesmo idioma dos
@@ -170,11 +170,11 @@ class AvisoCienciaTotalIT {
         assertEquals(StatusAviso.DESATIVADO, status(id));
     }
 
-    // ═══ Verificação de sala ════════════════════════════════════
+    // ═══ Verificação de sala: fora da regra ═════════════════════
 
     @Test
-    @DisplayName("verificação: a conta é de SALAS — a mesma pessoa encerra o aviso ao dar ciência nas duas")
-    void verificacaoContaSalas() {
+    @DisplayName("verificação de sala: a ciência de todas as salas não desativa — uma pessoa responde pela sala inteira")
+    void verificacaoNaoEncerraPorCiencia() {
         Sala s1 = CenarioFactory.novaSala(emReal(), "SALA_CIENCIA_A");
         Sala s2 = CenarioFactory.novaSala(emReal(), "SALA_CIENCIA_B");
         Operador op = CenarioFactory.novoOperador(emReal(), "Iara Verificadora");
@@ -184,7 +184,7 @@ class AvisoCienciaTotalIT {
         assertEquals(StatusAviso.ATIVO, status(id));
 
         service.registrarCiencia(id, s2.getId(), op.getId(), PapelPessoa.OPERADOR);
-        assertEquals(StatusAviso.DESATIVADO, status(id));
+        assertEquals(StatusAviso.ATIVO, status(id));
     }
 
     // ═══ Escala: fora da regra ══════════════════════════════════

@@ -676,6 +676,15 @@ public class AvisoService {
     private static final String EXPIRA_EXPR =
             "CASE WHEN c.TIPO = 'ESCALA' THEN CAST(es.DATA_FIM AS TIMESTAMP) ELSE c.EXPIRA_EM END";
 
+    /**
+     * "Local" exibido: as salas da verificação de sala, já concatenadas pelo LEFT JOIN sal do
+     * fromJoins. Os demais tipos não são de sala e ficam em branco. A concatenação vive no JOIN, e
+     * não numa subquery aqui, porque a lista de colunas é quebrada por vírgula ao ser lida — a
+     * vírgula que separa os argumentos do LISTAGG desalinharia os nomes das colunas.
+     */
+    private static final String LOCAL_EXPR =
+            "CASE WHEN c.TIPO = 'VERIFICACAO' THEN sal.SALAS END";
+
     private static final Map<String, String> SORT;
     private static final Map<String, String> COL_MAP;
     private static final Map<String, String> COL_TYPES;
@@ -709,13 +718,18 @@ public class AvisoService {
         if (limit < 1) limit = 10;
         String selectCols =
                 "c.ID, c.NUMERO, " + CONTEXTO_TABELA_EXPR + " AS tipo, " + CATEGORIA_EXPR + " AS categoria, " +
+                LOCAL_EXPR + " AS local, " +
                 "c.CRIADO_EM AS criado_em, ad.NOME_COMPLETO AS criado_por, " +
                 EXPIRA_EXPR + " AS expira_em, " + STATUS_EXPR + " AS status, c.PERMANENTE AS permanente";
         // LEFT JOIN da escala: alimenta o status/expira calculados do aviso de ESCALA (es.* nulo p/ os demais).
+        // LEFT JOIN sal: as salas-alvo do cadastro reunidas numa linha só, em ordem alfabética.
         String fromJoins =
                 "FROM FRM_AVISO_CADASTRO c " +
                 "LEFT JOIN PES_ADMINISTRADOR ad ON ad.ID = c.CRIADO_POR_ID " +
-                "LEFT JOIN OPR_ESCALA_SEMANAL es ON es.ID = c.ESCALA_ID";
+                "LEFT JOIN OPR_ESCALA_SEMANAL es ON es.ID = c.ESCALA_ID " +
+                "LEFT JOIN (SELECT al.CADASTRO_ID, LISTAGG(s.NOME, ', ') WITHIN GROUP (ORDER BY s.NOME) AS SALAS " +
+                "             FROM FRM_AVISO_ALVO al JOIN CAD_SALA s ON s.ID = al.SALA_ID " +
+                "            WHERE al.ALVO_TIPO = 'SALA' GROUP BY al.CADASTRO_ID) sal ON sal.CADASTRO_ID = c.ID";
         return DashboardQueryHelper.executePagedQuery(entityManager,
                 selectCols, fromJoins,
                 null, SORT,
@@ -1051,13 +1065,16 @@ public class AvisoService {
     /**
      * Comunicação que se encerra sozinha quando o último destinatário registra ciência: ela já
      * cumpriu o que tinha a fazer e não precisa continuar na lista de ativas. Ficam de fora a que
-     * pede para ser mantida (essa volta a cada login, por escolha do admin), a que não pede ciência
-     * e o aviso de escala, cujo fim é a data da escala.
+     * pede para ser mantida (essa volta a cada login, por escolha do admin), a que não pede
+     * ciência, o aviso de escala — cujo fim é a data da escala — e a verificação de sala: como a
+     * ciência dela é por sala e não por pessoa, uma única pessoa encerraria o comunicado da sala
+     * inteira; o fim dela é o prazo ou a desativação manual.
      */
     private boolean encerraComACienciaDeTodos(AvisoCadastro cad) {
         return Boolean.TRUE.equals(cad.getExigeCiencia())
                 && !Boolean.TRUE.equals(cad.getManterAposCiencia())
-                && cad.getTipo() != TipoAviso.ESCALA;
+                && cad.getTipo() != TipoAviso.ESCALA
+                && cad.getTipo() != TipoAviso.VERIFICACAO;
     }
 
     /**
@@ -1077,18 +1094,12 @@ public class AvisoService {
     }
 
     /**
-     * Quantos destinatários ainda não registraram ciência. A verificação de sala conta SALAS (a
-     * ciência é por sala, não por pessoa); a comunicação a um grupo conta o público ATUAL dele —
-     * quem for cadastrado depois não entra na conta.
+     * Quantos destinatários ainda não registraram ciência. A comunicação a um grupo conta o
+     * público ATUAL dele — quem for cadastrado depois não entra na conta. Só é consultada para
+     * os tipos que se encerram por ciência; os demais nunca chegam a zero.
      */
     private long destinatariosSemCiencia(AvisoCadastro cad) {
         return switch (cad.getTipo()) {
-            case VERIFICACAO -> contarUm("""
-                    SELECT COUNT(*) FROM FRM_AVISO_ALVO al
-                     WHERE al.CADASTRO_ID = ? AND al.ALVO_TIPO = 'SALA'
-                       AND NOT EXISTS (SELECT 1 FROM FRM_AVISO_CIENCIA ci
-                                        WHERE ci.CADASTRO_ID = al.CADASTRO_ID AND ci.SALA_ID = al.SALA_ID)
-                    """, cad.getId());
             case PESSOAL -> contarUm("""
                     SELECT COUNT(*) FROM FRM_AVISO_ALVO al
                      WHERE al.CADASTRO_ID = ? AND al.ALVO_TIPO IN ('OPERADOR','TECNICO','ADMIN')

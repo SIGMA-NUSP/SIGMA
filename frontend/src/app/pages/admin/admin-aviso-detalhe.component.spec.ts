@@ -9,7 +9,8 @@ import { AdminAvisoDetalheComponent } from './admin-aviso-detalhe.component';
 
 /**
  * Render da página de detalhe do aviso (somente leitura), um cenário por TIPO + estados.
- * Cobre: card por seção (Identificação/Vigência/Destino/Mensagens) e tabela que varia por tipo
+ * Cobre: card por seção (Identificação/Vigência/Mensagens), o Local da verificação de sala na
+ * identificação e tabela que varia por tipo
  * (Verificação com Local e sem pendentes; Escala com Plenário, pendentes e "(fora da escala atual)";
  * Agenda com "Função"/"Exibido em"; Pessoal com "Função", pendentes e "(não é destinatário)"; Grupo
  * com a lista de quem deu ciência ou de quem já viu), os rótulos "Ciência" vs "Exibido em" conforme a
@@ -60,6 +61,9 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
   const linhasTexto = (f: ComponentFixture<AdminAvisoDetalheComponent>) =>
     tabela(f).queryAll(By.css('tbody tr')).map(tr => (tr.nativeElement as HTMLElement).textContent?.replace(/\s+/g, ' ').trim() ?? '');
   const resumo = (f: ComponentFixture<AdminAvisoDetalheComponent>) => f.debugElement.query(By.css('.resumo'));
+  /** Rótulos dos campos do card — a tabela de ciência fica fora dele e tem uma coluna de mesmo nome. */
+  const rotulos = (f: ComponentFixture<AdminAvisoDetalheComponent>) =>
+    f.debugElement.queryAll(By.css('.detalhe-card label')).map(l => (l.nativeElement as HTMLElement).textContent?.trim());
 
   // ── Fábricas de payload (o backend devolve {ok, data}) ──
   function base(over: Record<string, any>): Record<string, any> {
@@ -136,6 +140,24 @@ describe('AdminAvisoDetalheComponent — detalhe por tipo', () => {
     expect(linhas[0]).toContain('Plenário 2');
     expect(linhas[0]).toContain('10:05');
     expect(resumo(f)).toBeNull();   // público aberto → sem "X de Y"
+  });
+
+  it('Verificação: o Local fica na identificação, um chip por sala, mesmo sem nenhuma ciência', async () => {
+    resposta = ok({ ...verificacao(), cientes: [] });
+    const f = await render();
+
+    expect(rotulos(f)).toContain('Local');
+    const chips = f.debugElement.queryAll(By.css('.detalhe-card .chip'))
+      .map(c => (c.nativeElement as HTMLElement).textContent?.trim());
+    expect(chips).toEqual(['Plenário 2', 'Plenário 3']);
+  });
+
+  it('só a verificação de sala tem Local na identificação — os demais tipos não exibem o campo', async () => {
+    for (const payload of [escala(), agenda(), pessoal(), grupo()]) {
+      resposta = ok(payload);
+      const f = await render();
+      expect(rotulos(f)).not.toContain('Local');
+    }
   });
 
   // ═══ 2) Escala ═══

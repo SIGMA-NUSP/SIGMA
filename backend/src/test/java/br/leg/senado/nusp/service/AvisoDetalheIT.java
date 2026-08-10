@@ -41,11 +41,11 @@ import br.leg.senado.nusp.repository.TecnicoRepository;
 import jakarta.persistence.EntityManager;
 
 /**
- * IT dos campos NOVOS do {@code obterDetalhe} que não são exclusivos de escala/agenda/pessoal
- * (esses vivem no {@code AvisoEscalaIT}/{@code AvisoAgendaPessoalIT}): a coluna "Local" da
- * Verificação (sala na ciência, §5.c), o fallback de rótulo do legado sem subtipo (§5.a) e a
- * garantia de que o payload só GANHOU campos — nenhum preexistente sumiu. Contra Oracle real
- * porque o detalhe cruza cadastro + alvos + ciências reais.
+ * IT dos campos do {@code obterDetalhe} que não são exclusivos de escala/agenda/pessoal (esses
+ * vivem no {@code AvisoEscalaIT}/{@code AvisoAgendaPessoalIT}): a sala que a ciência da Verificação
+ * carrega, o "Local" que a listagem monta com as salas do cadastro, o fallback de rótulo do legado
+ * sem subtipo e a garantia de que o payload só GANHOU campos — nenhum preexistente sumiu. Contra
+ * Oracle real porque tanto o detalhe quanto a listagem cruzam cadastro + alvos + ciências reais.
  */
 @OracleIT
 class AvisoDetalheIT {
@@ -96,6 +96,13 @@ class AvisoDetalheIT {
         return (String) service.criar(req, admin.getId()).get("id");
     }
 
+    /** Linha da listagem do admin correspondente a um cadastro. */
+    private Map<String, Object> linhaListagem(String cadastroId) {
+        return service.listarTodosPaginado(1, 100, "", "data", "desc", null).data().stream()
+                .filter(m -> cadastroId.equals(m.get("id")))
+                .findFirst().orElseThrow();
+    }
+
     /** Semeia a ciência de verificação (com sala) direto no banco — sem o REQUIRES_NEW do writer. */
     private void darCienciaComSala(String cadastroId, Integer salaId, String operadorId) {
         AvisoCiencia c = new AvisoCiencia();
@@ -127,6 +134,25 @@ class AvisoDetalheIT {
         assertEquals(sala.getId(), cientes.get(0).get("sala_id"));
         assertEquals(sala.getNome(), cientes.get(0).get("sala_nome"));
         assertEquals("Operador", cientes.get(0).get("papel"));
+    }
+
+    @Test
+    @DisplayName("listagem: a coluna Local traz as salas da verificação em ordem alfabética; os demais tipos ficam em branco")
+    void localDaListagem() {
+        Sala nove = CenarioFactory.novaSala(emReal(), "Plenario09");
+        Sala dois = CenarioFactory.novaSala(emReal(), "Plenario02");
+        Operador op = CenarioFactory.novoOperador(emReal());
+        String verificacao = criarVerificacao(List.of(nove.getId(), dois.getId()), "Confira a sala");
+        service.criarPessoalIndividual(
+                List.of(new AvisoService.DestinatarioAviso(op.getId(), PapelPessoa.OPERADOR)),
+                "Aviso pessoal", admin.getId(), null);
+        String pessoal = cadastroRepo.findAll().stream()
+                .filter(c -> c.getTipo() == TipoAviso.PESSOAL)
+                .findFirst().orElseThrow().getId();
+
+        assertEquals(dois.getNome() + ", " + nove.getNome(), linhaListagem(verificacao).get("local"),
+                "as salas do cadastro, em ordem alfabética");
+        assertNull(linhaListagem(pessoal).get("local"), "só a verificação de sala tem local");
     }
 
     @Test
