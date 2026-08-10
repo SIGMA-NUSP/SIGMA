@@ -222,7 +222,7 @@ public class DashboardQueryHelper {
             Map<String, Object> periodo, Map<String, Object> filters, String tiebreaker) {
 
         // ── WHERE (busca textual) ──
-        boolean fromHasWhere = fromJoins.toUpperCase().contains(" WHERE ");
+        boolean fromHasWhere = temWhereExterno(fromJoins);
         List<String> conditions = new ArrayList<>();
         List<Object> params = new ArrayList<>();
 
@@ -254,6 +254,26 @@ public class DashboardQueryHelper {
         // ── ORDER BY ──
         String orderBy = buildOrderBy(validSortCols, colTypes, sort, direction, tiebreaker);
         return new WhereClause(where, orderBy, params);
+    }
+
+    /**
+     * O {@code fromJoins} já traz um WHERE <b>da query externa</b>? Só então as condições da
+     * listagem entram com {@code AND}; caso contrário elas abrem o próprio {@code WHERE}. A
+     * varredura ignora ocorrências dentro de parênteses (subqueries de JOIN/EXISTS): um WHERE
+     * interno não abre cláusula na query externa — e condições emendadas com {@code AND} depois de
+     * um {@code LEFT JOIN (...) ON} grudariam no ON, onde não eliminam linha nenhuma, matando
+     * busca, período e filtros da listagem em silêncio.
+     */
+    private static boolean temWhereExterno(String fromJoins) {
+        String sql = fromJoins.toUpperCase();
+        int profundidade = 0;
+        for (int i = 0; i < sql.length(); i++) {
+            char c = sql.charAt(i);
+            if (c == '(') profundidade++;
+            else if (c == ')') profundidade--;
+            else if (profundidade == 0 && sql.startsWith(" WHERE ", i)) return true;
+        }
+        return false;
     }
 
     /** Executa a query de dados paginada (OFFSET/FETCH) e mapeia as linhas. Binds de dados vêm após os do WHERE. */

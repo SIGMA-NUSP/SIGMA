@@ -676,15 +676,6 @@ public class AvisoService {
     private static final String EXPIRA_EXPR =
             "CASE WHEN c.TIPO = 'ESCALA' THEN CAST(es.DATA_FIM AS TIMESTAMP) ELSE c.EXPIRA_EM END";
 
-    /**
-     * "Local" exibido: as salas da verificação de sala, já concatenadas pelo LEFT JOIN sal do
-     * fromJoins. Os demais tipos não são de sala e ficam em branco. A concatenação vive no JOIN, e
-     * não numa subquery aqui, porque a lista de colunas é quebrada por vírgula ao ser lida — a
-     * vírgula que separa os argumentos do LISTAGG desalinharia os nomes das colunas.
-     */
-    private static final String LOCAL_EXPR =
-            "CASE WHEN c.TIPO = 'VERIFICACAO' THEN sal.SALAS END";
-
     private static final Map<String, String> SORT;
     private static final Map<String, String> COL_MAP;
     private static final Map<String, String> COL_TYPES;
@@ -718,18 +709,13 @@ public class AvisoService {
         if (limit < 1) limit = 10;
         String selectCols =
                 "c.ID, c.NUMERO, " + CONTEXTO_TABELA_EXPR + " AS tipo, " + CATEGORIA_EXPR + " AS categoria, " +
-                LOCAL_EXPR + " AS local, " +
                 "c.CRIADO_EM AS criado_em, ad.NOME_COMPLETO AS criado_por, " +
                 EXPIRA_EXPR + " AS expira_em, " + STATUS_EXPR + " AS status, c.PERMANENTE AS permanente";
         // LEFT JOIN da escala: alimenta o status/expira calculados do aviso de ESCALA (es.* nulo p/ os demais).
-        // LEFT JOIN sal: as salas-alvo do cadastro reunidas numa linha só, em ordem alfabética.
         String fromJoins =
                 "FROM FRM_AVISO_CADASTRO c " +
                 "LEFT JOIN PES_ADMINISTRADOR ad ON ad.ID = c.CRIADO_POR_ID " +
-                "LEFT JOIN OPR_ESCALA_SEMANAL es ON es.ID = c.ESCALA_ID " +
-                "LEFT JOIN (SELECT al.CADASTRO_ID, LISTAGG(s.NOME, ', ') WITHIN GROUP (ORDER BY s.NOME) AS SALAS " +
-                "             FROM FRM_AVISO_ALVO al JOIN CAD_SALA s ON s.ID = al.SALA_ID " +
-                "            WHERE al.ALVO_TIPO = 'SALA' GROUP BY al.CADASTRO_ID) sal ON sal.CADASTRO_ID = c.ID";
+                "LEFT JOIN OPR_ESCALA_SEMANAL es ON es.ID = c.ESCALA_ID";
         return DashboardQueryHelper.executePagedQuery(entityManager,
                 selectCols, fromJoins,
                 null, SORT,

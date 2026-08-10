@@ -28,21 +28,20 @@ const META = { page: 1, limit: 10, total: 2, pages: 1 };
 
 /** Linha de `GET /api/admin/avisos/list` (categoria + contexto já resolvidos pelo backend). */
 const AVISO_ATIVO = {
-  id: 'av-1', numero: 42, categoria: 'AVISO', tipo: 'Verificação', local: 'Plenário 2', criado_em: '2026-07-10',
+  id: 'av-1', numero: 42, categoria: 'AVISO', tipo: 'Verificação', criado_em: '2026-07-10',
   criado_por: 'Ana Prado', expira_em: '2026-07-20', status: 'Ativo' as const, permanente: 0,
 };
 const AVISO_DESATIVADO = {
-  id: 'av-2', numero: 41, categoria: 'AVISO', tipo: 'Verificação', local: 'Plenário 1, Plenário 3',
-  criado_em: '2026-07-01',
+  id: 'av-2', numero: 41, categoria: 'AVISO', tipo: 'Verificação', criado_em: '2026-07-01',
   criado_por: 'João Lima', expira_em: null, status: 'Desativado' as const, permanente: 1,
 };
-/** Mensagem: categoria sem contexto — a célula "Tipo" fica só com o selo. Sem sala: Local em branco. */
+/** Mensagem: categoria sem contexto — a célula "Tipo" fica só com o selo. */
 const MENSAGEM_PESSOAL = {
-  id: 'av-3', numero: 40, categoria: 'MENSAGEM', tipo: null, local: null, criado_em: '2026-06-28',
+  id: 'av-3', numero: 40, categoria: 'MENSAGEM', tipo: null, criado_em: '2026-06-28',
   criado_por: 'Ana Prado', expira_em: null, status: 'Ativo' as const, permanente: 1,
 };
 const NOTIFICACAO_FOLHA = {
-  id: 'av-4', numero: 39, categoria: 'NOTIFICACAO', tipo: 'Folha Semanal', local: null, criado_em: '2026-06-27',
+  id: 'av-4', numero: 39, categoria: 'NOTIFICACAO', tipo: 'Folha Semanal', criado_em: '2026-06-27',
   criado_por: 'Ana Prado', expira_em: null, status: 'Ativo' as const, permanente: 1,
 };
 
@@ -199,20 +198,11 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
       const fixture = await renderizar();
       const titulos = fixture.debugElement.queryAll(By.css('thead th'))
         .map(d => (d.nativeElement as HTMLElement).textContent!.replace(/[▽▼]/g, '').trim());
-      expect(titulos).toEqual(['Cadastro nº', 'Tipo', 'Local', 'Data', 'Cadastrado por', 'Expira em', 'Status', 'Ação']);
+      expect(titulos).toEqual(['Cadastro nº', 'Tipo', 'Data', 'Cadastrado por', 'Expira em', 'Status', 'Ação']);
 
       const celula = celulaTipo(fixture);
       expect(celula.querySelector('.cat-selo')?.textContent?.trim()).toBe('Aviso');
       expect(celula.textContent).toContain('Verificação');
-    });
-
-    it('a coluna "Local" traz as salas da verificação de sala e um traço nos demais tipos', async () => {
-      respostas[EP_LISTA] = ok(AVISO_ATIVO, AVISO_DESATIVADO, MENSAGEM_PESSOAL);
-      const fixture = await renderizar();
-
-      const locais = fixture.debugElement.queryAll(By.css('tbody tr td:nth-child(3)'))
-        .map(d => (d.nativeElement as HTMLElement).textContent!.trim());
-      expect(locais).toEqual(['Plenário 2', 'Plenário 1, Plenário 3', '—']);
     });
 
     it('Mensagem não tem contexto: a célula fica só com o selo', async () => {

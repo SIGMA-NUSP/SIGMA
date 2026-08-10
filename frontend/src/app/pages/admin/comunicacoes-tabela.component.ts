@@ -15,8 +15,6 @@ export interface AvisoRow {
   // Categoria da comunicação (selo) + o contexto que a qualifica ("Escala"); Mensagem vem sem contexto.
   categoria: string;
   tipo: string | null;
-  // Salas da verificação de sala, separadas por vírgula; os demais tipos não são de sala e vêm nulos.
-  local: string | null;
   criado_em: string;
   criado_por: string;
   expira_em: string | null;
@@ -61,8 +59,6 @@ export const STATUS_INATIVOS = ['Expirado', 'Desativado'];
                 [currentSort]="ctrl().state.sort" [currentDir]="ctrl().state.direction"
                 (sortChange)="ctrl().onSort($event)" (filterChange)="onFiltro(c.key, $event)" />
             </th>
-            <!-- Local vem logo depois do Tipo e é só exibição: não ordena nem filtra. -->
-            @if (c.key === 'tipo') { <th>Local</th> }
           }
           <th>Ação</th>
         </tr></thead>
@@ -70,11 +66,11 @@ export const STATUS_INATIVOS = ['Expirado', 'Desativado'];
           @if (ctrl().erro()) {
             <!-- Canal de erro (C7/C13b): "Nenhum aviso cadastrado." numa carga que FALHOU esconde
                  os avisos ATIVOS — e o admin cadastra por cima, ou deixa de desativar o que devia. -->
-            <tr><td colspan="8">
+            <tr><td colspan="7">
               <app-erro-carga [mensagem]="ctrl().erro()" (tentarNovamente)="ctrl().load()" />
             </td></tr>
           } @else if (ctrl().rows().length === 0) {
-            <tr><td colspan="8" class="empty-state">{{ ctrl().loading() ? 'Carregando...' : vazio() }}</td></tr>
+            <tr><td colspan="7" class="empty-state">{{ ctrl().loading() ? 'Carregando...' : vazio() }}</td></tr>
           } @else {
             @for (a of ctrl().rows(); track a.id) {
               <tr class="row-clickable" (dblclick)="abrir.emit(a)" title="Duplo-clique para ver o detalhe">
@@ -83,7 +79,6 @@ export const STATUS_INATIVOS = ['Expirado', 'Desativado'];
                   <app-categoria-selo [categoria]="a.categoria" />
                   <span class="contexto">{{ a.tipo }}</span>
                 </td>
-                <td>{{ a.local || '—' }}</td>
                 <td>{{ a.criado_em | fmtDate }}</td>
                 <td>{{ a.criado_por }}</td>
                 <!-- Escala manda DATA_FIM (permanente no banco); Agenda manda —. Exibe a data sempre que houver. -->

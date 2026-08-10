@@ -1,6 +1,7 @@
 package br.leg.senado.nusp.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -43,9 +44,10 @@ import jakarta.persistence.EntityManager;
 /**
  * IT dos campos do {@code obterDetalhe} que não são exclusivos de escala/agenda/pessoal (esses
  * vivem no {@code AvisoEscalaIT}/{@code AvisoAgendaPessoalIT}): a sala que a ciência da Verificação
- * carrega, o "Local" que a listagem monta com as salas do cadastro, o fallback de rótulo do legado
- * sem subtipo e a garantia de que o payload só GANHOU campos — nenhum preexistente sumiu. Contra
- * Oracle real porque tanto o detalhe quanto a listagem cruzam cadastro + alvos + ciências reais.
+ * carrega, o recorte por status da listagem (as tabelas de Ativas/Inativas), o fallback de rótulo
+ * do legado sem subtipo e a garantia de que o payload só GANHOU campos — nenhum preexistente
+ * sumiu. Contra Oracle real porque tanto o detalhe quanto a listagem cruzam cadastro + alvos +
+ * ciências reais.
  */
 @OracleIT
 class AvisoDetalheIT {
@@ -96,13 +98,6 @@ class AvisoDetalheIT {
         return (String) service.criar(req, admin.getId()).get("id");
     }
 
-    /** Linha da listagem do admin correspondente a um cadastro. */
-    private Map<String, Object> linhaListagem(String cadastroId) {
-        return service.listarTodosPaginado(1, 100, "", "data", "desc", null).data().stream()
-                .filter(m -> cadastroId.equals(m.get("id")))
-                .findFirst().orElseThrow();
-    }
-
     /** Semeia a ciência de verificação (com sala) direto no banco — sem o REQUIRES_NEW do writer. */
     private void darCienciaComSala(String cadastroId, Integer salaId, String operadorId) {
         AvisoCiencia c = new AvisoCiencia();
@@ -137,22 +132,30 @@ class AvisoDetalheIT {
     }
 
     @Test
-    @DisplayName("listagem: a coluna Local traz as salas da verificação em ordem alfabética; os demais tipos ficam em branco")
-    void localDaListagem() {
-        Sala nove = CenarioFactory.novaSala(emReal(), "Plenario09");
-        Sala dois = CenarioFactory.novaSala(emReal(), "Plenario02");
-        Operador op = CenarioFactory.novoOperador(emReal());
-        String verificacao = criarVerificacao(List.of(nove.getId(), dois.getId()), "Confira a sala");
-        service.criarPessoalIndividual(
-                List.of(new AvisoService.DestinatarioAviso(op.getId(), PapelPessoa.OPERADOR)),
-                "Aviso pessoal", admin.getId(), null);
-        String pessoal = cadastroRepo.findAll().stream()
-                .filter(c -> c.getTipo() == TipoAviso.PESSOAL)
-                .findFirst().orElseThrow().getId();
+    @DisplayName("listagem: o filtro de status devolve só os status pedidos — é o recorte das tabelas Ativas/Inativas")
+    void filtroDeStatusRecortaAListagem() {
+        // Uma sala para cada cadastro: uma sala só aceita um aviso ativo por vez.
+        Sala salaDoAtivo = CenarioFactory.novaSala(emReal(), "Plenario02");
+        Sala salaDoDesativado = CenarioFactory.novaSala(emReal(), "Plenario09");
+        String ativo = criarVerificacao(List.of(salaDoAtivo.getId()), "Confira a sala");
+        String desativado = criarVerificacao(List.of(salaDoDesativado.getId()), "Confira o som");
+        service.desativar(desativado);
 
-        assertEquals(dois.getNome() + ", " + nove.getNome(), linhaListagem(verificacao).get("local"),
-                "as salas do cadastro, em ordem alfabética");
-        assertNull(linhaListagem(pessoal).get("local"), "só a verificação de sala tem local");
+        var ativas = service.listarTodosPaginado(1, 100, "", "data", "desc",
+                Map.of("status", Map.of("values", List.of("Ativo", "Pendente", "—"))));
+        List<Object> idsAtivas = ativas.data().stream().map(m -> m.get("id")).toList();
+        assertTrue(idsAtivas.contains(ativo));
+        assertFalse(idsAtivas.contains(desativado), "cadastro desativado não pode aparecer no recorte de ativas");
+        assertTrue(ativas.data().stream().allMatch(m ->
+                List.of("Ativo", "Pendente", "—").contains(m.get("status"))),
+                "nenhuma linha fora dos status pedidos");
+        assertEquals(ativas.data().size(), ativas.total(), "o COUNT usa o mesmo recorte da query de dados");
+
+        var inativas = service.listarTodosPaginado(1, 100, "", "data", "desc",
+                Map.of("status", Map.of("values", List.of("Expirado", "Desativado"))));
+        List<Object> idsInativas = inativas.data().stream().map(m -> m.get("id")).toList();
+        assertTrue(idsInativas.contains(desativado));
+        assertFalse(idsInativas.contains(ativo), "cadastro ativo não pode aparecer no recorte de inativas");
     }
 
     @Test
