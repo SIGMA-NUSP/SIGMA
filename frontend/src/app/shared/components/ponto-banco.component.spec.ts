@@ -27,6 +27,7 @@ describe('PontoBancoComponent', () => {
   let apiGetList: ReturnType<typeof vi.fn>;
   let role: WritableSignal<string | null>;
   let flagRegistroManual: boolean;
+  let flagSolicitarBanco: boolean;
 
   const FOLHAS: MinhaFolha[] = [
     { id: 'f-1', tipo: 'MENSAL', data_inicio: '2026-06-01', data_fim: '2026-06-30', publicado_em: '2026-07-02' },
@@ -42,7 +43,8 @@ describe('PontoBancoComponent', () => {
     );
     apiGetList = vi.fn().mockReturnValue(of({ data: [], meta: { page: 1, limit: 10, total: 0, pages: 1 } }));
     role = signal<string | null>('operador');
-    flagRegistroManual = true;   // o card destravado é o cenário da maioria dos testes
+    flagRegistroManual = true;   // cards destravados são o cenário da maioria dos testes
+    flagSolicitarBanco = true;
 
     await TestBed.configureTestingModule({
       imports: [PontoBancoComponent],
@@ -50,9 +52,11 @@ describe('PontoBancoComponent', () => {
         provideRouter([]),   // o template usa RouterLink no "Voltar" (instanciado só no render)
         { provide: ApiService, useValue: { get: apiGet, getList: apiGetList, post: vi.fn(), patch: vi.fn() } },
         { provide: AuthService, useValue: { role, temFolhaPonto: signal(true) } },
-        // Só a flag do card é controlada; as demais seguem desligadas, como no runtime sem config
+        // Só as flags dos cards são controladas; as demais seguem desligadas, como no runtime sem config
         { provide: FeatureFlagService, useValue: {
-          isEnabled: (flag: string) => flag === 'registroManualPonto' && flagRegistroManual } },
+          isEnabled: (flag: string) =>
+            (flag === 'registroManualPonto' && flagRegistroManual)
+            || (flag === 'solicitarBancoHoras' && flagSolicitarBanco) } },
       ],
     }).compileComponents(); // com timers reais — só depois falsificamos
   });
@@ -74,6 +78,15 @@ describe('PontoBancoComponent', () => {
     const { comp } = criar();
     comp.ngOnInit();
     return comp;
+  }
+
+  /** Botão de card do acordeão pelo texto EXATO (nos testes que renderizam). */
+  function botaoCard(fixture: any, texto: string): HTMLButtonElement {
+    const botao = fixture.debugElement.queryAll(By.css('button.card-pick'))
+      .map((d: any) => d.nativeElement as HTMLButtonElement)
+      .find((b: HTMLButtonElement) => b.textContent?.trim() === texto);
+    if (!botao) throw new Error(`card "${texto}" não encontrado`);
+    return botao;
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -107,7 +120,7 @@ describe('PontoBancoComponent', () => {
     it('erro na carga NÃO é indistinguível de "nenhuma folha"', () => {
       // O cerne do problema era a EQUIVALÊNCIA — falha (500/timeout) e ausência real de
       // folhas deixavam o componente no mesmo estado observável, então a tela dizia "Nenhuma folha
-      // de ponto disponível ainda" nos dois casos, enquanto o prazo de retificação (5 dias) corria.
+      // de ponto disponível" nos dois casos, enquanto o prazo de retificação (5 dias) corria.
       // Agora o erro tem canal próprio: o template exibe a caixa com retry, não a frase do vazio.
       const snapshot = (c: PontoBancoComponent) =>
         ({ folhas: c.folhas(), loading: c.loading(), erro: c.erro() });
@@ -237,14 +250,6 @@ describe('PontoBancoComponent', () => {
   // Registro manual no acordeão
   // ═══════════════════════════════════════════════════════════════════
   describe('registro manual', () => {
-    function botaoCard(fixture: any, texto: string): HTMLButtonElement {
-      const botao = fixture.debugElement.queryAll(By.css('button.card-pick'))
-        .map((d: any) => d.nativeElement as HTMLButtonElement)
-        .find((b: HTMLButtonElement) => b.textContent?.trim() === texto);
-      if (!botao) throw new Error(`card "${texto}" não encontrado`);
-      return botao;
-    }
-
     it('instancia o componente e exibe o botão normalmente', () => {
       const { fixture } = criar();
       fixture.detectChanges();
@@ -273,17 +278,15 @@ describe('PontoBancoComponent', () => {
       expect(painelManual.hidden).toBe(true);
     });
 
-    it('flag desligada: o card fica visível porém inerte, dizendo "Indisponível"', () => {
+    it('flag desligada: o card fica visível porém inerte, sem rótulo extra', () => {
       flagRegistroManual = false;
       const { fixture, comp } = criar();
       fixture.detectChanges();
 
-      const botao = fixture.debugElement.queryAll(By.css('button.card-pick'))
-        .map(d => d.nativeElement as HTMLButtonElement)
-        .find(b => b.textContent!.includes('Registro manual de ponto'))!;
+      const botao = botaoCard(fixture, 'Registro manual de ponto');
       expect(botao.disabled).toBe(true);
       expect(botao.classList.contains('card-disabled')).toBe(true);
-      expect(botao.textContent).toContain('Indisponível');
+      expect(botao.textContent).not.toContain('Indisponível');
 
       botao.click();
       fixture.detectChanges();
@@ -310,12 +313,43 @@ describe('PontoBancoComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
+  // Solicitar Banco de Horas — card sob flag própria
+  // ═══════════════════════════════════════════════════════════════════
+  describe('card do banco de horas sob flag', () => {
+    it('flag desligada: o card fica visível porém inerte, sem rótulo extra', () => {
+      flagSolicitarBanco = false;
+      const { fixture, comp } = criar();
+      fixture.detectChanges();
+
+      const botao = botaoCard(fixture, 'Solicitar Banco de Horas');
+      expect(botao.disabled).toBe(true);
+      expect(botao.classList.contains('card-disabled')).toBe(true);
+      expect(botao.textContent).not.toContain('Indisponível');
+
+      botao.click();
+      fixture.detectChanges();
+      expect(comp.activeCard()).toBeNull();   // o clique num botão inerte não chega ao handler
+    });
+
+    it('flag ligada: o clique abre o painel do banco', () => {
+      const { fixture, comp } = criar();
+      fixture.detectChanges();
+
+      const botao = botaoCard(fixture, 'Solicitar Banco de Horas');
+      expect(botao.disabled).toBe(false);
+      botao.click();
+      fixture.detectChanges();
+      expect(comp.activeCard()).toBe('banco');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
   // O que a TELA mostra no erro — exceção de render deliberada
   // ═══════════════════════════════════════════════════════════════════
   describe('render do estado de erro', () => {
     // O signal `erro` só cumpre o papel se o TEMPLATE o consumir: sem estes testes, apagar o ramo
     // `@else if (erro())` deixaria a suíte verde e o painel voltaria a dizer "Nenhuma folha de ponto
-    // disponível ainda." numa falha de carga. Asserção de PRESENÇA/AUSÊNCIA de estado (mesma família
+    // disponível." numa falha de carga. Asserção de PRESENÇA/AUSÊNCIA de estado (mesma família
     // da exceção já autorizada acima), nunca de disposição ou CSS.
     const painel = (fixture: any) =>
       (fixture.debugElement.queryAll(By.css('.painel'))[0].nativeElement as HTMLElement).textContent ?? '';
@@ -326,7 +360,7 @@ describe('PontoBancoComponent', () => {
       const { fixture } = criar();
       fixture.detectChanges();
 
-      expect(painel(fixture)).toContain('Nenhuma folha de ponto disponível ainda.');
+      expect(painel(fixture)).toContain('Nenhuma folha de ponto disponível.');
       expect(fixture.debugElement.query(By.directive(ErroCargaComponent))).toBeNull();
     });
 
@@ -341,7 +375,7 @@ describe('PontoBancoComponent', () => {
       const caixa = fixture.debugElement.query(By.directive(ErroCargaComponent));
       expect(caixa).not.toBeNull();
       expect(caixa.componentInstance.mensagem()).toContain('Não foi possível carregar as folhas de ponto.');
-      expect(painel(fixture)).not.toContain('Nenhuma folha de ponto disponível ainda.');
+      expect(painel(fixture)).not.toContain('Nenhuma folha de ponto disponível.');
     });
 
     it('o botão da caixa re-dispara a carga das folhas', () => {

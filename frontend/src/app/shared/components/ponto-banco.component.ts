@@ -40,14 +40,16 @@ import { RegistroManualPontoComponent } from './registro-manual-ponto.component'
           <!-- Canal de erro (C7/F42): a carga que falhou NÃO pode se passar por "não há folhas" -->
           <app-erro-carga [mensagem]="erro()" (tentarNovamente)="carregarFolhas()" />
         } @else if (folhas().length === 0) {
-          <p class="text-muted-sm">Nenhuma folha de ponto disponível ainda.</p>
+          <p class="text-muted-sm">Nenhuma folha de ponto disponível.</p>
         } @else {
           <app-folhas-ponto-lista [folhas]="folhas()" />
         }
       </div>
 
-      <!-- Solicitação de folga pelo saldo de banco de horas -->
-      <button class="card-custom card-pick" [class.active]="activeCard() === 'banco'" (click)="toggleCard('banco')">
+      <!-- Solicitação de folga pelo saldo de banco de horas — card visível porém inerte enquanto a flag estiver desligada -->
+      <button class="card-custom card-pick" [featureToggle]="'solicitarBancoHoras'" #fBanco="featureToggle"
+              [class.active]="activeCard() === 'banco'" [disabled]="!fBanco.enabled()"
+              (click)="toggleCard('banco')">
         <strong>Solicitar Banco de Horas</strong>
       </button>
       <div class="painel" [hidden]="activeCard() !== 'banco'">
@@ -60,7 +62,6 @@ import { RegistroManualPontoComponent } from './registro-manual-ponto.component'
               [class.active]="activeCard() === 'manual'" [disabled]="!fManual.enabled()"
               (click)="toggleCard('manual')">
         <strong>Registro manual de ponto</strong>
-        @if (!fManual.enabled()) { <span class="text-muted-sm">Indisponível</span> }
       </button>
       <div class="painel" [hidden]="activeCard() !== 'manual'">
         <app-registro-manual-ponto />
