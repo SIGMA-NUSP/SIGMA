@@ -21,7 +21,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import br.leg.senado.nusp.entity.Administrador;
 import br.leg.senado.nusp.entity.Operador;
 import br.leg.senado.nusp.entity.PontoDiaMarcacao;
+import br.leg.senado.nusp.entity.PontoLote;
+import br.leg.senado.nusp.entity.PontoLotePagina;
 import br.leg.senado.nusp.entity.PontoPessoaMarcacao;
+import br.leg.senado.nusp.entity.PontoRetificacao;
 import br.leg.senado.nusp.entity.PontoTipoMarcacao;
 import br.leg.senado.nusp.entity.PontoTipoMarcacaoExclusaoLog;
 import br.leg.senado.nusp.exception.ServiceValidationException;
@@ -32,6 +35,7 @@ import br.leg.senado.nusp.repository.AdministradorRepository;
 import br.leg.senado.nusp.repository.OperadorRepository;
 import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
+import br.leg.senado.nusp.repository.PontoRetificacaoRepository;
 import br.leg.senado.nusp.repository.PontoTipoMarcacaoExclusaoLogRepository;
 import br.leg.senado.nusp.repository.PontoTipoMarcacaoRepository;
 import br.leg.senado.nusp.repository.TecnicoRepository;
@@ -40,8 +44,9 @@ import jakarta.persistence.EntityManager;
 /**
  * Catálogo de tipos de ocorrência contra o Oracle real: é o banco que garante a
  * unicidade do nome e da badge (pela forma normalizada, entre TODOS os escopos),
- * que os acentos cabem nos tetos de 20 e 3 caracteres, e que nenhuma marcação
- * sobrevive ao tipo que a nomeia.
+ * que os acentos cabem nos tetos de 20 e 3 caracteres, e que nada feito com o tipo
+ * sobrevive a ele — nem a marcação que o administrador pôs no calendário, nem a
+ * declaração que o funcionário fez na própria folha.
  */
 @OracleIT
 class TipoMarcacaoIT {
@@ -52,6 +57,7 @@ class TipoMarcacaoIT {
     @Autowired private PontoTipoMarcacaoRepository tipoRepo;
     @Autowired private PontoDiaMarcacaoRepository diaRepo;
     @Autowired private PontoPessoaMarcacaoRepository pessoaRepo;
+    @Autowired private PontoRetificacaoRepository retificacaoRepo;
     @Autowired private PontoTipoMarcacaoExclusaoLogRepository trilhaRepo;
     @Autowired private OperadorRepository operadorRepo;
     @Autowired private TecnicoRepository tecnicoRepo;
@@ -66,7 +72,7 @@ class TipoMarcacaoIT {
 
     @BeforeEach
     void setUp() {
-        service = new TipoMarcacaoService(tipoRepo, diaRepo, pessoaRepo, trilhaRepo,
+        service = new TipoMarcacaoService(tipoRepo, diaRepo, pessoaRepo, retificacaoRepo, trilhaRepo,
                 new PessoaCadastroLookup(operadorRepo, tecnicoRepo, adminRepo), new ObjectMapper());
         ReflectionTestUtils.setField(service, "masterUsername", MASTER);
         admin = CenarioFactory.novoAdministrador(emReal());
@@ -92,6 +98,43 @@ class TipoMarcacaoIT {
         em.persist(m);
         em.flush();
         return m;
+    }
+
+    /** Tipo que o funcionário escolhe ao retificar o próprio dia. */
+    private PontoTipoMarcacao tipoDoFuncionario(String nome, String badge) {
+        PontoTipoMarcacao tipo = CenarioFactory.novoTipoMarcacao(
+                emReal(), nome, badge, PontoTipoMarcacao.ESCOPO_INDIVIDUAL);
+        tipo.setVisivelFuncionario(true);
+        emReal().merge(tipo);
+        em.flush();
+        return tipo;
+    }
+
+    /** Folha publicada da pessoa — sem ela não há retificação (a origem é obrigatória). */
+    private PontoLotePagina folhaDe(Operador op) {
+        PontoLote lote = CenarioFactory.novoLotePontoPublicado(emReal(), "SEMANAL",
+                LocalDate.of(2026, 7, 6), LocalDate.of(2026, 7, 10), admin);
+        return CenarioFactory.novaPaginaLote(emReal(), lote, 1, op.getId(), "OPERADOR");
+    }
+
+    /** O dia que o funcionário declarou como aquela ocorrência, na folha dele. */
+    private PontoRetificacao declarar(PontoLotePagina folha, Operador op, LocalDate data,
+            PontoTipoMarcacao tipo) {
+        PontoRetificacao r = new PontoRetificacao();
+        r.setPaginaId(folha.getId());
+        r.setPessoaId(op.getId());
+        r.setPessoaTipo("OPERADOR");
+        r.setData(data);
+        r.setTipoId(tipo.getId());
+        em.persist(r);
+        em.flush();
+        return r;
+    }
+
+    /** O tipo, como o preview e o resumo da exclusão o descrevem. */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> tipoDoRelatorio(Map<String, Object> relatorio) {
+        return (Map<String, Object>) relatorio.get("tipo");
     }
 
     @Test
@@ -200,6 +243,7 @@ class TipoMarcacaoIT {
 
         Map<String, Object> preview = service.previewExclusao(tipo.getId(), MASTER);
         assertEquals(3, preview.get("marcacoes"));
+        assertEquals(0, preview.get("retificacoes"), "ninguém declarou este tipo na própria folha");
         assertEquals(2, preview.get("pessoas_afetadas"));
 
         Map<String, Object> resumo = service.excluir(tipo.getId(), MASTER, admin.getId());
@@ -235,6 +279,64 @@ class TipoMarcacaoIT {
         assertTrue(diaRepo.findByTipoIdOrderByData(alvo.getId()).isEmpty());
         assertEquals(1, diaRepo.findByTipoIdOrderByData(vizinho.getId()).size());
         assertTrue(tipoRepo.findById(vizinho.getId()).isPresent());
+    }
+
+    @Test
+    @DisplayName("a exclusão leva também o que os funcionários declararam com o tipo, contado à parte das marcações")
+    void exclusaoLevaAsDeclaracoesDosFuncionarios() {
+        // O tipo que deixou de ser oferecido ao funcionário continua carregando as declarações
+        // feitas enquanto ele estava na lista dele: excluí-lo tem de levá-las junto.
+        PontoTipoMarcacao tipo = CenarioFactory.novoTipoMarcacao(
+                emReal(), "Atestado", "Ate", PontoTipoMarcacao.ESCOPO_INDIVIDUAL);
+        Operador op = CenarioFactory.novoOperador(emReal());
+        Operador outro = CenarioFactory.novoOperador(emReal());
+        marcarPessoa(op, LocalDate.of(2026, 7, 6), tipo);
+        declarar(folhaDe(op), op, LocalDate.of(2026, 7, 7), tipo);
+        declarar(folhaDe(outro), outro, LocalDate.of(2026, 7, 8), tipo);
+
+        Map<String, Object> preview = service.previewExclusao(tipo.getId(), MASTER);
+        assertEquals(1, preview.get("marcacoes"), "a contagem de marcações é só a do administrador");
+        assertEquals(2, preview.get("retificacoes"));
+        assertEquals(2, preview.get("pessoas_afetadas"),
+                "quem foi marcado e também declarou é uma pessoa só");
+
+        Map<String, Object> resumo = service.excluir(tipo.getId(), MASTER, admin.getId());
+        em.flush();
+        em.clear();
+
+        assertEquals(2, resumo.get("retificacoes"));
+        assertTrue(retificacaoRepo.findByTipoIdOrderByData(tipo.getId()).isEmpty(),
+                "nenhuma declaração pode sobreviver ao tipo que a nomeia");
+        assertTrue(pessoaRepo.findByTipoIdOrderByData(tipo.getId()).isEmpty());
+        assertFalse(tipoRepo.findById(tipo.getId()).isPresent());
+
+        List<PontoTipoMarcacaoExclusaoLog> trilha =
+                trilhaRepo.findByTipoIdOrderByExcluidoEmDesc(tipo.getId());
+        assertEquals(1, trilha.size());
+        assertTrue(trilha.get(0).getResumo().contains("\"retificacoes\":2"),
+                () -> "a trilha guarda as duas contagens: " + trilha.get(0).getResumo());
+    }
+
+    @Test
+    @DisplayName("o tipo que o funcionário declara na própria folha não sai do catálogo")
+    void tipoVisivelAoFuncionarioNaoEExcluido() {
+        PontoTipoMarcacao tipo = tipoDoFuncionario("Banco", "Bnc");
+        Operador op = CenarioFactory.novoOperador(emReal());
+        declarar(folhaDe(op), op, LocalDate.of(2026, 7, 7), tipo);
+
+        Map<String, Object> preview = service.previewExclusao(tipo.getId(), MASTER);
+        assertEquals(true, tipoDoRelatorio(preview).get("visivel_funcionario"));
+        assertEquals(1, preview.get("retificacoes"));
+
+        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                () -> service.excluir(tipo.getId(), MASTER, admin.getId()));
+
+        assertEquals("Este tipo não pode ser excluído.", ex.getMessage());
+        assertTrue(tipoRepo.findById(tipo.getId()).isPresent());
+        assertEquals(1, retificacaoRepo.findByTipoIdOrderByData(tipo.getId()).size(),
+                "a recusa não pode ter apagado a declaração de ninguém");
+        assertTrue(trilhaRepo.findByTipoIdOrderByExcluidoEmDesc(tipo.getId()).isEmpty(),
+                "exclusão que não aconteceu não deixa trilha");
     }
 
     @Test

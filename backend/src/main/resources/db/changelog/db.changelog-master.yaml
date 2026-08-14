@@ -107,3 +107,5 @@ databaseChangeLog:
       file: db/changelog/053-ponto-lote-oculto.yaml
   - include:
       file: db/changelog/054-banco-solicitacao-por-grupo.yaml
+  - include:
+      file: db/changelog/055-ponto-retificacao-celula.yaml

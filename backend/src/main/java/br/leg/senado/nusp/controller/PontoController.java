@@ -356,7 +356,10 @@ public class PontoController {
         return ResponseEntity.ok(Map.of("ok", true, "data", data));
     }
 
-    /** Dias já retificados da folha + dia-limite/prazo (para a UI marcar e bloquear). */
+    /**
+     * O que a tela de retificação precisa: os dias da folha com o que cada um aceita, as
+     * retificações já feitas e os tipos de ocorrência que o funcionário pode declarar.
+     */
     @GetMapping("/api/ponto/folha/{paginaId}/retificacoes")
     public ResponseEntity<?> listarRetificacoes(@PathVariable String paginaId,
                                                 @AuthenticationPrincipal UserPrincipal principal) {
@@ -365,30 +368,37 @@ public class PontoController {
     }
 
     /**
-     * Registra a retificação da própria folha publicada — TODOS os dias num corpo só
-     * ({@code {"dias":[…]}}), gravados numa única transação: ou o lote inteiro entra, ou nada
-     * entra. Substituiu o antigo POST por dia, que gravava N transações independentes e
-     * deixava estado parcial.
+     * Grava UM horário de um dia da própria folha: {@code {"data", "campo", "valor"}}, com
+     * {@code campo} em {@code ent1|sai1|ent2|sai2}. Os demais horários do dia continuam como
+     * estavam; a ocorrência declarada, se havia, sai.
      */
-    @PostMapping("/api/ponto/folha/{paginaId}/retificacoes")
-    public ResponseEntity<?> criarRetificacoes(@PathVariable String paginaId,
-                                               @RequestBody(required = false) Map<String, Object> body,
-                                               @AuthenticationPrincipal UserPrincipal principal) {
-        Map<String, Object> data = retificacaoService.criarRetificacoes(paginaId, principal.getId(), body);
-        return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("ok", true, "data", data));
+    @PutMapping("/api/ponto/folha/{paginaId}/retificacoes/celula")
+    public ResponseEntity<?> salvarCelula(@PathVariable String paginaId,
+                                          @RequestBody(required = false) Map<String, Object> body,
+                                          @AuthenticationPrincipal UserPrincipal principal) {
+        Map<String, Object> data = retificacaoService.salvarCelula(paginaId, principal.getId(), body);
+        return ResponseEntity.ok(Map.of("ok", true, "data", data));
     }
 
     /**
-     * Edita (sobrescreve) uma retificação existente do próprio dono, dentro do mesmo prazo
-     * da criação. A data do dia não muda; corpo: {@code {ent1, sai1, ent2, sai2, observacoes}}.
+     * Declara uma ocorrência do catálogo para o dia inteiro: {@code {"data", "tipo_id"}}. Os
+     * horários do dia são zerados.
      */
-    @PutMapping("/api/ponto/folha/{paginaId}/retificacoes/{retificacaoId}")
-    public ResponseEntity<?> editarRetificacao(@PathVariable String paginaId,
-                                               @PathVariable String retificacaoId,
-                                               @RequestBody(required = false) Map<String, Object> body,
-                                               @AuthenticationPrincipal UserPrincipal principal) {
-        Map<String, Object> data = retificacaoService.editarRetificacao(paginaId, retificacaoId, principal.getId(), body);
+    @PutMapping("/api/ponto/folha/{paginaId}/retificacoes/tipo")
+    public ResponseEntity<?> salvarTipoRetificacao(@PathVariable String paginaId,
+                                                   @RequestBody(required = false) Map<String, Object> body,
+                                                   @AuthenticationPrincipal UserPrincipal principal) {
+        Map<String, Object> data = retificacaoService.salvarTipo(paginaId, principal.getId(), body);
         return ResponseEntity.ok(Map.of("ok", true, "data", data));
+    }
+
+    /** Apaga a retificação daquele dia — o dia volta a valer o que a folha oficial trouxe. */
+    @DeleteMapping("/api/ponto/folha/{paginaId}/retificacoes/{data}")
+    public ResponseEntity<?> limparRetificacao(@PathVariable String paginaId,
+                                               @PathVariable String data,
+                                               @AuthenticationPrincipal UserPrincipal principal) {
+        Map<String, Object> out = retificacaoService.limpar(paginaId, principal.getId(), data);
+        return ResponseEntity.ok(Map.of("ok", true, "data", out));
     }
 
     // ══ Banco de Horas (Bloco C / E7) ═══════════════════════════

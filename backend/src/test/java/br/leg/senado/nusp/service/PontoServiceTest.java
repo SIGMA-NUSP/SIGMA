@@ -84,7 +84,6 @@ class PontoServiceTest {
     @Mock private AdministradorRepository administradorRepo;
     @Mock private AvisoService avisoService;
     @Mock private SaldoAberturaService saldoAberturaService;
-    @Mock private RetificacaoService retificacaoService;
     /** "A pessoa existe?" é uma pergunta só — o service não faz mais o switch por repositório. */
     @Mock private PessoaCadastroLookup pessoaCadastro;
 
@@ -673,30 +672,27 @@ class PontoServiceTest {
         }
 
         @Test
-        @DisplayName("mensal prévia cita a competência por extenso (\"Junho/2026\") e o limite de retificação")
+        @DisplayName("mensal prévia cita a competência por extenso (\"Junho/2026\")")
         void mensalPreviaCitaACompetencia() {
             PontoLote lote = mensal(PREVIA, LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
             cenario(lote, pagina(1, OP, "OPERADOR"));
             nenhumaMensalPublicada();
-            when(retificacaoService.limiteRetificacao(lote)).thenReturn(LocalDate.of(2026, 7, 10));
 
             service.publicar(LOTE, true, false, "master.teste");
 
             // A folha mensal É a competência inteira: o intervalo 01/06–30/06 em datas seria redundante
             // e ilegível — o aviso diz o MÊS; o intervalo de datas é identidade só da semanal.
             assertEquals("Folha de ponto mensal — prévia (Junho/2026) publicada. "
-                    + "Acesse \"Minhas Folhas\" para visualizá-la. Retificações até 10/07/2026.",
+                    + "Acesse \"Minhas Folhas\" para visualizá-la.",
                     textoDoAviso());
         }
 
         @Test
-        @DisplayName("a competência preserva o acento do mês (Março/2026); sem limite, sem frase de retificação")
+        @DisplayName("a competência preserva o acento do mês (Março/2026)")
         void mensalPreservaAcentoDoMes() {
             PontoLote lote = mensal(PREVIA, LocalDate.of(2026, 3, 1), LocalDate.of(2026, 3, 31));
             cenario(lote, pagina(1, OP, "OPERADOR"));
             nenhumaMensalPublicada();
-            // Sem limite de retificação, a última frase simplesmente não existe — nada de "até null".
-            when(retificacaoService.limiteRetificacao(lote)).thenReturn(null);
 
             service.publicar(LOTE, true, false, "master.teste");
 
@@ -715,9 +711,6 @@ class PontoServiceTest {
             service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals("Folha de ponto definitiva do mês Julho/2026 publicada.", textoDoAviso());
-            // A definitiva encerra o mês: não há prazo de retificação a anunciar, e por isso o texto
-            // nem chega a perguntar qual seria.
-            verifyNoInteractions(retificacaoService);
         }
 
         @Test
@@ -726,12 +719,11 @@ class PontoServiceTest {
             PontoLote lote = emRevisao("SEMANAL", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 5));
             cenario(lote, pagina(1, OP, "OPERADOR"));
             nenhumaMensalPublicada();
-            when(retificacaoService.limiteRetificacao(lote)).thenReturn(LocalDate.of(2026, 6, 12));
 
             service.publicar(LOTE, true, false, "master.teste");
 
             assertEquals("Folha de ponto semanal (01/06/2026 a 05/06/2026) publicada. "
-                    + "Acesse \"Minhas Folhas\" para visualizá-la. Retificações até 12/06/2026.",
+                    + "Acesse \"Minhas Folhas\" para visualizá-la.",
                     textoDoAviso());
         }
     }
@@ -1008,16 +1000,15 @@ class PontoServiceTest {
         void alertaSomaOAvisoDaFolhaEOsDias() {
             loteSemanalDe(OP);
             folhasComAsLinhas(dia("pag-1", "08:00", "12:00", "13:00"));
-            when(retificacaoService.limiteRetificacao(any())).thenReturn(LocalDate.of(2026, 6, 12));
 
             service.publicar(LOTE, true, false, "master.teste");
 
             verify(avisoService).criarPessoalIndividual(anyList(), texto.capture(), eq(ADMIN),
                     eq(SubtipoAviso.FOLHA_REGISTRO_INCOMPLETO), eq(LOTE));
-            // A mensagem do cadastro é o mesmo aviso de folha que todo mundo recebe — com o prazo, que
-            // é o que dá sentido ao alerta; e o cadastro é um só, para a pessoa ver tudo numa janela.
+            // A mensagem do cadastro é o mesmo aviso de folha que todo mundo recebe; e o cadastro é um
+            // só, para a pessoa ver tudo numa janela.
             assertEquals("Folha de ponto semanal (01/06/2026 a 05/06/2026) publicada. "
-                    + "Acesse \"Minhas Folhas\" para visualizá-la. Retificações até 12/06/2026.",
+                    + "Acesse \"Minhas Folhas\" para visualizá-la.",
                     texto.getValue());
             // O que varia de pessoa para pessoa não é a mensagem: é o complemento do alvo dela.
             assertEquals(List.of(UM_DIA_SO), diasQueCadaUmLe());

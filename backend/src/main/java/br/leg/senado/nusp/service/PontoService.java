@@ -62,7 +62,6 @@ public class PontoService {
     private final AdministradorRepository administradorRepo;
     private final AvisoService avisoService;
     private final SaldoAberturaService saldoAberturaService;
-    private final RetificacaoService retificacaoService;
     /** "A pessoa existe?" do par (id, tipo) — compartilhado com o MarcacaoService desde o F34. */
     private final PessoaCadastroLookup pessoaCadastro;
 
@@ -854,7 +853,7 @@ public class PontoService {
 
     /**
      * Texto do aviso de publicação. A definitiva é a única que não convida a conferir: ela fecha o
-     * mês, não há prazo de retificação a anunciar — só o registro de que o mês foi encerrado.
+     * mês — o aviso dela é só o registro de que o mês foi encerrado.
      */
     private String mensagemFolhaPublicada(PontoLote lote) {
         String competencia = ReportConfig.fmtCompetencia(lote.getDataInicio());
@@ -867,11 +866,9 @@ public class PontoService {
         String periodoTxt = semanal
                 ? ReportConfig.fmtDate(lote.getDataInicio()) + " a " + ReportConfig.fmtDate(lote.getDataFim())
                 : competencia;
-        LocalDate limite = retificacaoService.limiteRetificacao(lote);
         return "Folha de ponto " + folhaTxt + " (" + periodoTxt
                 + ") publicada. "
-                + "Acesse \"Minhas Folhas\" para visualizá-la."
-                + (limite != null ? " Retificações até " + ReportConfig.fmtDate(limite) + "." : "");
+                + "Acesse \"Minhas Folhas\" para visualizá-la.";
     }
 
     // ══════════════════════════════════════════════════════════════

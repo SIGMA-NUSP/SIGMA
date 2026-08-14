@@ -35,6 +35,20 @@ public interface PontoLotePaginaRepository extends JpaRepository<PontoLotePagina
     List<Object[]> findFolhasPublicadasByPessoa(@Param("pessoaId") String pessoaId);
 
     /**
+     * Folhas (páginas) publicadas de uma categoria cujo período alcança a janela [ini, fim) —
+     * pares [PontoLotePagina, PontoLote]. É o que a grade dos administradores precisa para saber o
+     * que a folha imprimiu em cada dia, no mesmo recorte que o dono enxerga (lote oculto fica de
+     * fora), para a equipe inteira de uma vez.
+     */
+    @Query("SELECT p, l FROM PontoLotePagina p, PontoLote l " +
+           "WHERE l.id = p.loteId AND l.status = 'PUBLICADO' AND l.oculto = false " +
+           "AND p.pessoaId IS NOT NULL AND p.pessoaTipo = :pessoaTipo " +
+           "AND l.dataInicio < :fim AND l.dataFim >= :ini")
+    List<Object[]> findFolhasPublicadasDaCategoria(@Param("pessoaTipo") String pessoaTipo,
+                                                   @Param("ini") LocalDate ini,
+                                                   @Param("fim") LocalDate fim);
+
+    /**
      * Candidatas a âncora oficial do banco da pessoa (E2): páginas de lotes
      * PUBLICADOS com BANCO_FINAL_MIN extraído, da cobertura mais recente para
      * a mais antiga (l.dataFim DESC; desempates para determinismo). Pares

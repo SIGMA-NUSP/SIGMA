@@ -1,14 +1,17 @@
 package br.leg.senado.nusp.service;
 
+import br.leg.senado.nusp.entity.PontoDiaMarcacao;
 import br.leg.senado.nusp.entity.PontoLote;
 import br.leg.senado.nusp.entity.PontoLotePagina;
 import br.leg.senado.nusp.entity.PontoRetificacao;
+import br.leg.senado.nusp.entity.PontoTipoMarcacao;
 import br.leg.senado.nusp.exception.ServiceValidationException;
+import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
+import br.leg.senado.nusp.repository.PontoFolhaLinhaRepository;
 import br.leg.senado.nusp.repository.PontoLotePaginaRepository;
 import br.leg.senado.nusp.repository.PontoLoteRepository;
 import br.leg.senado.nusp.repository.PontoRetificacaoRepository;
-import org.springframework.dao.DataIntegrityViolationException;
-import org.junit.jupiter.api.DisplayName;
+import br.leg.senado.nusp.repository.PontoTipoMarcacaoRepository;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -16,32 +19,40 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 
 import java.sql.SQLException;
 import java.sql.SQLIntegrityConstraintViolationException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.YearMonth;
-import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 /**
- * Contrato do {@link RetificacaoService} — grava SEMPRE em LOTE ({@code {"dias":[…]}}), numa única
- * transação.
+ * Contrato do {@link RetificacaoService} — a célula como unidade: uma gravação mexe em UM campo de
+ * UM dia, sem lote, sem par obrigatório e sem prazo em dias.
  *
- * <p>O que o unitário prova aqui: a validação por dia (nomeando o DIA na recusa), a leitura
- * guardada do corpo (shape torto → 400, não 500) e o fato de que o primeiro dia recusado
- * INTERROMPE o lote. A atomicidade propriamente dita — o rollback dos dias já gravados — é do
- * container, e por isso vive no {@code PontoRetificacaoLoteIT} (Oracle real).
+ * <p>O que o unitário prova: o que cada gravação escreve e preserva, a recusa nomeando o dia e a
+ * leitura que a tela recebe. A janela em si tem prova própria ({@link JanelaRetificacaoTest}); aqui
+ * ela aparece pelo efeito — o dia que ela fecha não grava.
  */
 @ExtendWith(MockitoExtension.class)
 class RetificacaoServiceTest {
@@ -49,6 +60,9 @@ class RetificacaoServiceTest {
     @Mock private PontoLotePaginaRepository paginaRepo;
     @Mock private PontoLoteRepository loteRepo;
     @Mock private PontoRetificacaoRepository retificacaoRepo;
+    @Mock private PontoDiaMarcacaoRepository diaMarcacaoRepo;
+    @Mock private PontoTipoMarcacaoRepository tipoRepo;
+    @Mock private PontoFolhaLinhaRepository folhaLinhaRepo;
 
     @InjectMocks
     private RetificacaoService service;
@@ -56,1251 +70,759 @@ class RetificacaoServiceTest {
     private static final String PAG = "pag-1";
     private static final String LOTE = "lote-1";
     private static final String DONO = "op-1";
-    /** Período do lote de todas as folhas mockadas aqui — as bordas que a listagem tem de repassar. */
+    private static final String TIPO_BANCO = "tipo-banco";
+    /** Período da folha aberta na tela: junho/2026, prévia mensal publicada. */
     private static final LocalDate INICIO = LocalDate.of(2026, 6, 1);
     private static final LocalDate FIM = LocalDate.of(2026, 6, 30);
-    /** Competência da folha de jun/2026 acima — a que o gate do mês encerrado consulta. */
-    private static final YearMonth JUNHO = YearMonth.of(2026, 6);
-    /** Competência de uma folha MENSAL inteira, usada nos casos do mês encerrado. */
-    private static final YearMonth JULHO = YearMonth.of(2026, 7);
-    private static final DateTimeFormatter BR = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+    private static final LocalDateTime PUBLICADA_EM = LocalDateTime.of(2026, 6, 30, 10, 0);
+    /** Segunda-feira dentro do período — o dia de trabalho de quase todos os casos. */
+    private static final LocalDate DIA = LocalDate.of(2026, 6, 15);
+    private static final LocalDate SABADO = LocalDate.of(2026, 6, 13);
 
-    /** Configura só a página (dono OPERADOR, do lote LOTE) — o lote fica a cargo de quem chama. */
-    private void mockPagina(String pessoaId) {
-        mockPagina(pessoaId, "OPERADOR");
+    // ══ Fixtures ══════════════════════════════════════════════════
+
+    private static PontoLote lote(String id, String tipo, String categoria,
+                                  LocalDate inicio, LocalDate fim, LocalDateTime publicadoEm) {
+        PontoLote l = new PontoLote();
+        l.setId(id);
+        l.setTipo(tipo);
+        l.setCategoria(categoria);
+        l.setDataInicio(inicio);
+        l.setDataFim(fim);
+        l.setStatus("PUBLICADO");
+        l.setPublicadoEm(publicadoEm);
+        l.setCriadoEm(publicadoEm);
+        return l;
     }
 
-    private void mockPagina(String pessoaId, String pessoaTipo) {
-        PontoLotePagina pg = new PontoLotePagina();
-        pg.setPessoaId(pessoaId);
-        pg.setPessoaTipo(pessoaTipo);
-        pg.setLoteId(LOTE);
-        when(paginaRepo.findById(PAG)).thenReturn(Optional.of(pg));
+    private static PontoLotePagina pagina(String id, String loteId, String pessoaId, String pessoaTipo) {
+        PontoLotePagina p = new PontoLotePagina();
+        p.setId(id);
+        p.setLoteId(loteId);
+        p.setPessoaId(pessoaId);
+        p.setPessoaTipo(pessoaTipo);
+        return p;
     }
 
-    /** Configura página (dono/publicada) + lote (período jun/2026, publicado em pub). */
-    private void mockFolha(String pessoaId, LocalDateTime pub, String status) {
-        mockFolha(pessoaId, "OPERADOR", pub, status);
+    /** A página da folha, sempre buscada por id — a trava da gravação é a do lote, não a dela. */
+    private void mockPagina(PontoLotePagina pg) {
+        lenient().when(paginaRepo.findById(pg.getId())).thenReturn(Optional.of(pg));
     }
 
-    private void mockFolha(String pessoaId, String pessoaTipo, LocalDateTime pub, String status) {
-        mockFolha(pessoaId, pessoaTipo, pub, status, INICIO, FIM);
+    /** A folha aberta na tela + as demais folhas publicadas da pessoa (a janela sai delas). */
+    private PontoLote mockFolha(String pessoaId, String pessoaTipo, PontoLote lote, Object[]... outras) {
+        PontoLotePagina pg = pagina(PAG, lote.getId(), pessoaId, pessoaTipo);
+        List<Object[]> publicadas = new ArrayList<>();
+        publicadas.add(new Object[] {pg, lote});
+        publicadas.addAll(List.of(outras));
+
+        mockPagina(pg);
+        // Os dois caminhos até o lote: quem só lê busca por id, quem vai gravar trava a linha antes.
+        lenient().when(loteRepo.findById(lote.getId())).thenReturn(Optional.of(lote));
+        lenient().when(loteRepo.lockPorId(lote.getId())).thenReturn(Optional.of(lote));
+        lenient().when(paginaRepo.findFolhasPublicadasByPessoa(pessoaId)).thenReturn(publicadas);
+        return lote;
     }
 
-    /** Idem, com o período do lote explícito — para as folhas que não são a de jun/2026. */
-    private void mockFolha(String pessoaId, String pessoaTipo, LocalDateTime pub, String status,
-                           LocalDate inicio, LocalDate fim) {
-        mockPagina(pessoaId, pessoaTipo);
-        PontoLote lote = new PontoLote();
-        lote.setStatus(status);
-        lote.setPublicadoEm(pub);
-        lote.setDataInicio(inicio);
-        lote.setDataFim(fim);
-        lenient().when(loteRepo.findById(LOTE)).thenReturn(Optional.of(lote));
+    /** A folha do caso comum: prévia mensal de junho, do dono, publicada. */
+    private PontoLote mockFolha(Object[]... outras) {
+        return mockFolha(DONO, "OPERADOR",
+                lote(LOTE, "MENSAL", PontoLote.CATEGORIA_PREVIA, INICIO, FIM, PUBLICADA_EM), outras);
     }
 
     /**
-     * A pessoa tem (ou não) folha mensal DEFINITIVA publicada na competência informada. As bordas
-     * são EXATAS: se o service consultar outro mês, outra pessoa ou outro pessoa_tipo, o stub não
-     * casa, o contador volta 0 e o mês é lido como aberto.
+     * A folha da tela é a semanal do meio do mês, e a definitiva do mês chegou depois. A semanal não
+     * é substituída pela mensal (elas ocupam lugares diferentes), então a folha continua abrindo —
+     * o que fecha o dia é a competência.
      */
-    private void mockDefinitiva(String pessoaId, String pessoaTipo, YearMonth mes, boolean publicada) {
-        when(paginaRepo.contarDefinitivasPublicadas(pessoaId, pessoaTipo, mes.atDay(1), mes.atEndOfMonth()))
-                .thenReturn(publicada ? 1L : 0L);
+    private void mockSemanalComDefinitivaDoMes() {
+        mockFolha(DONO, "OPERADOR",
+                lote(LOTE, "SEMANAL", null, LocalDate.of(2026, 6, 15), LocalDate.of(2026, 6, 19),
+                        PUBLICADA_EM),
+                outraFolha("lote-def", "MENSAL", PontoLote.CATEGORIA_DEFINITIVA, INICIO, FIM,
+                        PUBLICADA_EM.plusDays(1)));
     }
 
-    /**
-     * Stub da chave de LEITURA da listagem: pessoa + tipo + período DA FOLHA CONSULTADA.
-     * Os argumentos são EXATOS de propósito — se o service passar outra pessoa, outro pessoa_tipo ou
-     * outro período, o stub não casa, o Mockito devolve lista vazia e o teste que espera conteúdo cai.
-     */
-    private void mockListagem(String pessoaId, String pessoaTipo, PontoRetificacao... rs) {
-        when(retificacaoRepo.findByPessoaIdAndPessoaTipoAndDataBetweenOrderByData(
-                pessoaId, pessoaTipo, INICIO, FIM)).thenReturn(List.of(rs));
+    private static Object[] outraFolha(String loteId, String tipo, String categoria,
+                                       LocalDate inicio, LocalDate fim, LocalDateTime publicadoEm) {
+        PontoLote l = lote(loteId, tipo, categoria, inicio, fim, publicadoEm);
+        return new Object[] {pagina("pag-" + loteId, loteId, DONO, "OPERADOR"), l};
     }
 
-    /** UM dia do lote (chaves ausentes quando o valor é nulo — como o JSON que o front manda). */
-    private Map<String, Object> dia(String data, String e1, String s1, String e2, String s2) {
-        Map<String, Object> m = new HashMap<>();
-        if (data != null) m.put("data", data);
-        if (e1 != null) m.put("ent1", e1);
-        if (s1 != null) m.put("sai1", s1);
-        if (e2 != null) m.put("ent2", e2);
-        if (s2 != null) m.put("sai2", s2);
-        return m;
+    private static PontoTipoMarcacao tipo(String id, String nome, boolean visivel, boolean contaFolga) {
+        PontoTipoMarcacao t = new PontoTipoMarcacao();
+        t.setId(id);
+        t.setNome(nome);
+        t.setBadge(nome.substring(0, Math.min(3, nome.length())));
+        t.setEscopo(PontoTipoMarcacao.ESCOPO_INDIVIDUAL);
+        t.setVisivelFuncionario(visivel);
+        t.setContaFolga(contaFolga);
+        return t;
     }
 
-    /** Corpo do lote a partir dos dias. */
-    @SafeVarargs
-    private static Map<String, Object> lote(Map<String, Object>... dias) {
-        Map<String, Object> corpo = new LinkedHashMap<>();
-        corpo.put("dias", List.of(dias));
-        return corpo;
+    private void mockCatalogo(PontoTipoMarcacao... tipos) {
+        lenient().when(tipoRepo.findAll()).thenReturn(List.of(tipos));
+        for (PontoTipoMarcacao t : tipos) {
+            lenient().when(tipoRepo.findById(t.getId())).thenReturn(Optional.of(t));
+        }
     }
 
-    /** Corpo de lote com UM dia — a forma da maioria dos casos. */
-    private Map<String, Object> body(String data, String e1, String s1, String e2, String s2) {
-        return lote(dia(data, e1, s1, e2, s2));
+    /** A ocorrência que o administrador marcou naquele dia para o quadro inteiro. */
+    private void mockMarcacaoGlobal(LocalDate data, PontoTipoMarcacao tipo) {
+        mockCatalogo(tipo);
+        PontoDiaMarcacao marcacao = new PontoDiaMarcacao();
+        marcacao.setData(data);
+        marcacao.setTipoId(tipo.getId());
+        lenient().when(diaMarcacaoRepo.findByData(data)).thenReturn(Optional.of(marcacao));
     }
 
-    private static PontoRetificacao retificacao(LocalDate data, String e1, String s1,
-                                                String e2, String s2, String obs) {
+    /** A retificação que já existe naquele dia. */
+    private PontoRetificacao mockRetificacaoDoDia(LocalDate data, String e1, String s1, String e2, String s2) {
         PontoRetificacao r = new PontoRetificacao();
+        r.setId("ret-1");
+        r.setPaginaId("pag-antiga");
+        r.setPessoaId(DONO);
+        r.setPessoaTipo("OPERADOR");
         r.setData(data);
         r.setEnt1(e1);
         r.setSai1(s1);
         r.setEnt2(e2);
         r.setSai2(s2);
-        r.setObservacoes(obs);
+        when(retificacaoRepo.findByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", data))
+                .thenReturn(Optional.of(r));
         return r;
     }
 
-    /** Retificação ANCORADA EM OUTRA PÁGINA (outra folha publicada da mesma pessoa). */
-    private static PontoRetificacao retificacaoDaPagina(String paginaId, LocalDate data,
-                                                        String e1, String s1) {
-        PontoRetificacao r = retificacao(data, e1, s1, null, null, null);
-        r.setPaginaId(paginaId);
-        return r;
+    /** As células que a folha imprimiu naquele dia, na projeção do repositório. */
+    private void mockLinhaDaFolha(String paginaId, LocalDate data, String e1, String s1, String e2, String s2) {
+        lenient().when(folhaLinhaRepo.findCelulasDasFolhas(List.of(paginaId)))
+                .thenReturn(List.<Object[]>of(
+                        new Object[] {paginaId, null, data, "15/06/26 - seg", e1, s1, e2, s2}));
     }
 
-    @Test
-    @DisplayName("limiteRetificacao = publicação + 5 dias; null se não publicado ou se o lote for nulo")
-    void limite() {
-        PontoLote lote = new PontoLote();
-        lote.setPublicadoEm(LocalDateTime.of(2026, 7, 8, 17, 44));
-        assertEquals(LocalDate.of(2026, 7, 13), service.limiteRetificacao(lote));
-        assertNull(service.limiteRetificacao(new PontoLote()));  // publicadoEm null
-        assertNull(service.limiteRetificacao(null));
+    private static Map<String, Object> corpoCelula(LocalDate data, String campo, String valor) {
+        return corpoCelula(data == null ? null : data.toString(), campo, valor);
     }
 
-    @Test
-    @DisplayName("prazo é INCLUSIVO: no próprio dia-limite (publicação + 5) a retificação ainda passa")
-    void prazoNoUltimoDia() {
-        mockFolha(DONO, LocalDateTime.now().minusDays(5), "PUBLICADO");   // limite = HOJE
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", LocalDate.of(2026, 6, 15)))
-                .thenReturn(false);
-
-        service.criarRetificacoes(PAG, DONO, body("2026-06-15", "08:00", "12:00", null, null));
-
-        verify(retificacaoRepo).saveAndFlush(any());
+    private static Map<String, Object> corpoCelula(String data, String campo, String valor) {
+        Map<String, Object> m = new HashMap<>();
+        if (data != null) m.put("data", data);
+        if (campo != null) m.put("campo", campo);
+        if (valor != null) m.put("valor", valor);
+        return m;
     }
 
-    @Test
-    @DisplayName("um dia depois do limite (publicação + 6) o prazo já venceu → PRAZO_EXPIRADO")
-    void prazoUmDiaDepoisDoLimite() {
-        mockFolha(DONO, LocalDateTime.now().minusDays(6), "PUBLICADO");   // limite = ONTEM
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", "08:00", "12:00", null, null)));
-
-        assertEquals("PRAZO_EXPIRADO", ex.getMessage());
-        verify(retificacaoRepo, never()).saveAndFlush(any());
+    private static Map<String, Object> corpoTipo(LocalDate data, String tipoId) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("data", data.toString());
+        m.put("tipo_id", tipoId);
+        return m;
     }
 
-    @Test
-    @DisplayName("acesso negado (403) quando o solicitante não é o dono da folha")
-    void acessoNegado() {
-        mockFolha("outro-operador", LocalDateTime.now(), "PUBLICADO");
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", "08:00", "12:00", null, null)));
-        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
-        verify(retificacaoRepo, never()).saveAndFlush(any());
+    private PontoRetificacao capturarSalva() {
+        ArgumentCaptor<PontoRetificacao> captor = ArgumentCaptor.forClass(PontoRetificacao.class);
+        verify(retificacaoRepo).saveAndFlush(captor.capture());
+        return captor.getValue();
     }
 
-    @Test
-    @DisplayName("página inexistente → 404 'Folha não encontrada.' (o lote nem é consultado)")
-    void paginaInexistente() {
-        when(paginaRepo.findById(PAG)).thenReturn(Optional.empty());
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", "08:00", "12:00", null, null)));
-
-        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
-        assertEquals("Folha não encontrada.", ex.getMessage());
-        verifyNoInteractions(loteRepo, retificacaoRepo);
+    private ServiceValidationException recusaAoSalvar(Map<String, Object> corpo) {
+        return assertThrows(ServiceValidationException.class,
+                () -> service.salvarCelula(PAG, DONO, corpo));
     }
 
-    @Test
-    @DisplayName("lote inexistente (página órfã) → 404 'Lote não encontrado.'")
-    void loteInexistente() {
-        mockPagina(DONO);
-        when(loteRepo.findById(LOTE)).thenReturn(Optional.empty());
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", "08:00", "12:00", null, null)));
-
-        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
-        assertEquals("Lote não encontrado.", ex.getMessage());
-        verifyNoInteractions(retificacaoRepo);
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> lista(Map<String, Object> resposta, String chave) {
+        return (List<Map<String, Object>>) resposta.get(chave);
     }
 
-    @Test
-    @DisplayName("lote não publicado (status REVISAO) → 404 'Folha indisponível.', ainda que o dono confira")
-    void loteNaoPublicado() {
-        mockFolha(DONO, null, "REVISAO");   // sem PUBLICADO_EM, como todo lote em revisão
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", "08:00", "12:00", null, null)));
-
-        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
-        assertEquals("Folha indisponível.", ex.getMessage());
-        verifyNoInteractions(retificacaoRepo);
-    }
-
-    @Test
-    @DisplayName("data fora do período da folha → 400 nomeando o dia")
-    void foraDoPeriodo() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-07-01", "08:00", "12:00", null, null)));
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertTrue(ex.getMessage().startsWith("O dia 01/07/2026"), ex.getMessage());
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("data ANTES do início do período → 400, com o período (início a fim) na mensagem")
-    void antesDoPeriodo() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-05-31", "08:00", "12:00", null, null)));
-
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertTrue(ex.getMessage().contains("01/06/2026 a 30/06/2026"), ex.getMessage());
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("as bordas do período (1º e último dia) são aceitas")
-    void bordasDoPeriodoAceitas() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(eq(DONO), eq("OPERADOR"), any()))
-                .thenReturn(false);
-
-        service.criarRetificacoes(PAG, DONO, body("2026-06-01", "08:00", "12:00", null, null));
-        service.criarRetificacoes(PAG, DONO, body("2026-06-30", "08:00", "12:00", null, null));
-
-        verify(retificacaoRepo).saveAndFlush(argThat(r -> LocalDate.of(2026, 6, 1).equals(r.getData())));
-        verify(retificacaoRepo).saveAndFlush(argThat(r -> LocalDate.of(2026, 6, 30).equals(r.getData())));
-    }
-
-    @Test
-    @DisplayName("período é validado ANTES do prazo: com as duas violações, o erro é o do período")
-    void periodoPrecedeOPrazo() {
-        mockFolha(DONO, LocalDateTime.now().minusDays(10), "PUBLICADO");   // prazo também vencido
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-07-01", "08:00", "12:00", null, null)));
-
-        assertNotEquals("PRAZO_EXPIRADO", ex.getMessage());
-        assertTrue(ex.getMessage().contains("fora do período"), ex.getMessage());
-    }
-
-    @Test
-    @DisplayName("página ainda sem match (PESSOA_ID nulo) → 403, não 500")
-    void paginaSemMatch() {
-        mockPagina(null);
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", "08:00", "12:00", null, null)));
-
-        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
-        verifyNoInteractions(loteRepo, retificacaoRepo);
-    }
-
-    @Test
-    @DisplayName("prazo vencido (publicação há mais de 5 dias) → 400 PRAZO_EXPIRADO com o dia-limite no payload")
-    void prazoVencido() {
-        LocalDateTime pub = LocalDateTime.now().minusDays(10);
-        mockFolha(DONO, pub, "PUBLICADO");
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", "08:00", "12:00", null, null)));
-        assertEquals("PRAZO_EXPIRADO", ex.getMessage());
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertNotNull(ex.getExtraFields());
-        assertTrue(String.valueOf(ex.getExtraFields().get("message"))
-                        .contains(pub.toLocalDate().plusDays(5).format(BR)),
-                String.valueOf(ex.getExtraFields()));
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("folha PUBLICADA sem PUBLICADO_EM (anomalia de dado): criar → PRAZO_EXPIRADO; listar → limite null e prazo vencido")
-    void publicadaSemPublicadoEm() {
-        mockFolha(DONO, null, "PUBLICADO");
-        mockListagem(DONO, "OPERADOR");
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", "08:00", "12:00", null, null)));
-        assertEquals("PRAZO_EXPIRADO", ex.getMessage());
-
-        Map<String, Object> out = service.listarRetificacoes(PAG, DONO);
-        assertNull(out.get("limite"));
-        assertNull(out.get("limite_fmt"));
-        assertEquals(Boolean.TRUE, out.get("prazo_expirado"));
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("número ímpar de horários (3) → 400 (pares incompletos), nomeando o dia")
-    void horarioImpar() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", "08:00", "12:00", "13:00", null)));
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertTrue(ex.getMessage().contains("15/06/2026"), ex.getMessage());
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("1º par incompleto (entrada sem saída) e 2º par sem o 1º → 400")
-    void paresIncompletos() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-
-        List<Map<String, Object>> corpos = List.of(
-                body("2026-06-15", "08:00", null, null, null),          // ent1 sem sai1
-                body("2026-06-15", null, null, "13:00", "17:00"));      // par 2 sem par 1
-
-        for (Map<String, Object> corpo : corpos) {
-            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.criarRetificacoes(PAG, DONO, corpo));
-            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-            assertTrue(ex.getMessage().contains("pares"), ex.getMessage());
-        }
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("zero horários → 400 nomeando o dia e o par exigido; NADA persiste")
-    void zeroHorariosRecusado() {
-        // A regra 0/2/4 aceitava os 4 nulos (par de nulos é "completo" por vacuidade) e nascia uma
-        // retificação VAZIA: a jusante ela vence a precedência da grade e da planilha da chefia, o
-        // dia que dizia "Banco de horas"/"Férias" vira célula vazia, a contagem de folgas cai 1 — e,
-        // sem edição nem exclusão na v1, só o DBA desfazia. O mínimo agora é UM par completo.
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        Map<String, Object> vazio = dia("2026-06-15", null, null, null, null);
-        vazio.put("observacoes", "estava em reunião externa");   // nem a observação salva o dia sem horários
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, lote(vazio)));
-
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertTrue(ex.getMessage().contains("15/06/2026"), ex.getMessage());
-        assertTrue(ex.getMessage().contains("Ent. 1") && ex.getMessage().contains("Saí. 1"), ex.getMessage());
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("o par 2 sozinho continua recusado: o mínimo é o par 1, e as colunas são sequenciais")
-    void parMinimoEhOPar1() {
-        // O "≥1 par completo" NÃO relaxa a sequência: ENT.2/SAÍ.2 são a SEGUNDA entrada/saída do
-        // dia, não "o turno da tarde" — um dia de duas marcações é sempre o par 1.
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", null, null, "13:00", "17:00")));
-
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertTrue(ex.getMessage().contains("pares") && ex.getMessage().contains("15/06/2026"), ex.getMessage());
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    // observação: teto de 300 caracteres (a coluna é VARCHAR2(2000) em BYTES)
-    // ══════════════════════════════════════════════════════════════
-
-    @Test
-    @DisplayName("observação de 300 caracteres passa (o limite é inclusivo)")
-    void observacaoNoLimitePassa() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(anyString(), anyString(), any()))
-                .thenReturn(false);
-        String obs = "ç".repeat(300);   // 600 bytes em UTF-8 — dentro do budget da coluna
-
-        Map<String, Object> item = dia("2026-06-15", "08:00", "12:00", null, null);
-        item.put("observacoes", obs);
-        service.criarRetificacoes(PAG, DONO, lote(item));
-
-        verify(retificacaoRepo).saveAndFlush(argThat(r -> obs.equals(r.getObservacoes())));
-    }
-
-    @Test
-    @DisplayName("observação de 301 caracteres → 400 nomeando o CAMPO e o dia; nada persiste")
-    void observacaoAcimaDoLimiteRecusada() {
-        // Antes: o texto ia cru ao banco, o ORA-12899 virava DataIntegrityViolationException e o catch
-        // (escrito para a UK) respondia "O dia … já foi retificado." — o usuário ia embora convencido
-        // de que gravou, não repetia, e o prazo de 5 dias corria.
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-
-        Map<String, Object> item = dia("2026-06-15", "08:00", "12:00", null, null);
-        item.put("observacoes", "ç".repeat(301));
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, lote(item)));
-
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertTrue(ex.getMessage().contains("observação") && ex.getMessage().contains("15/06/2026"), ex.getMessage());
-        assertTrue(ex.getMessage().contains("300 caracteres"), ex.getMessage());
-        assertFalse(ex.getMessage().contains("já foi retificado"), "não pode mentir dizendo que o dia já existe");
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("horário mal formatado → 400")
-    void horaInvalida() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", "8h", "12:00", null, null)));
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("horário fora da faixa HH:MM (24:00, 08:60, 8:00, 0800) → 400 nomeando o dia e o valor")
-    void horaForaDaFaixa() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-
-        for (String hora : List.of("24:00", "08:60", "8:00", "0800")) {
-            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", hora, "12:00", null, null)));
-            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-            assertTrue(ex.getMessage().contains("HH:MM"), ex.getMessage());
-            assertTrue(ex.getMessage().contains("15/06/2026") && ex.getMessage().contains(hora), ex.getMessage());
-        }
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("data ausente ou mal formatada no corpo → 400 (não 500)")
-    void dataInvalidaNoCorpo() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-
-        ServiceValidationException semData = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body(null, "08:00", "12:00", null, null)));
-        assertEquals("Data obrigatória.", semData.getMessage());
-
-        for (String data : List.of("15-06-2026", "2026-06-31")) {
-            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.criarRetificacoes(PAG, DONO, body(data, "08:00", "12:00", null, null)));
-            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-            assertTrue(ex.getMessage().contains("AAAA-MM-DD"), ex.getMessage());
-        }
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("dia já retificado → 400 (UK pessoa-dia)")
-    void diaRepetido() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", LocalDate.of(2026, 6, 15)))
-                .thenReturn(true);
-        assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", "08:00", "12:00", null, null)));
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("caso válido (2 horários, dentro do prazo/período) → persiste")
-    void sucesso() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(anyString(), anyString(), any()))
-                .thenReturn(false);
-        Map<String, Object> out = service.criarRetificacoes(PAG, DONO,
-                body("2026-06-15", "08:00", "12:00", null, null));
-        assertEquals(1, out.get("total"));
-        verify(retificacaoRepo).saveAndFlush(argThat(r ->
-                DONO.equals(r.getPessoaId()) && "OPERADOR".equals(r.getPessoaTipo())
-                        && LocalDate.of(2026, 6, 15).equals(r.getData())
-                        && "08:00".equals(r.getEnt1()) && "12:00".equals(r.getSai1())
-                        && r.getEnt2() == null && r.getSai2() == null));
-    }
-
-    @Test
-    @DisplayName("caso válido com 4 horários (2º par) → persiste os quatro + página e observações aparadas")
-    void sucessoQuatroHorarios() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", LocalDate.of(2026, 6, 15)))
-                .thenReturn(false);
-        Map<String, Object> item = dia("2026-06-15", "08:00", "12:00", "13:00", "17:00");
-        item.put("observacoes", "  Esqueci de bater a saída.  ");
-
-        Map<String, Object> out = service.criarRetificacoes(PAG, DONO, lote(item));
-
-        assertEquals(1, out.get("total"));
-        verify(retificacaoRepo).saveAndFlush(argThat(r ->
-                PAG.equals(r.getPaginaId())
-                        && DONO.equals(r.getPessoaId()) && "OPERADOR".equals(r.getPessoaTipo())
-                        && LocalDate.of(2026, 6, 15).equals(r.getData())
-                        && "08:00".equals(r.getEnt1()) && "12:00".equals(r.getSai1())
-                        && "13:00".equals(r.getEnt2()) && "17:00".equals(r.getSai2())
-                        && "Esqueci de bater a saída.".equals(r.getObservacoes())));
-    }
-
-    @Test
-    @DisplayName("corrida: violação da UK no flush vira 400 (não 500) — o nome da constraint é achado NA CADEIA de causas")
-    void duplicataConcorrente() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(anyString(), anyString(), any()))
-                .thenReturn(false);
-        when(retificacaoRepo.saveAndFlush(any())).thenThrow(violacaoUk());
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", "08:00", "12:00", null, null)));
-
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertEquals("O dia 15/06/2026 já foi retificado.", ex.getMessage());
-    }
-
-    @Test
-    @DisplayName("violação de integridade que NÃO é a UK não é capturada: sobe (500 honesto), em vez de mentir 'já foi retificado'")
-    void violacaoQueNaoEhAUkNaoViraJaRetificado() {
-        // O catch antigo assumia que TODA DataIntegrityViolationException era a corrida da UK — e
-        // respondia "O dia … já foi retificado.", mandando o usuário embora convencido de que gravou,
-        // com o prazo de 5 dias correndo. As outras constraints da tabela (035) produzem DIVE de
-        // verdade: aqui, a CHECK dos pares (ORA-02290) — a última linha de defesa se alguma mudança
-        // futura na aplicação deixar passar um par torto. Ela não pode virar "já retificado".
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(anyString(), anyString(), any()))
-                .thenReturn(false);
-        SQLException ora02290 = new SQLIntegrityConstraintViolationException(
-                "ORA-02290: check constraint (NUSP.CK_PNT_RETIF_PARES) violated");
-        DataIntegrityViolationException outra =
-                new DataIntegrityViolationException("could not execute statement", ora02290);
-        when(retificacaoRepo.saveAndFlush(any())).thenThrow(outra);
-
-        DataIntegrityViolationException propagada = assertThrows(DataIntegrityViolationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-06-15", "08:00", "12:00", null, null)));
-
-        assertSame(outra, propagada, "a exceção original deve subir intacta para o handler global");
-    }
-
-    /**
-     * A violação da UK como o Oracle a entrega: o nome da constraint NÃO está na mensagem de topo —
-     * ele viaja na causa (ORA-00001 do ojdbc, repetido pelo Hibernate). É a cadeia que o service varre.
-     */
-    private static DataIntegrityViolationException violacaoUk() {
-        SQLException ora00001 = new SQLIntegrityConstraintViolationException(
-                "ORA-00001: unique constraint (NUSP.UK_PNT_RETIF_PESSOA_DIA) violated");
-        return new DataIntegrityViolationException("could not execute statement", ora00001);
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    // a gravação é um LOTE só (contrato e interrupção)
-    // ══════════════════════════════════════════════════════════════
-
-    @Test
-    @DisplayName("lote de 3 dias válidos: os 3 são gravados na MESMA chamada, e a folha é resolvida UMA vez")
-    void loteValidoGravaTodosOsDias() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(eq(DONO), eq("OPERADOR"), any()))
-                .thenReturn(false);
-
-        Map<String, Object> out = service.criarRetificacoes(PAG, DONO, lote(
-                dia("2026-06-15", "08:00", "12:00", null, null),
-                dia("2026-06-16", "09:00", "15:00", null, null),
-                dia("2026-06-17", "08:00", "12:00", "13:00", "17:00")));
-
-        assertEquals(3, out.get("total"));
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> criadas = (List<Map<String, Object>>) out.get("retificacoes");
-        assertEquals(List.of("2026-06-15", "2026-06-16", "2026-06-17"),
-                criadas.stream().map(m -> m.get("data")).toList());
-
-        verify(retificacaoRepo, times(3)).saveAndFlush(any());
-        // o acesso/publicação da folha é verificado UMA vez para o lote inteiro (não N vezes)
-        verify(paginaRepo).findById(PAG);
-        verify(loteRepo).findById(LOTE);
-    }
-
-    @Test
-    @DisplayName("dia recusado NO MEIO do lote interrompe tudo: o 3º nem é tentado e a recusa nomeia o 2º")
-    void diaRecusadoInterrompeOLote() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", LocalDate.of(2026, 6, 15)))
-                .thenReturn(false);
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", LocalDate.of(2026, 6, 16)))
-                .thenReturn(true);   // este dia já foi retificado antes
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, lote(
-                        dia("2026-06-15", "08:00", "12:00", null, null),
-                        dia("2026-06-16", "09:00", "15:00", null, null),
-                        dia("2026-06-17", "08:00", "12:00", null, null))));
-
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertEquals("O dia 16/06/2026 já foi retificado.", ex.getMessage(),
-                "a recusa tem de dizer QUAL dia consertar");
-        // o 1º dia chegou a ser gravado na sessão — quem o desfaz é o rollback da transação (IT);
-        // o 3º nem foi tentado: o lote parou no primeiro erro.
-        verify(retificacaoRepo, times(1)).saveAndFlush(any());
-        verify(retificacaoRepo).saveAndFlush(argThat(r -> LocalDate.of(2026, 6, 15).equals(r.getData())));
-        verify(retificacaoRepo, never())
-                .existsByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", LocalDate.of(2026, 6, 17));
-    }
-
-    @Test
-    @DisplayName("o mesmo dia repetido DENTRO do corpo é recusado (a UK só veria o 2º INSERT)")
-    void diaRepetidoNoProprioLote() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", LocalDate.of(2026, 6, 15)))
-                .thenReturn(false);
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, lote(
-                        dia("2026-06-15", "08:00", "12:00", null, null),
-                        dia("2026-06-15", "09:00", "15:00", null, null))));
-
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertTrue(ex.getMessage().contains("15/06/2026") && ex.getMessage().contains("mais de uma vez"),
-                ex.getMessage());
-    }
-
-    @Test
-    @DisplayName("corpo sem 'dias' (ou com a lista vazia, ou sem corpo nenhum) → 400 nomeando o campo, não 500")
-    void corpoSemDias() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-
-        List<Map<String, Object>> corpos = new java.util.ArrayList<>();
-        corpos.add(null);                                    // sem corpo
-        corpos.add(new LinkedHashMap<>());                   // corpo vazio
-        Map<String, Object> listaVazia = new LinkedHashMap<>();
-        listaVazia.put("dias", List.of());
-        corpos.add(listaVazia);                              // "dias": []
-
-        for (Map<String, Object> corpo : corpos) {
-            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.criarRetificacoes(PAG, DONO, corpo));
-            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-            assertEquals("Informe ao menos um dia em 'dias'.", ex.getMessage());
-        }
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("shape torto no corpo ('dias' não-lista; item não-objeto) → 400 nomeando o campo, não 500")
-    void corpoComShapeErrado() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-
-        Map<String, Object> naoLista = new LinkedHashMap<>();
-        naoLista.put("dias", "2026-06-15");
-        ServiceValidationException lista = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, naoLista));
-        assertEquals(HttpStatus.BAD_REQUEST, lista.getStatus());
-        assertEquals("Campo 'dias' deve ser uma lista.", lista.getMessage());
-
-        Map<String, Object> itemTorto = new LinkedHashMap<>();
-        itemTorto.put("dias", List.of("2026-06-15"));   // string onde deveria vir o objeto do dia
-        ServiceValidationException item = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, itemTorto));
-        assertEquals(HttpStatus.BAD_REQUEST, item.getStatus());
-        assertEquals("Item de 'dias' deve ser um objeto.", item.getMessage());
-
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("listarRetificacoes: dias retificados + dia-limite (ISO e dd/MM/yyyy) com o prazo em aberto")
-    void listarRetificacoesDentroDoPrazo() {
-        LocalDateTime pub = LocalDateTime.now().minusDays(1);   // limite = ontem + 5 → prazo aberto em qualquer dia
-        mockFolha(DONO, pub, "PUBLICADO");
-        mockListagem(DONO, "OPERADOR",
-                retificacao(LocalDate.of(2026, 6, 10), "09:00", "15:00", null, null, null),
-                retificacao(LocalDate.of(2026, 6, 15), "08:00", "12:00", "13:00", "17:00", "Esqueci de bater."));
-
-        Map<String, Object> out = service.listarRetificacoes(PAG, DONO);
-
-        LocalDate limite = pub.toLocalDate().plusDays(5);
-        assertEquals(limite.toString(), out.get("limite"));
-        assertEquals(limite.format(BR), out.get("limite_fmt"));
-        assertEquals(Boolean.FALSE, out.get("prazo_expirado"));
-
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> lista = (List<Map<String, Object>>) out.get("retificacoes");
-        assertEquals(2, lista.size());
-        assertEquals("2026-06-10", lista.get(0).get("data"));       // ordem do repositório, ISO
-        assertEquals("09:00", lista.get(0).get("ent1"));
-        assertEquals("15:00", lista.get(0).get("sai1"));
-        assertNull(lista.get(0).get("ent2"));
-        assertNull(lista.get(0).get("sai2"));
-        assertNull(lista.get(0).get("observacoes"));
-        assertEquals("2026-06-15", lista.get(1).get("data"));
-        assertEquals("13:00", lista.get(1).get("ent2"));
-        assertEquals("17:00", lista.get(1).get("sai2"));
-        assertEquals("Esqueci de bater.", lista.get(1).get("observacoes"));
-    }
-
-    @Test
-    @DisplayName("listarRetificacoes com prazo vencido: prazo_expirado=true e a lista continua visível")
-    void listarRetificacoesPrazoVencido() {
-        LocalDateTime pub = LocalDateTime.now().minusDays(10);
-        mockFolha(DONO, pub, "PUBLICADO");
-        mockListagem(DONO, "OPERADOR",
-                retificacao(LocalDate.of(2026, 6, 10), "09:00", "15:00", null, null, null));
-
-        Map<String, Object> out = service.listarRetificacoes(PAG, DONO);
-
-        assertEquals(pub.toLocalDate().plusDays(5).toString(), out.get("limite"));
-        assertEquals(Boolean.TRUE, out.get("prazo_expirado"));
-        assertEquals(1, ((List<?>) out.get("retificacoes")).size());   // vencido não esconde o histórico
-    }
-
-    @Test
-    @DisplayName("listarRetificacoes no próprio dia-limite: prazo_expirado=false (a fronteira é inclusiva)")
-    void listarRetificacoesNoDiaLimite() {
-        LocalDateTime pub = LocalDateTime.now().minusDays(5);   // limite = HOJE
-        mockFolha(DONO, pub, "PUBLICADO");
-        mockListagem(DONO, "OPERADOR",
-                retificacao(LocalDate.of(2026, 6, 10), "09:00", "15:00", null, null, null));
-
-        Map<String, Object> out = service.listarRetificacoes(PAG, DONO);
-
-        assertEquals(pub.toLocalDate().plusDays(5).toString(), out.get("limite"));
-        assertEquals(Boolean.FALSE, out.get("prazo_expirado"));
-    }
-
-    @Test
-    @DisplayName("listarRetificacoes de folha alheia → 403 (mesma guarda do criar)")
-    void listarRetificacoesAcessoNegado() {
-        mockFolha("outro-operador", LocalDateTime.now(), "PUBLICADO");
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.listarRetificacoes(PAG, DONO));
-
-        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
-        verifyNoInteractions(retificacaoRepo);
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    // a listagem lê pela chave da UK (pessoa+tipo+dia), recortada pelo PERÍODO da folha
-    // ══════════════════════════════════════════════════════════════
-
-    @Test
-    @DisplayName("retificação ancorada em OUTRA folha da mesma pessoa APARECE na listagem, e o limite continua sendo o da folha consultada")
-    void retificacaoDeOutraFolhaAparece() {
-        // O caso vivido: semanais cumulativas (01–05, 01–12…) dão à mesma pessoa 2 folhas publicadas
-        // cobrindo o mesmo dia. A listagem filtrava por PAGINA_ID e a gravação valida pela UK
-        // (pessoa+tipo+dia): na folha B o dia retificado pela folha A vinha LIVRE e habilitado, e o
-        // envio levava 400 "já foi retificado" sem nenhuma retificação visível na tela — sem edição
-        // nem exclusão na v1, o dia ficava congelado sem explicação.
-        LocalDateTime pub = LocalDateTime.now();
-        mockFolha(DONO, pub, "PUBLICADO");
-        mockListagem(DONO, "OPERADOR",
-                retificacaoDaPagina("pag-OUTRA-FOLHA", LocalDate.of(2026, 6, 5), "08:00", "12:00"));
-
-        Map<String, Object> out = service.listarRetificacoes(PAG, DONO);
-
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> lista = (List<Map<String, Object>>) out.get("retificacoes");
-        assertEquals(1, lista.size(), "o dia retificado por OUTRA folha da mesma pessoa tem de aparecer aqui");
-        assertEquals("2026-06-05", lista.get(0).get("data"));
-        assertEquals("08:00", lista.get(0).get("ent1"));
-        // …e o prazo continua sendo o DESTA folha: a janela é da folha consultada, não da que
-        // ancorou a retificação.
-        assertEquals(pub.toLocalDate().plusDays(5).toString(), out.get("limite"));
-        assertEquals(pub.toLocalDate().plusDays(5).format(BR), out.get("limite_fmt"));
-        assertEquals(Boolean.FALSE, out.get("prazo_expirado"));
-    }
-
-    @Test
-    @DisplayName("a consulta usa as 4 chaves certas: dono + pessoa_tipo da página + as BORDAS EXATAS do período do lote")
-    void listagemConsultaPessoaTipoEPeriodoDoLote() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        mockListagem(DONO, "OPERADOR");
-
-        service.listarRetificacoes(PAG, DONO);
-
-        ArgumentCaptor<String> pessoa = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> tipo = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<LocalDate> inicio = ArgumentCaptor.forClass(LocalDate.class);
-        ArgumentCaptor<LocalDate> fim = ArgumentCaptor.forClass(LocalDate.class);
-        verify(retificacaoRepo).findByPessoaIdAndPessoaTipoAndDataBetweenOrderByData(
-                pessoa.capture(), tipo.capture(), inicio.capture(), fim.capture());
-
-        assertEquals(DONO, pessoa.getValue());
-        assertEquals("OPERADOR", tipo.getValue());
-        // as bordas são as do lote, sem deslocamento: o Between é inclusivo, e é o que faz o 1º e o
-        // último dia da folha entrarem (a inclusividade contra o banco real está no IT cross-folha).
-        assertEquals(INICIO, inicio.getValue());
-        assertEquals(FIM, fim.getValue());
-    }
-
-    @Test
-    @DisplayName("o pessoa_tipo da CONSULTA também vem da página: a folha do técnico lista como TECNICO")
-    void listagemUsaPessoaTipoDaPagina() {
-        // O tipo hardcoded ("OPERADOR") passaria despercebido nas folhas de operador e devolveria
-        // lista vazia para todo técnico — que veria seus dias já retificados como livres.
-        mockFolha("tec-7", "TECNICO", LocalDateTime.now(), "PUBLICADO");
-        when(retificacaoRepo.findByPessoaIdAndPessoaTipoAndDataBetweenOrderByData(
-                "tec-7", "TECNICO", INICIO, FIM))
-                .thenReturn(List.of(retificacao(LocalDate.of(2026, 6, 9), "07:00", "13:00", null, null, null)));
-
-        Map<String, Object> out = service.listarRetificacoes(PAG, "tec-7");
-
-        assertEquals(1, ((List<?>) out.get("retificacoes")).size());
-        verify(retificacaoRepo).findByPessoaIdAndPessoaTipoAndDataBetweenOrderByData(
-                "tec-7", "TECNICO", INICIO, FIM);
-    }
-
-    @Test
-    @DisplayName("o pessoa_tipo vem da PÁGINA, não é fixo: folha de técnico grava e consulta a UK como TECNICO")
-    void pessoaTipoVemDaPagina() {
-        mockFolha("tec-7", "TECNICO", LocalDateTime.now(), "PUBLICADO");
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData("tec-7", "TECNICO", LocalDate.of(2026, 6, 15)))
-                .thenReturn(false);
-
-        service.criarRetificacoes(PAG, "tec-7", body("2026-06-15", "08:00", "12:00", null, null));
-
-        verify(retificacaoRepo).saveAndFlush(argThat(r ->
-                "tec-7".equals(r.getPessoaId()) && "TECNICO".equals(r.getPessoaTipo())));
-    }
-
-    @Test
-    @DisplayName("a resposta devolve o id gerado de cada retificação do lote")
-    void respostaDevolveIdGerado() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", LocalDate.of(2026, 6, 15)))
-                .thenReturn(false);
-        when(retificacaoRepo.saveAndFlush(any())).thenAnswer(inv -> {
-            PontoRetificacao r = inv.getArgument(0);
-            r.setId("ret-9");    // o id nasce no INSERT (IDENTITY/UUID)
-            return r;
-        });
-
-        Map<String, Object> out = service.criarRetificacoes(PAG, DONO,
-                body("2026-06-15", "08:00", "12:00", null, null));
-
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> criadas = (List<Map<String, Object>>) out.get("retificacoes");
-        assertEquals(1, criadas.size());
-        assertEquals("ret-9", criadas.get(0).get("id"));
-        assertEquals("2026-06-15", criadas.get(0).get("data"));
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    // mês encerrado pela folha mensal DEFINITIVA: o dia fica intocável ainda que o prazo corra
-    // ══════════════════════════════════════════════════════════════
-
-    @Test
-    @DisplayName("dia de mês encerrado por folha definitiva → 400 nomeando o dia e a competência; o lote inteiro cai")
-    void mesEncerradoRecusaACriacao() {
-        // A definitiva fecha o mês de vez: o prazo de 5 dias da folha ainda estar aberto não
-        // reabre o dia — nem para a própria definitiva, nem para a prévia que ela substituiu, nem
-        // para uma semanal do mesmo mês.
-        mockFolha(DONO, "OPERADOR", LocalDateTime.now(), "PUBLICADO",
-                JULHO.atDay(1), JULHO.atEndOfMonth());
-        mockDefinitiva(DONO, "OPERADOR", JULHO, true);
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, lote(
-                        dia("2026-07-15", "08:00", "12:00", null, null),
-                        dia("2026-07-16", "09:00", "15:00", null, null))));
-
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertEquals("Não é possível retificar. Folha definitiva já publicada.", ex.getMessage());
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("sem folha definitiva publicada o mês segue aberto e o dia grava normalmente")
-    void mesAbertoDeixaGravar() {
-        mockFolha(DONO, "OPERADOR", LocalDateTime.now(), "PUBLICADO",
-                JULHO.atDay(1), JULHO.atEndOfMonth());
-        mockDefinitiva(DONO, "OPERADOR", JULHO, false);
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", LocalDate.of(2026, 7, 15)))
-                .thenReturn(false);
-
-        Map<String, Object> out = service.criarRetificacoes(PAG, DONO,
-                body("2026-07-15", "08:00", "12:00", null, null));
-
-        assertEquals(1, out.get("total"));
-        verify(retificacaoRepo).saveAndFlush(argThat(r -> LocalDate.of(2026, 7, 15).equals(r.getData())));
-    }
-
-    @Test
-    @DisplayName("o gate olha o mês DO DIA: na folha que vira o mês, o dia de junho grava e o de julho é recusado")
-    void gateOlhaOMesDoDia() {
-        // Folha semanal a cavalo de dois meses: o fechamento é por competência, não pelo período
-        // da folha — dias do mesmo lote podem ter destinos diferentes.
-        mockFolha(DONO, "OPERADOR", LocalDateTime.now(), "PUBLICADO",
-                LocalDate.of(2026, 6, 29), LocalDate.of(2026, 7, 5));
-        mockDefinitiva(DONO, "OPERADOR", JUNHO, false);
-        mockDefinitiva(DONO, "OPERADOR", JULHO, true);
-        when(retificacaoRepo.existsByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", LocalDate.of(2026, 6, 30)))
-                .thenReturn(false);
-
-        service.criarRetificacoes(PAG, DONO, body("2026-06-30", "08:00", "12:00", null, null));
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-07-01", "08:00", "12:00", null, null)));
-
-        assertEquals("Não é possível retificar. Folha definitiva já publicada.", ex.getMessage());
-        verify(retificacaoRepo, times(1)).saveAndFlush(any());
-        verify(retificacaoRepo).saveAndFlush(argThat(r -> LocalDate.of(2026, 6, 30).equals(r.getData())));
-    }
-
-    @Test
-    @DisplayName("prazo vencido E mês encerrado: a recusa que sai é a do PRAZO — o mês nem chega a ser consultado")
-    void prazoPrecedeOMesEncerrado() {
-        mockFolha(DONO, "OPERADOR", LocalDateTime.now().minusDays(10), "PUBLICADO",
-                JULHO.atDay(1), JULHO.atEndOfMonth());
-        lenient().when(paginaRepo.contarDefinitivasPublicadas(
-                DONO, "OPERADOR", JULHO.atDay(1), JULHO.atEndOfMonth())).thenReturn(1L);
-
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.criarRetificacoes(PAG, DONO, body("2026-07-15", "08:00", "12:00", null, null)));
-
-        assertEquals("PRAZO_EXPIRADO", ex.getMessage(), "o prazo é o gate anterior e é ele quem responde");
-        verify(paginaRepo, never()).contarDefinitivasPublicadas(anyString(), anyString(), any(), any());
-        verify(retificacaoRepo, never()).saveAndFlush(any());
-    }
-
-    @Test
-    @DisplayName("listarRetificacoes: mes_fechado=true quando a definitiva já encerrou o mês da folha")
-    void listagemMesFechado() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        mockListagem(DONO, "OPERADOR");
-        mockDefinitiva(DONO, "OPERADOR", JUNHO, true);
-
-        Map<String, Object> out = service.listarRetificacoes(PAG, DONO);
-
-        assertEquals(Boolean.TRUE, out.get("mes_fechado"));
-        // o bloqueio do mês é independente do prazo: a folha recém-publicada tem a janela aberta
-        assertEquals(Boolean.FALSE, out.get("prazo_expirado"));
-    }
-
-    @Test
-    @DisplayName("listarRetificacoes: mes_fechado=false enquanto nenhuma definitiva encerrou o mês")
-    void listagemMesAberto() {
-        mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-        mockListagem(DONO, "OPERADOR");
-        mockDefinitiva(DONO, "OPERADOR", JUNHO, false);
-
-        assertEquals(Boolean.FALSE, service.listarRetificacoes(PAG, DONO).get("mes_fechado"));
-    }
-
-    @Test
-    @DisplayName("listarRetificacoes: folha que toca dois meses com só um encerrado → mes_fechado=false")
-    void listagemMesFechadoParcial() {
-        // A tela só se bloqueia por inteiro quando NADA na folha é retificável; na cobertura
-        // parcial ela continua editável e a recusa acontece dia a dia, na gravação.
-        LocalDate inicio = LocalDate.of(2026, 6, 29);
-        LocalDate fim = LocalDate.of(2026, 7, 5);
-        mockFolha(DONO, "OPERADOR", LocalDateTime.now(), "PUBLICADO", inicio, fim);
-        when(retificacaoRepo.findByPessoaIdAndPessoaTipoAndDataBetweenOrderByData(DONO, "OPERADOR", inicio, fim))
-                .thenReturn(List.of());
-        mockDefinitiva(DONO, "OPERADOR", JUNHO, true);
-        mockDefinitiva(DONO, "OPERADOR", JULHO, false);
-
-        Map<String, Object> out = service.listarRetificacoes(PAG, DONO);
-
-        assertEquals(Boolean.FALSE, out.get("mes_fechado"));
-        verify(paginaRepo).contarDefinitivasPublicadas(
-                DONO, "OPERADOR", JULHO.atDay(1), JULHO.atEndOfMonth());
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    // edição in-place: mesma chave de leitura da listagem, mesmo prazo e mesmas regras
-    // de conteúdo da criação; a DATA e a página de origem nunca mudam
     // ══════════════════════════════════════════════════════════════
 
     @Nested
-    @DisplayName("editarRetificacao — sobrescreve horários/observação de uma retificação existente")
-    class EditarRetificacao {
+    class AcessoAFolha {
 
-        private static final String RET = "ret-1";
-        private final LocalDate DIA = LocalDate.of(2026, 6, 15);
+        @Test
+        void folhaDeOutraPessoaNaoAbre() {
+            mockFolha("op-2", "OPERADOR",
+                    lote(LOTE, "MENSAL", PontoLote.CATEGORIA_PREVIA, INICIO, FIM, PUBLICADA_EM));
 
-        /** Retificação JÁ GRAVADA (par 1 + observação) — o estado anterior que a edição sobrescreve. */
-        private PontoRetificacao existente(String pessoaId, String pessoaTipo, LocalDate data) {
-            PontoRetificacao r = retificacao(data, "07:00", "13:00", null, null, "Anotação original.");
-            r.setId(RET);
-            r.setPaginaId(PAG);
-            r.setPessoaId(pessoaId);
-            r.setPessoaTipo(pessoaTipo);
-            when(retificacaoRepo.findById(RET)).thenReturn(Optional.of(r));
-            return r;
-        }
+            ServiceValidationException e = assertThrows(ServiceValidationException.class,
+                    () -> service.listarRetificacoes(PAG, DONO));
 
-        private PontoRetificacao existente() {
-            return existente(DONO, "OPERADOR", DIA);
-        }
-
-        /** Corpo do PUT (chaves ausentes quando o valor é nulo — como o JSON que o front manda). */
-        private Map<String, Object> corpo(String e1, String s1, String e2, String s2) {
-            return dia(null, e1, s1, e2, s2);
+            assertEquals(HttpStatus.FORBIDDEN, e.getStatus());
+            verifyNoInteractions(retificacaoRepo);
         }
 
         @Test
-        @DisplayName("sucesso: os 4 horários e a observação são SOBRESCRITOS; DATA e PAGINA_ID ficam intactos; a resposta traz o id")
-        void sucessoSobrescreve() {
-            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-            PontoRetificacao r = existente();
+        void paginaSemPessoaNaoAbre() {
+            mockFolha(null, "OPERADOR",
+                    lote(LOTE, "MENSAL", PontoLote.CATEGORIA_PREVIA, INICIO, FIM, PUBLICADA_EM));
 
-            Map<String, Object> body = corpo("08:00", "12:00", "13:00", "17:00");
-            body.put("observacoes", "  Corrigido o segundo par.  ");
-            Map<String, Object> out = service.editarRetificacao(PAG, RET, DONO, body);
-
-            verify(retificacaoRepo).save(same(r));
-            assertEquals("08:00", r.getEnt1());
-            assertEquals("12:00", r.getSai1());
-            assertEquals("13:00", r.getEnt2());
-            assertEquals("17:00", r.getSai2());
-            assertEquals("Corrigido o segundo par.", r.getObservacoes());   // aparada, como na criação
-            assertEquals(DIA, r.getData(), "editar não muda o DIA da retificação");
-            assertEquals(PAG, r.getPaginaId(), "editar não muda a página que a criou");
-
-            assertEquals(RET, out.get("id"));
-            assertEquals("2026-06-15", out.get("data"));
-            assertEquals("08:00", out.get("ent1"));
-            assertEquals("12:00", out.get("sai1"));
-            assertEquals("13:00", out.get("ent2"));
-            assertEquals("17:00", out.get("sai2"));
-            assertEquals("Corrigido o segundo par.", out.get("observacoes"));
+            assertEquals(HttpStatus.FORBIDDEN,
+                    assertThrows(ServiceValidationException.class,
+                            () -> service.listarRetificacoes(PAG, DONO)).getStatus());
         }
 
         @Test
-        @DisplayName("a sobrescrita vale para APAGAR: editar para 2 horários zera o 2º par, e sem 'observacoes' no corpo a antiga vira null")
-        void edicaoApagaSegundoParEObservacao() {
-            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-            PontoRetificacao r = existente();
-            r.setEnt2("13:00");
-            r.setSai2("17:00");
+        void paginaInexistente() {
+            when(paginaRepo.findById(PAG)).thenReturn(Optional.empty());
 
-            Map<String, Object> out = service.editarRetificacao(PAG, RET, DONO,
-                    corpo("09:00", "15:00", null, null));
+            ServiceValidationException e = assertThrows(ServiceValidationException.class,
+                    () -> service.listarRetificacoes(PAG, DONO));
 
-            assertEquals("09:00", r.getEnt1());
-            assertEquals("15:00", r.getSai1());
-            assertNull(r.getEnt2());
-            assertNull(r.getSai2());
-            assertNull(r.getObservacoes(), "a edição sobrescreve TUDO: observação ausente no corpo apaga a antiga");
-            assertNull(out.get("ent2"));
-            assertNull(out.get("sai2"));
-            assertNull(out.get("observacoes"));
+            assertEquals(HttpStatus.NOT_FOUND, e.getStatus());
+            verifyNoInteractions(loteRepo, retificacaoRepo);
         }
 
         @Test
-        @DisplayName("a listagem devolve o id de cada retificação — é ele que identifica o registro na edição")
-        void listagemDevolveOId() {
-            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-            PontoRetificacao r = retificacao(LocalDate.of(2026, 6, 10), "09:00", "15:00", null, null, null);
-            r.setId("ret-77");
-            mockListagem(DONO, "OPERADOR", r);
+        void loteInexistente() {
+            when(paginaRepo.findById(PAG)).thenReturn(Optional.of(pagina(PAG, LOTE, DONO, "OPERADOR")));
+            when(loteRepo.findById(LOTE)).thenReturn(Optional.empty());
 
-            Map<String, Object> out = service.listarRetificacoes(PAG, DONO);
-
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> lista = (List<Map<String, Object>>) out.get("retificacoes");
-            assertEquals(1, lista.size());
-            assertEquals("ret-77", lista.get(0).get("id"));
-            assertEquals("2026-06-10", lista.get(0).get("data"));
+            assertEquals(HttpStatus.NOT_FOUND,
+                    assertThrows(ServiceValidationException.class,
+                            () -> service.listarRetificacoes(PAG, DONO)).getStatus());
         }
 
         @Test
-        @DisplayName("id inexistente (ou nulo) → 404 'Retificação não encontrada.', não 500")
-        void idInexistente() {
-            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-            when(retificacaoRepo.findById(anyString())).thenReturn(Optional.empty());
+        void folhaEmRevisaoNaoAbreNemParaODono() {
+            PontoLote lote = lote(LOTE, "MENSAL", PontoLote.CATEGORIA_PREVIA, INICIO, FIM, null);
+            lote.setStatus("REVISAO");
+            mockFolha(DONO, "OPERADOR", lote);
 
-            for (String id : java.util.Arrays.asList("nao-existe", null)) {
-                ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                        () -> service.editarRetificacao(PAG, id, DONO, corpo("08:00", "12:00", null, null)));
-                assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
-                assertEquals("Retificação não encontrada.", ex.getMessage());
+            assertEquals("Folha indisponível.",
+                    assertThrows(ServiceValidationException.class,
+                            () -> service.listarRetificacoes(PAG, DONO)).getMessage());
+        }
+
+        @Test
+        void folhaDeLoteOcultoNaoExisteParaODono() {
+            PontoLote lote = lote(LOTE, "MENSAL", PontoLote.CATEGORIA_PREVIA, INICIO, FIM, PUBLICADA_EM);
+            lote.setOculto(true);
+            mockFolha(DONO, "OPERADOR", lote);
+
+            assertEquals("Folha indisponível.",
+                    assertThrows(ServiceValidationException.class,
+                            () -> service.listarRetificacoes(PAG, DONO)).getMessage());
+        }
+
+        @Test
+        void folhaSubstituidaPorOutraPublicadaDepoisNaoAbre() {
+            mockFolha(outraFolha("lote-2", "MENSAL", PontoLote.CATEGORIA_PREVIA, INICIO, FIM,
+                    PUBLICADA_EM.plusDays(1)));
+
+            assertEquals("Folha indisponível.",
+                    assertThrows(ServiceValidationException.class,
+                            () -> service.listarRetificacoes(PAG, DONO)).getMessage());
+        }
+    }
+
+    @Nested
+    class Listagem {
+
+        @Test
+        void osDiasCobremOPeriodoDaFolha() {
+            mockFolha();
+
+            List<Map<String, Object>> dias = lista(service.listarRetificacoes(PAG, DONO), "dias");
+
+            assertEquals(30, dias.size());
+            assertEquals("2026-06-01", dias.get(0).get("data"));
+            assertEquals("2026-06-30", dias.get(29).get("data"));
+            assertTrue(dias.stream().allMatch(d -> Boolean.TRUE.equals(d.get("aberto"))));
+            assertNull(dias.get(0).get("marcacao_global"));
+        }
+
+        @Test
+        void diaFechadoPelaJanelaVemFechado() {
+            // A folha da tela é a semanal antiga; a semana seguinte, publicada depois, fechou-a.
+            mockFolha(DONO, "OPERADOR",
+                    lote(LOTE, "SEMANAL", null, LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 7),
+                            PUBLICADA_EM.minusDays(7)),
+                    outraFolha("lote-2", "SEMANAL", null, LocalDate.of(2026, 6, 1),
+                            LocalDate.of(2026, 6, 14), PUBLICADA_EM));
+
+            List<Map<String, Object>> dias = lista(service.listarRetificacoes(PAG, DONO), "dias");
+
+            assertEquals(7, dias.size());
+            assertTrue(dias.stream().noneMatch(d -> Boolean.TRUE.equals(d.get("aberto"))));
+        }
+
+        @Test
+        void oDiaMarcadoParaTodosVemComONomeDaOcorrencia() {
+            mockFolha();
+            PontoTipoMarcacao feriado = tipo("t-feriado", "Feriado", false, false);
+            mockCatalogo(feriado);
+            PontoDiaMarcacao marcacao = new PontoDiaMarcacao();
+            marcacao.setData(DIA);
+            marcacao.setTipoId(feriado.getId());
+            when(diaMarcacaoRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(INICIO, FIM.plusDays(1)))
+                    .thenReturn(List.of(marcacao));
+
+            List<Map<String, Object>> dias = lista(service.listarRetificacoes(PAG, DONO), "dias");
+
+            assertEquals("Feriado", dias.get(14).get("marcacao_global"));
+            assertNull(dias.get(13).get("marcacao_global"));
+        }
+
+        @Test
+        void soOsTiposVisiveisAoFuncionarioViajam() {
+            mockFolha();
+            mockCatalogo(tipo(TIPO_BANCO, "Banco de horas", true, true),
+                    tipo("t-atestado", "Atestado", false, false));
+
+            List<Map<String, Object>> tipos = lista(service.listarRetificacoes(PAG, DONO), "tipos");
+
+            assertEquals(1, tipos.size());
+            assertEquals(Map.of("id", TIPO_BANCO, "nome", "Banco de horas"), tipos.get(0));
+        }
+
+        @Test
+        void osTiposVemNaOrdemDoCatalogo() {
+            mockFolha();
+            mockCatalogo(tipo("t-2", "Ônibus", true, false), tipo("t-1", "Abono", true, false));
+
+            List<Map<String, Object>> tipos = lista(service.listarRetificacoes(PAG, DONO), "tipos");
+
+            assertEquals(List.of("Abono", "Ônibus"), tipos.stream().map(t -> t.get("nome")).toList());
+        }
+
+        @Test
+        void aRetificacaoDeHorarioVemCampoACampo() {
+            mockFolha();
+            PontoRetificacao r = new PontoRetificacao();
+            r.setId("ret-1");
+            r.setData(DIA);
+            r.setSai1("12:30");
+            when(retificacaoRepo.findByPessoaIdAndPessoaTipoAndDataBetweenOrderByData(
+                    DONO, "OPERADOR", INICIO, FIM)).thenReturn(List.of(r));
+
+            Map<String, Object> item = lista(service.listarRetificacoes(PAG, DONO), "retificacoes").get(0);
+
+            assertEquals("ret-1", item.get("id"));
+            assertEquals("2026-06-15", item.get("data"));
+            assertEquals("12:30", item.get("sai1"));
+            assertNull(item.get("ent1"));
+            assertNull(item.get("tipo_id"));
+            assertNull(item.get("tipo_nome"));
+            assertEquals(false, item.get("conta_folga"));
+        }
+
+        @Test
+        void aRetificacaoDeTipoVemComONomeEOEfeitoDeFolga() {
+            mockFolha();
+            mockCatalogo(tipo(TIPO_BANCO, "Banco de horas", true, true));
+            PontoRetificacao r = new PontoRetificacao();
+            r.setId("ret-1");
+            r.setData(DIA);
+            r.setTipoId(TIPO_BANCO);
+            when(retificacaoRepo.findByPessoaIdAndPessoaTipoAndDataBetweenOrderByData(
+                    DONO, "OPERADOR", INICIO, FIM)).thenReturn(List.of(r));
+
+            Map<String, Object> item = lista(service.listarRetificacoes(PAG, DONO), "retificacoes").get(0);
+
+            assertEquals(TIPO_BANCO, item.get("tipo_id"));
+            assertEquals("Banco de horas", item.get("tipo_nome"));
+            assertEquals(true, item.get("conta_folga"));
+        }
+
+        @Test
+        void aObservacaoNaoViajaMais() {
+            mockFolha();
+            PontoRetificacao r = new PontoRetificacao();
+            r.setData(DIA);
+            r.setEnt1("08:00");
+            r.setObservacoes("esqueci de bater");
+            when(retificacaoRepo.findByPessoaIdAndPessoaTipoAndDataBetweenOrderByData(
+                    DONO, "OPERADOR", INICIO, FIM)).thenReturn(List.of(r));
+
+            Map<String, Object> item = lista(service.listarRetificacoes(PAG, DONO), "retificacoes").get(0);
+
+            assertFalse(item.containsKey("observacoes"));
+        }
+
+        @Test
+        void aLeituraNaoTravaAPublicacao() {
+            mockFolha();
+
+            service.listarRetificacoes(PAG, DONO);
+
+            verify(loteRepo).findById(LOTE);
+            verify(loteRepo, never()).lockPorId(anyString());
+        }
+
+        @Test
+        void aListagemLeAPessoaEOPeriodoDaPagina() {
+            mockFolha("tec-7", "TECNICO",
+                    lote(LOTE, "MENSAL", PontoLote.CATEGORIA_PREVIA, INICIO, FIM, PUBLICADA_EM));
+
+            service.listarRetificacoes(PAG, "tec-7");
+
+            verify(retificacaoRepo).findByPessoaIdAndPessoaTipoAndDataBetweenOrderByData(
+                    "tec-7", "TECNICO", INICIO, FIM);
+        }
+    }
+
+    @Nested
+    class GravacaoDeCelula {
+
+        @Test
+        void gravaSoOCampoDigitado() {
+            mockFolha();
+
+            Map<String, Object> resposta = service.salvarCelula(PAG, DONO, corpoCelula(DIA, "sai1", "12:30"));
+
+            PontoRetificacao salva = capturarSalva();
+            assertEquals("12:30", salva.getSai1());
+            assertNull(salva.getEnt1());
+            assertNull(salva.getEnt2());
+            assertNull(salva.getSai2());
+            assertEquals(DIA, salva.getData());
+            assertEquals(DONO, salva.getPessoaId());
+            assertEquals("OPERADOR", salva.getPessoaTipo());
+            assertEquals(PAG, salva.getPaginaId());
+            assertEquals("12:30", resposta.get("sai1"));
+        }
+
+        @Test
+        void aGravacaoTravaAPublicacaoAntesDeLerODia() {
+            mockFolha();
+
+            service.salvarCelula(PAG, DONO, corpoCelula(DIA, "ent1", "08:00"));
+
+            verify(loteRepo).lockPorId(LOTE);
+            verify(loteRepo, never()).findById(LOTE);
+        }
+
+        @Test
+        void oPessoaTipoVemDaPagina() {
+            mockFolha("tec-7", "TECNICO",
+                    lote(LOTE, "MENSAL", PontoLote.CATEGORIA_PREVIA, INICIO, FIM, PUBLICADA_EM));
+
+            service.salvarCelula(PAG, "tec-7", corpoCelula(DIA, "ent1", "08:00"));
+
+            assertEquals("TECNICO", capturarSalva().getPessoaTipo());
+        }
+
+        @Test
+        void osHorariosJaRetificadosDoDiaPermanecem() {
+            mockFolha();
+            mockRetificacaoDoDia(DIA, "08:00", null, null, null);
+
+            service.salvarCelula(PAG, DONO, corpoCelula(DIA, "sai1", "12:30"));
+
+            PontoRetificacao salva = capturarSalva();
+            assertEquals("08:00", salva.getEnt1());
+            assertEquals("12:30", salva.getSai1());
+            assertEquals("pag-antiga", salva.getPaginaId(),
+                    "a origem da retificação não muda: é por ela que a exclusão da folha sabe o que apagar");
+        }
+
+        @Test
+        void digitarHorarioDesfazAOcorrenciaDeclarada() {
+            mockFolha();
+            PontoRetificacao existente = mockRetificacaoDoDia(DIA, null, null, null, null);
+            existente.setTipoId(TIPO_BANCO);
+
+            service.salvarCelula(PAG, DONO, corpoCelula(DIA, "ent1", "08:00"));
+
+            PontoRetificacao salva = capturarSalva();
+            assertNull(salva.getTipoId());
+            assertEquals("08:00", salva.getEnt1());
+        }
+
+        @Test
+        void celulaForaDasQuatroRecusa() {
+            mockFolha();
+
+            assertEquals("Célula inválida.", recusaAoSalvar(corpoCelula(DIA, "totaldia", "08:00")).getMessage());
+            assertEquals("Célula inválida.", recusaAoSalvar(corpoCelula(DIA, null, "08:00")).getMessage());
+            verify(retificacaoRepo, never()).saveAndFlush(any());
+        }
+
+        @Test
+        void horarioMalformadoRecusaNomeandoODia() {
+            mockFolha();
+
+            for (String valor : List.of("8h", "24:00", "08:60", "8:00", "0800", "")) {
+                assertEquals("Horário inválido no dia 15/06/2026.",
+                        recusaAoSalvar(corpoCelula(DIA, "ent1", valor)).getMessage());
             }
-            verify(retificacaoRepo, never()).save(any());
+            verify(retificacaoRepo, never()).saveAndFlush(any());
         }
 
         @Test
-        @DisplayName("retificação de OUTRA pessoa (ou de outro pessoa_tipo) → o MESMO 404 do id inexistente: o registro alheio não transparece")
-        void retificacaoAlheia() {
-            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
+        void dataAusenteOuTortaRecusa() {
+            mockFolha();
 
-            existente("outro-operador", "OPERADOR", DIA);
-            ServiceValidationException deOutro = assertThrows(ServiceValidationException.class,
-                    () -> service.editarRetificacao(PAG, RET, DONO, corpo("08:00", "12:00", null, null)));
-            assertEquals(HttpStatus.NOT_FOUND, deOutro.getStatus());
-            assertEquals("Retificação não encontrada.", deOutro.getMessage());
-
-            existente(DONO, "TECNICO", DIA);   // mesmo dono, mas o tipo não é o da página
-            ServiceValidationException deOutroTipo = assertThrows(ServiceValidationException.class,
-                    () -> service.editarRetificacao(PAG, RET, DONO, corpo("08:00", "12:00", null, null)));
-            assertEquals(HttpStatus.NOT_FOUND, deOutroTipo.getStatus());
-            assertEquals("Retificação não encontrada.", deOutroTipo.getMessage());
-
-            verify(retificacaoRepo, never()).save(any());
-        }
-
-        @Test
-        @DisplayName("retificação com a data FORA do período do lote consultado → 404 (o recorte é o mesmo da listagem)")
-        void dataForaDoPeriodo() {
-            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-
-            for (LocalDate fora : List.of(LocalDate.of(2026, 5, 31), LocalDate.of(2026, 7, 1))) {
-                existente(DONO, "OPERADOR", fora);
-                ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                        () -> service.editarRetificacao(PAG, RET, DONO, corpo("08:00", "12:00", null, null)));
-                assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
-                assertEquals("Retificação não encontrada.", ex.getMessage());
+            assertEquals("Data obrigatória.",
+                    recusaAoSalvar(corpoCelula((String) null, "ent1", "08:00")).getMessage());
+            for (String data : List.of("15-06-2026", "2026-06-31")) {
+                assertTrue(recusaAoSalvar(corpoCelula(data, "ent1", "08:00"))
+                        .getMessage().contains("AAAA-MM-DD"));
             }
-            verify(retificacaoRepo, never()).save(any());
         }
 
         @Test
-        @DisplayName("retificação criada por OUTRA folha (dia dentro do período) é editável por esta — e a PAGINA_ID de origem não muda")
-        void folhaSobrepostaEdita() {
-            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-            PontoRetificacao r = existente();
-            r.setPaginaId("pag-OUTRA-FOLHA");
+        void diaForaDoPeriodoDaFolhaRecusa() {
+            mockFolha();
 
-            Map<String, Object> out = service.editarRetificacao(PAG, RET, DONO,
-                    corpo("09:00", "15:00", null, null));
-
-            verify(retificacaoRepo).save(same(r));
-            assertEquals("09:00", r.getEnt1());
-            assertEquals("15:00", r.getSai1());
-            assertEquals("pag-OUTRA-FOLHA", r.getPaginaId(),
-                    "a página de origem é a da CRIAÇÃO — editar pela folha sobreposta não a reanexa");
-            assertEquals(RET, out.get("id"));
+            assertEquals("O dia 01/07/2026 está fora do período da folha.",
+                    recusaAoSalvar(corpoCelula(LocalDate.of(2026, 7, 1), "ent1", "08:00")).getMessage());
         }
 
         @Test
-        @DisplayName("prazo da folha consultada vencido → 400 PRAZO_EXPIRADO com o dia-limite; NADA é alterado")
-        void prazoVencido() {
-            LocalDateTime pub = LocalDateTime.now().minusDays(10);
-            mockFolha(DONO, pub, "PUBLICADO");
-            PontoRetificacao r = existente();
+        void fimDeSemanaRecusa() {
+            mockFolha();
 
-            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.editarRetificacao(PAG, RET, DONO, corpo("08:00", "12:00", null, null)));
-
-            assertEquals("PRAZO_EXPIRADO", ex.getMessage());
-            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-            assertNotNull(ex.getExtraFields());
-            assertTrue(String.valueOf(ex.getExtraFields().get("message"))
-                            .contains(pub.toLocalDate().plusDays(5).format(BR)),
-                    String.valueOf(ex.getExtraFields()));
-            assertEquals("07:00", r.getEnt1(), "a recusa por prazo não pode ter tocado nos valores");
-            assertEquals("Anotação original.", r.getObservacoes());
-            verify(retificacaoRepo, never()).save(any());
+            assertEquals("O dia 13/06/2026 não é dia útil.",
+                    recusaAoSalvar(corpoCelula(SABADO, "ent1", "08:00")).getMessage());
+            assertEquals("O dia 14/06/2026 não é dia útil.",
+                    recusaAoSalvar(corpoCelula(SABADO.plusDays(1), "ent1", "08:00")).getMessage());
         }
 
         @Test
-        @DisplayName("mês encerrado por folha definitiva → 400 nomeando o dia e a competência; nada é alterado")
-        void mesEncerradoBloqueiaAEdicao() {
-            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-            PontoRetificacao r = existente();
-            mockDefinitiva(DONO, "OPERADOR", JUNHO, true);
+        void diaMarcadoParaTodosRecusaNomeandoAOcorrencia() {
+            mockFolha();
+            mockMarcacaoGlobal(DIA, tipo("t-feriado", "Feriado", false, false));
 
-            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.editarRetificacao(PAG, RET, DONO, corpo("08:00", "12:00", null, null)));
-
-            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-            assertEquals("Não é possível retificar. Folha definitiva já publicada.", ex.getMessage());
-            assertEquals("07:00", r.getEnt1(), "a recusa pelo mês encerrado não pode ter tocado nos valores");
-            assertEquals("Anotação original.", r.getObservacoes());
-            verify(retificacaoRepo, never()).save(any());
+            assertEquals("O dia 15/06/2026 está marcado como Feriado.",
+                    recusaAoSalvar(corpoCelula(DIA, "ent1", "08:00")).getMessage());
+            verify(retificacaoRepo, never()).saveAndFlush(any());
         }
 
         @Test
-        @DisplayName("mês ainda aberto: a edição sobrescreve normalmente")
-        void mesAbertoDeixaEditar() {
-            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-            PontoRetificacao r = existente();
-            mockDefinitiva(DONO, "OPERADOR", JUNHO, false);
+        void diaFechadoPorFolhaMaisNovaRecusa() {
+            mockFolha(DONO, "OPERADOR",
+                    lote(LOTE, "SEMANAL", null, LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 7),
+                            PUBLICADA_EM.minusDays(7)),
+                    outraFolha("lote-2", "SEMANAL", null, LocalDate.of(2026, 6, 1),
+                            LocalDate.of(2026, 6, 14), PUBLICADA_EM));
 
-            service.editarRetificacao(PAG, RET, DONO, corpo("09:00", "15:00", null, null));
-
-            verify(retificacaoRepo).save(same(r));
-            assertEquals("09:00", r.getEnt1());
-            assertEquals("15:00", r.getSai1());
+            assertEquals("O dia 01/06/2026 não pode mais ser retificado.",
+                    recusaAoSalvar(corpoCelula(LocalDate.of(2026, 6, 1), "ent1", "08:00")).getMessage());
         }
 
         @Test
-        @DisplayName("pares tortos (par 1 incompleto; par 2 sem o par 1) → 400 nomeando o dia; nada salvo")
-        void paresInvalidos() {
-            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-            existente();
+        void mesEncerradoPelaDefinitivaRecusaComOMotivoProprio() {
+            mockSemanalComDefinitivaDoMes();
 
-            List<Map<String, Object>> corpos = List.of(
-                    corpo("08:00", null, null, null),         // ent1 sem sai1
-                    corpo(null, null, "13:00", "17:00"));     // par 2 sem par 1
-
-            for (Map<String, Object> body : corpos) {
-                ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                        () -> service.editarRetificacao(PAG, RET, DONO, body));
-                assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-                assertTrue(ex.getMessage().contains("pares") && ex.getMessage().contains("15/06/2026"),
-                        ex.getMessage());
-            }
-            verify(retificacaoRepo, never()).save(any());
+            assertEquals("Não é possível retificar. Folha definitiva já publicada.",
+                    recusaAoSalvar(corpoCelula(DIA, "ent1", "08:00")).getMessage());
         }
 
         @Test
-        @DisplayName("edição sem NENHUM horário → 400 (a retificação vazia não nasce nem por edição)")
-        void semHorarios() {
-            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-            existente();
-            Map<String, Object> body = corpo(null, null, null, null);
-            body.put("observacoes", "estava em reunião externa");   // nem a observação salva a edição sem horários
+        void oTurnoQueAtravessaAMeiaNoiteEhAceito() {
+            mockFolha();
+            mockRetificacaoDoDia(DIA, "19:03", null, null, null);
 
-            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.editarRetificacao(PAG, RET, DONO, body));
+            service.salvarCelula(PAG, DONO, corpoCelula(DIA, "sai1", "02:28"));
 
-            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-            assertTrue(ex.getMessage().contains("15/06/2026"), ex.getMessage());
-            assertTrue(ex.getMessage().contains("Ent. 1") && ex.getMessage().contains("Saí. 1"), ex.getMessage());
-            verify(retificacaoRepo, never()).save(any());
+            PontoRetificacao salva = capturarSalva();
+            assertEquals("19:03", salva.getEnt1());
+            assertEquals("02:28", salva.getSai1());
         }
 
         @Test
-        @DisplayName("horário mal formatado → 400 nomeando o dia e o valor")
-        void horaMalformada() {
-            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-            existente();
+        void aSegundaVoltaNoRelogioRecusa() {
+            mockFolha();
+            // O dia já vira a meia-noite entre a entrada e a saída; a célula digitada viraria de novo.
+            mockRetificacaoDoDia(DIA, "19:00", "02:00", null, null);
 
-            for (String hora : List.of("8h", "24:00")) {
-                ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                        () -> service.editarRetificacao(PAG, RET, DONO, corpo(hora, "12:00", null, null)));
-                assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-                assertTrue(ex.getMessage().contains("HH:MM"), ex.getMessage());
-                assertTrue(ex.getMessage().contains("15/06/2026") && ex.getMessage().contains(hora),
-                        ex.getMessage());
-            }
-            verify(retificacaoRepo, never()).save(any());
+            assertEquals("Os horários do dia 15/06/2026 estão fora de ordem.",
+                    recusaAoSalvar(corpoCelula(DIA, "ent2", "01:00")).getMessage());
+            verify(retificacaoRepo, never()).saveAndFlush(any());
         }
 
         @Test
-        @DisplayName("observação de 301 caracteres → 400 nomeando o CAMPO e o dia (recusa, não trunca); nada salvo")
-        void observacaoAcimaDoLimite() {
-            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-            existente();
-            Map<String, Object> body = corpo("08:00", "12:00", null, null);
-            body.put("observacoes", "ç".repeat(301));
+        void aOrdemContaComOsHorariosQueAFolhaImprimiu() {
+            mockFolha();
+            mockLinhaDaFolha(PAG, DIA, "19:00", "02:00", null, null);
 
-            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.editarRetificacao(PAG, RET, DONO, body));
+            assertEquals("Os horários do dia 15/06/2026 estão fora de ordem.",
+                    recusaAoSalvar(corpoCelula(DIA, "ent2", "01:00")).getMessage());
 
-            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-            assertTrue(ex.getMessage().contains("observação") && ex.getMessage().contains("15/06/2026"),
-                    ex.getMessage());
-            assertTrue(ex.getMessage().contains("300 caracteres"), ex.getMessage());
-            verify(retificacaoRepo, never()).save(any());
+            service.salvarCelula(PAG, DONO, corpoCelula(DIA, "ent2", "03:00"));
+            assertEquals("03:00", capturarSalva().getEnt2());
         }
 
         @Test
-        @DisplayName("corpo ausente (body null) → 400 do par mínimo, não 500")
-        void corpoNulo() {
-            mockFolha(DONO, LocalDateTime.now(), "PUBLICADO");
-            existente();
+        void aOrdemUsaAFolhaMaisRecenteQueCobreODia() {
+            // A tela é a prévia do mês; quem representa o dia é a semanal publicada depois.
+            mockFolha(outraFolha("lote-2", "SEMANAL", null, LocalDate.of(2026, 6, 15),
+                    LocalDate.of(2026, 6, 21), PUBLICADA_EM.plusDays(1)));
+            mockLinhaDaFolha("pag-lote-2", DIA, "19:00", "02:00", null, null);
 
-            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.editarRetificacao(PAG, RET, DONO, null));
+            assertEquals("Os horários do dia 15/06/2026 estão fora de ordem.",
+                    recusaAoSalvar(corpoCelula(DIA, "ent2", "01:00")).getMessage());
+        }
 
-            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-            assertTrue(ex.getMessage().contains("Ent. 1") && ex.getMessage().contains("15/06/2026"),
-                    ex.getMessage());
-            verify(retificacaoRepo, never()).save(any());
+        @Test
+        void celulaDaFolhaQueNaoEhHorarioNaoAtrapalhaAOrdem() {
+            mockFolha();
+            mockLinhaDaFolha(PAG, DIA, "Falta", "Falta", "Falta", "Falta");
+
+            service.salvarCelula(PAG, DONO, corpoCelula(DIA, "ent1", "08:00"));
+
+            assertEquals("08:00", capturarSalva().getEnt1());
+        }
+
+        @Test
+        void corridaNaChaveDoDiaViraRecusaAmigavel() {
+            mockFolha();
+            when(retificacaoRepo.saveAndFlush(any())).thenThrow(new DataIntegrityViolationException(
+                    "could not execute statement",
+                    new SQLIntegrityConstraintViolationException(
+                            "ORA-00001: unique constraint (NUSP.UK_PNT_RETIF_PESSOA_DIA) violated")));
+
+            assertEquals("Não foi possível concluir a operação.",
+                    recusaAoSalvar(corpoCelula(DIA, "ent1", "08:00")).getMessage());
+        }
+
+        @Test
+        void violacaoQueNaoEhACaveDoDiaSobeIntacta() {
+            mockFolha();
+            DataIntegrityViolationException original = new DataIntegrityViolationException(
+                    "could not execute statement",
+                    new SQLException("ORA-02290: check constraint (NUSP.CK_PNT_RETIF_CONTEUDO) violated"));
+            when(retificacaoRepo.saveAndFlush(any())).thenThrow(original);
+
+            assertSame(original, assertThrows(DataIntegrityViolationException.class,
+                    () -> service.salvarCelula(PAG, DONO, corpoCelula(DIA, "ent1", "08:00"))));
+        }
+    }
+
+    @Nested
+    class DeclaracaoDeTipo {
+
+        @Test
+        void gravaOTipoZerandoOsHorarios() {
+            mockFolha();
+            mockCatalogo(tipo(TIPO_BANCO, "Banco de horas", true, true));
+            mockRetificacaoDoDia(DIA, "08:00", "12:00", "13:00", "17:00");
+
+            Map<String, Object> resposta = service.salvarTipo(PAG, DONO, corpoTipo(DIA, TIPO_BANCO));
+
+            PontoRetificacao salva = capturarSalva();
+            assertEquals(TIPO_BANCO, salva.getTipoId());
+            assertNull(salva.getEnt1());
+            assertNull(salva.getSai1());
+            assertNull(salva.getEnt2());
+            assertNull(salva.getSai2());
+            assertEquals("Banco de horas", resposta.get("tipo_nome"));
+            assertEquals(true, resposta.get("conta_folga"));
+        }
+
+        @Test
+        void tipoQueNaoEhVisivelAoFuncionarioRecusa() {
+            mockFolha();
+            mockCatalogo(tipo("t-atestado", "Atestado", false, false));
+
+            ServiceValidationException e = assertThrows(ServiceValidationException.class,
+                    () -> service.salvarTipo(PAG, DONO, corpoTipo(DIA, "t-atestado")));
+
+            assertEquals("Tipo de ocorrência não disponível.", e.getMessage());
+            verify(retificacaoRepo, never()).saveAndFlush(any());
+        }
+
+        @Test
+        void tipoInexistenteRecusa() {
+            mockFolha();
+            when(tipoRepo.findById(anyString())).thenReturn(Optional.empty());
+
+            assertEquals("Tipo de ocorrência não disponível.",
+                    assertThrows(ServiceValidationException.class,
+                            () -> service.salvarTipo(PAG, DONO, corpoTipo(DIA, "nao-existe"))).getMessage());
+        }
+
+        @Test
+        void oDiaBloqueadoTambemRecusaADeclaracao() {
+            mockFolha();
+            mockCatalogo(tipo(TIPO_BANCO, "Banco de horas", true, true));
+
+            assertEquals("O dia 13/06/2026 não é dia útil.",
+                    assertThrows(ServiceValidationException.class,
+                            () -> service.salvarTipo(PAG, DONO, corpoTipo(SABADO, TIPO_BANCO))).getMessage());
+        }
+    }
+
+    /**
+     * Apagar cobra menos que escrever: só a janela — o dia dentro do período da folha e ainda
+     * aberto. O que impede de ESCREVER num dia (o fim de semana, a ocorrência marcada para todos)
+     * pode ter chegado depois da correção, e desfazer o que já se escreveu não fica refém disso.
+     */
+    @Nested
+    class Limpeza {
+
+        @Test
+        void apagaARetificacaoDoDia() {
+            mockFolha();
+            PontoRetificacao r = mockRetificacaoDoDia(DIA, "08:00", null, null, null);
+
+            Map<String, Object> resposta = service.limpar(PAG, DONO, DIA.toString());
+
+            verify(retificacaoRepo).delete(r);
+            assertEquals("2026-06-15", resposta.get("data"));
+        }
+
+        @Test
+        void oFimDeSemanaNaoImpedeApagar() {
+            mockFolha();
+            PontoRetificacao r = mockRetificacaoDoDia(SABADO, "08:00", null, null, null);
+
+            service.limpar(PAG, DONO, SABADO.toString());
+
+            verify(retificacaoRepo).delete(r);
+        }
+
+        @Test
+        void oDiaMarcadoParaTodosNaoImpedeApagar() {
+            mockFolha();
+            mockMarcacaoGlobal(DIA, tipo("t-feriado", "Feriado", false, false));
+            PontoRetificacao r = mockRetificacaoDoDia(DIA, "08:00", null, null, null);
+
+            service.limpar(PAG, DONO, DIA.toString());
+
+            verify(retificacaoRepo).delete(r);
+        }
+
+        @Test
+        void diaSemRetificacaoNaoExiste() {
+            mockFolha();
+
+            ServiceValidationException e = assertThrows(ServiceValidationException.class,
+                    () -> service.limpar(PAG, DONO, DIA.toString()));
+
+            assertEquals(HttpStatus.NOT_FOUND, e.getStatus());
+            verify(retificacaoRepo, never()).delete(any());
+        }
+
+        @Test
+        void oDiaFechadoNaoSeLimpa() {
+            mockSemanalComDefinitivaDoMes();
+
+            assertEquals("Não é possível retificar. Folha definitiva já publicada.",
+                    assertThrows(ServiceValidationException.class,
+                            () -> service.limpar(PAG, DONO, DIA.toString())).getMessage());
+            verify(retificacaoRepo, never()).delete(any());
+        }
+
+        @Test
+        void oDiaForaDoPeriodoDaFolhaNaoSeLimpa() {
+            mockFolha();
+
+            assertEquals("O dia 01/07/2026 está fora do período da folha.",
+                    assertThrows(ServiceValidationException.class,
+                            () -> service.limpar(PAG, DONO, "2026-07-01")).getMessage());
+            verify(retificacaoRepo, never()).delete(any());
+        }
+
+        @Test
+        void dataTortaRecusa() {
+            mockFolha();
+
+            assertEquals("Data obrigatória.",
+                    assertThrows(ServiceValidationException.class,
+                            () -> service.limpar(PAG, DONO, null)).getMessage());
         }
     }
 }

@@ -1,0 +1,64 @@
+databaseChangeLog:
+  # ============================================================
+  # 055 — Ponto: retificação por célula e tipo declarado pelo funcionário
+  #
+  # A retificação passa a ser a célula da planilha: um horário sozinho é o caso
+  # normal (o CHECK de pares cai) e o dia pode receber, no lugar dos horários,
+  # um tipo do catálogo — excludentes entre si e nunca ambos vazios. O catálogo
+  # ganha quais tipos o funcionário escolhe e quais valem como folga na grade,
+  # com "Banco de horas" nascendo aqui.
+  # ============================================================
+  - changeSet:
+      id: 055-ponto-retificacao-celula
+      author: douglas.antunes
+      comment: "Retificação por célula: TIPO_ID em PNT_RETIFICACAO, fim do CHECK de pares e propriedades novas do catálogo de tipos"
+      changes:
+        - sqlFile:
+            path: db/changelog/055-ponto-retificacao-celula.sql
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: "ALTER TABLE PNT_TIPO_MARCACAO DROP CONSTRAINT CK_PNT_TIPOMARC_CONTA_FOLGA"
+        - sql:
+            sql: "ALTER TABLE PNT_TIPO_MARCACAO DROP COLUMN CONTA_FOLGA"
+        - sql:
+            sql: "ALTER TABLE PNT_TIPO_MARCACAO DROP CONSTRAINT CK_PNT_TIPOMARC_VIS_FUNC"
+        - sql:
+            sql: "ALTER TABLE PNT_TIPO_MARCACAO DROP COLUMN VISIVEL_FUNCIONARIO"
+        - sql:
+            sql: "ALTER TABLE PNT_RETIFICACAO DROP CONSTRAINT CK_PNT_RETIF_CONTEUDO"
+        - sql:
+            sql: "DROP INDEX IDX_PNT_RETIF_TIPO"
+        - sql:
+            sql: "ALTER TABLE PNT_RETIFICACAO DROP CONSTRAINT FK_PNT_RETIF_TIPO"
+        # A retificação de tipo não tem como ser representada no modelo antigo, que
+        # só guarda horários: ela morre na volta, e é a coluna que a leva junto.
+        - sql:
+            sql: "DELETE FROM PNT_RETIFICACAO WHERE TIPO_ID IS NOT NULL"
+        - sql:
+            sql: "ALTER TABLE PNT_RETIFICACAO DROP COLUMN TIPO_ID"
+        # Só o tipo que este changeset semeou; um homônimo que já existisse no
+        # ambiente tem outro id e permanece. O que aponta para ele sai antes: as
+        # FKs das marcações não têm cascade, e o DELETE do pai morreria.
+        - sql:
+            sql: "DELETE FROM PNT_DIA_MARCACAO WHERE TIPO_ID = 'dff4317b-f2d0-4632-8f53-fd1b5ee5dfdf'"
+        - sql:
+            sql: "DELETE FROM PNT_PESSOA_MARCACAO WHERE TIPO_ID = 'dff4317b-f2d0-4632-8f53-fd1b5ee5dfdf'"
+        - sql:
+            sql: "DELETE FROM PNT_TIPO_MARCACAO WHERE ID = 'dff4317b-f2d0-4632-8f53-fd1b5ee5dfdf'"
+        # O CHECK de pares volta a EXIGIR o que o modelo novo permitiu: sem sanear
+        # antes, a constraint seria recusada por qualquer horário solto já gravado —
+        # e a tabela ficaria sem CHECK nenhum, porque o DROP de DDL já commitou.
+        - sql:
+            sql: >-
+              DELETE FROM PNT_RETIFICACAO WHERE NOT (
+              ((ENT1 IS NULL AND SAI1 IS NULL) OR (ENT1 IS NOT NULL AND SAI1 IS NOT NULL))
+              AND ((ENT2 IS NULL AND SAI2 IS NULL) OR (ENT2 IS NOT NULL AND SAI2 IS NOT NULL))
+              AND NOT (ENT1 IS NULL AND ENT2 IS NOT NULL))
+        - sql:
+            sql: >-
+              ALTER TABLE PNT_RETIFICACAO ADD CONSTRAINT CK_PNT_RETIF_PARES CHECK (
+              ((ENT1 IS NULL AND SAI1 IS NULL) OR (ENT1 IS NOT NULL AND SAI1 IS NOT NULL))
+              AND ((ENT2 IS NULL AND SAI2 IS NULL) OR (ENT2 IS NOT NULL AND SAI2 IS NOT NULL))
+              AND NOT (ENT1 IS NULL AND ENT2 IS NOT NULL))

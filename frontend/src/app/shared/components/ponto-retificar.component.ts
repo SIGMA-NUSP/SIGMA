@@ -1,47 +1,32 @@
-import { Component, computed, inject, OnDestroy, OnInit, signal } from '@angular/core';
-import { FormsModule } from '@angular/forms';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { Component, ElementRef, HostListener, OnInit, computed, inject, signal, viewChildren } from '@angular/core';
+import { ActivatedRoute, RouterLink } from '@angular/router';
+import { Observable } from 'rxjs';
 import { ApiService } from '../../core/services/api.service';
 import { HORA_RE, HoraMaskDirective } from '../directives/hora-mask.directive';
 import { erroCargaMsg, httpErrorMsg } from '../../core/helpers/http.helpers';
 import { periodoFolha } from '../../core/helpers/table.helpers';
+import { AncoraPopover, ancoraDoClique } from '../../core/helpers/popover.helpers';
 import { ErroCargaComponent } from './erro-carga.component';
 import { AjudaChatComponent } from './ajuda-chat.component';
 import { ToastService } from './toast.component';
 
-/**
- * Guia da tela quando a listagem das retificações falha (F63). Fail-closed: sem ela, a tela não
- * sabe quais dias JÁ foram retificados nem se o prazo corre — e o lote é tudo-ou-nada (C10), então
- * um único dia repetido derruba o envio inteiro.
- */
-const GUIA_RETIFICACOES =
-  'Não foi possível concluir a operação.';
+/** Guia da tela quando o que diz o que é editável não carrega: sem ele, nada se edita. */
+const GUIA_JANELA = 'Não foi possível concluir a operação.';
 
-/** Retificação já gravada de um dia, como o backend a devolve. */
-interface RetifSalva {
-  id: string;
-  data: string;   // YYYY-MM-DD
-  ent1: string | null; sai1: string | null; ent2: string | null; sai2: string | null;
-  observacoes: string | null;
-}
+/** As quatro batidas do dia, na ordem impressa na folha. */
+type CampoHora = 'ent1' | 'sai1' | 'ent2' | 'sai2';
+const CAMPOS: { campo: CampoHora; rotulo: string }[] = [
+  { campo: 'ent1', rotulo: 'Ent. 1' },
+  { campo: 'sai1', rotulo: 'Saí. 1' },
+  { campo: 'ent2', rotulo: 'Ent. 2' },
+  { campo: 'sai2', rotulo: 'Saí. 2' },
+];
 
-interface LinhaPonto {
+/** Uma linha da folha publicada, como o servidor a imprime. */
+interface LinhaFolha {
   dia: string;
   ent1: string; sai1: string; ent2: string; sai2: string;
   total_dia: string; banco: string;
-  // estado local da retificação (edição por dia)
-  aberto?: boolean;
-  r_ent1?: string; r_sai1?: string; r_ent2?: string; r_sai2?: string;
-  observacoes?: string;
-  ja_retificado?: boolean;
-  /** Conteúdo da retificação gravada (dia já retificado). */
-  retif?: RetifSalva;
-  /** Área da retificação gravada expandida (leitura ou edição). */
-  retifExpandida?: boolean;
-  /** Campos habilitados para editar a retificação gravada. */
-  editando?: boolean;
-  /** PUT de edição em voo — trava os botões da linha. */
-  salvandoEdicao?: boolean;
 }
 
 interface DadosFolha {
@@ -49,369 +34,442 @@ interface DadosFolha {
   tipo: string;
   data_inicio: string;
   data_fim: string;
-  linhas: LinhaPonto[];
+  linhas: LinhaFolha[];
 }
 
+/** O que o servidor diz de cada dia do período: se ainda aceita correção e o que vale para todos. */
+interface DiaJanela {
+  data: string;                     // YYYY-MM-DD
+  aberto: boolean;
+  marcacao_global?: string | null;
+}
+
+/** A correção já gravada de um dia. Os horários e o tipo são excludentes. */
+interface RetifSalva {
+  id: string;
+  data: string;
+  ent1?: string | null; sai1?: string | null; ent2?: string | null; sai2?: string | null;
+  tipo_id?: string | null;
+  tipo_nome?: string | null;
+  conta_folga?: boolean;
+}
+
+/** Ocorrência que o funcionário pode declarar para o dia inteiro. */
+interface TipoDeclaravel { id: string; nome: string; }
+
+/** Uma célula de horário já resolvida: o que exibir e se veio da correção dele. */
+interface CelulaDia {
+  campo: CampoHora;
+  rotulo: string;
+  valor: string;
+  corrigido: boolean;
+}
+
+/** A ocorrência que ocupa o dia inteiro: a que ele declarou (verde) ou a que o administrador marcou. */
+interface FaixaDia { texto: string; declarada: boolean; }
+
+/** Uma linha da tela: o que a folha trouxe, o que ele corrigiu e o que o dia aceita. */
+interface LinhaDia {
+  dia: string;
+  data: string;
+  fimDeSemana: boolean;
+  editavel: boolean;
+  celulas: CelulaDia[];
+  faixa: FaixaDia | null;
+  corrigido: boolean;
+  totalDia: string;
+  banco: string;
+}
+
+/** A célula em que o menu está aberto, com o ponto da tela onde ele nasce. */
+interface AlvoCelula extends AncoraPopover {
+  data: string;
+  campo: CampoHora;
+  titulo: string;
+  temCorrecao: boolean;
+}
+
+/** A célula sendo digitada agora — uma por vez em toda a tela. */
+interface EmEdicao { data: string; campo: CampoHora; }
+
 /**
- * Retificação de ponto: mostra a folha publicada como tabela (7 colunas
- * espelhando o Secullum) e permite, por dia dentro do prazo, informar os
- * horários corretos (ao menos UM par Ent./Saí. completo — 2 ou 4 horários)
- * + observações (até 300 caracteres). As áreas aparecem em ordem cronológica.
- * Grava em UM POST de LOTE, transacional no backend — tudo-ou-nada.
- * Dia já retificado aparece acinzentado e expande com um clique, mostrando o
- * conteúdo gravado; dentro do prazo ele pode ser EDITADO (sobrescrita via PUT).
- * Dono via principal (gotcha 5).
+ * Retificação de ponto — a planilha que o funcionário preenchia à mão, agora na tela.
+ *
+ * <p><b>A célula é a unidade.</b> Cada batida se corrige sozinha: clicar abre um menu, "Editar
+ * horário" transforma a célula num campo, e o horário completo grava na hora. O que ele não tocou
+ * continua valendo o que a folha oficial trouxe. Não há botão Salvar, não há par obrigatório e não
+ * há envio em lote — errou, corrige de novo.
+ *
+ * <p><b>Ou horários, ou uma ocorrência.</b> O mesmo menu declara uma ocorrência para o dia inteiro
+ * ("Banco de horas"), que substitui os horários, e apaga a correção do dia, devolvendo-o à folha.
+ *
+ * <p><b>O que o dia aceita</b> vem do servidor: sábado e domingo nunca, o dia que o administrador
+ * marcou para todos também não, e o resto depende da janela de publicação das folhas — que fecha
+ * sozinha conforme novas folhas chegam. Sem essa resposta, NADA é editável: uma tela que deixasse
+ * digitar e recusasse na gravação seria pior do que uma tela travada.
  */
 @Component({
   selector: 'app-ponto-retificar',
   standalone: true,
-  imports: [FormsModule, RouterLink, HoraMaskDirective, ErroCargaComponent, AjudaChatComponent],
+  imports: [RouterLink, HoraMaskDirective, ErroCargaComponent, AjudaChatComponent],
   template: `
     <h1>Retificação de Ponto</h1>
     <div class="topo-bar">
       <a [routerLink]="voltarLink" class="back-link">&larr; Voltar</a>
-      <!-- F63: sem a listagem das retificações não há Salvar. A tela não saberia quais dias já
-           foram retificados (nem se o prazo corre), e o lote é tudo-ou-nada — um dia repetido
-           derruba o envio inteiro, inclusive os dias novos. Mesmo idioma do prazo: o botão some. -->
-      @if (selecionadas().length > 0 && !enviado() && !bloqueado() && retificacoesCarregadas()) {
-        <button class="btn-primary-custom salvar-top" (click)="salvar()" [disabled]="salvando()">
-          {{ salvando() ? 'Salvando...' : 'Salvar' }}
-        </button>
-      }
     </div>
-
-    @if (enviado()) {
-      <div class="ok-box">Retificação Enviada</div>
-    }
 
     @if (loading()) {
       <p class="text-muted-sm">Carregando folha...</p>
-    } @else if (erro() && !dados()) {
+    } @else if (erro()) {
       <div class="error-box">{{ erro() }}</div>
     } @else {
-      <p class="text-muted-sm periodo">
-        Folha {{ tipoLabel() }} — {{ periodoFolhaLabel() }}
-      </p>
-      <!-- O mês encerrado pela folha definitiva prevalece sobre o prazo: com ele não há mais o que
-           retificar naquela competência, ainda que os 5 dias desta folha estejam correndo. -->
-      @if (mesFechado()) {
-        <div class="error-box">
-          Não é possível retificar esta folha.
-        </div>
-      } @else if (limiteFmt()) {
-        @if (prazoExpirado()) {
-          <div class="error-box">Prazo de retificação encerrado em {{ limiteFmt() }}.</div>
-        } @else {
-          <p class="text-muted-sm prazo-aviso">Retificações permitidas até <strong>{{ limiteFmt() }}</strong>.</p>
-        }
-      }
-      <!-- Canal PRÓPRIO da carga das retificações (F63) — separado do sinal "erro", que carrega as
-           validações e a recusa do salvar(). Enquanto estiver preenchido, não há Salvar. O estado
-           "verificando" existe para a tela não ficar muda no meio do retry (o Salvar e a caixa saem
-           de cena juntos enquanto o GET voa). -->
-      @if (carregandoRetificacoes()) {
-        <p class="text-muted-sm">Verificando os dias já retificados e o prazo...</p>
-      } @else if (erroRetificacoes()) {
-        <app-erro-carga [mensagem]="erroRetificacoes()" (tentarNovamente)="recarregarRetificacoes()" />
-      }
-      @if (erro() && dados()) {
-        <div class="error-box">{{ erro() }}</div>
+      <p class="text-muted-sm periodo">Folha {{ tipoLabel() }} — {{ periodoFolhaLabel() }}</p>
+
+      @if (carregandoJanela()) {
+        <p class="text-muted-sm">Verificando o que ainda pode ser corrigido...</p>
+      } @else if (erroJanela()) {
+        <app-erro-carga [mensagem]="erroJanela()" (tentarNovamente)="recarregarJanela()" />
       }
 
-      <!-- Desktop: tabela -->
+      <!-- Desktop: a folha inteira em tabela, uma célula por batida -->
       <div class="table-container vista-desktop">
         <table class="data-table ponto-table">
           <thead><tr>
             <th>DIA</th>
             <th>ENT. 1</th><th>SAÍ. 1</th><th>ENT. 2</th><th>SAÍ. 2</th>
             <th>TOTALDIA</th><th>BANCO</th>
-            <th style="width:96px; text-align:center">Retificar</th>
           </tr></thead>
           <tbody>
             @for (l of linhas(); track l.dia) {
-              <tr [class.row-sel]="l.aberto" [class.row-retif]="l.ja_retificado"
-                  [attr.title]="l.ja_retificado ? 'Ver retificação' : null"
-                  (click)="l.ja_retificado ? toggleRetif(l) : null">
-                <td><strong>{{ l.dia }}</strong></td>
-                <td>{{ l.ent1 }}</td><td>{{ l.sai1 }}</td>
-                <td>{{ l.ent2 }}</td><td>{{ l.sai2 }}</td>
-                <td>{{ l.total_dia }}</td><td>{{ l.banco }}</td>
-                <td style="text-align:center">
-                  @if (l.ja_retificado) {
-                    <span class="badge-retif" title="Dia já retificado">✓ Retificado</span>
-                  } @else {
-                    <button class="btn-pm" [class.on]="l.aberto" (click)="toggle(l)"
-                            [disabled]="bloqueado()"
-                            [attr.aria-label]="l.aberto ? 'Remover retificação' : 'Retificar este dia'">
-                      {{ l.aberto ? '−' : '+' }}
-                    </button>
-                  }
+              <tr [class.bloqueada]="!l.editavel" [class.editando]="editandoNoDia(l.data)">
+                <td class="col-dia">
+                  <strong>{{ l.dia }}</strong>
+                  @if (!l.editavel) { <span class="cadeado" title="Dia não editável" aria-label="Dia não editável">🔒</span> }
                 </td>
-              </tr>
-              @if (l.aberto || (l.ja_retificado && l.retifExpandida)) {
-                <tr class="accordion-row">
-                  <td colspan="8">
-                    <div class="retif-area">
-                      <div class="retif-horas">
-                        <label>Ent. 1<input appHoraMask [value]="l.r_ent1 || ''" (horaChange)="l.r_ent1 = $event"
-                               [disabled]="!!l.ja_retificado && !l.editando"
-                               inputmode="numeric" maxlength="5" placeholder="HH:MM"></label>
-                        <label>Saí. 1<input appHoraMask [value]="l.r_sai1 || ''" (horaChange)="l.r_sai1 = $event"
-                               [disabled]="!!l.ja_retificado && !l.editando"
-                               inputmode="numeric" maxlength="5" placeholder="HH:MM"></label>
-                        <label>Ent. 2<input appHoraMask [value]="l.r_ent2 || ''" (horaChange)="l.r_ent2 = $event"
-                               [disabled]="!!l.ja_retificado && !l.editando"
-                               inputmode="numeric" maxlength="5" placeholder="HH:MM"></label>
-                        <label>Saí. 2<input appHoraMask [value]="l.r_sai2 || ''" (horaChange)="l.r_sai2 = $event"
-                               [disabled]="!!l.ja_retificado && !l.editando"
-                               inputmode="numeric" maxlength="5" placeholder="HH:MM"></label>
-                      </div>
-                      <label class="obs-label">Observações</label>
-                      <textarea [(ngModel)]="l.observacoes" rows="3" maxlength="300"
-                                [disabled]="!!l.ja_retificado && !l.editando"></textarea>
-                      @if (l.ja_retificado) {
-                        <div class="retif-acoes">
-                          @if (!l.editando) {
-                            @if (!bloqueado()) {
-                              <button class="btn-outline" (click)="iniciarEdicao(l)">Editar</button>
-                            }
-                          } @else {
-                            <button class="btn-outline" (click)="cancelarEdicao(l)" [disabled]="!!l.salvandoEdicao">Cancelar</button>
-                            <button class="btn-primary-custom" (click)="salvarEdicao(l)" [disabled]="!!l.salvandoEdicao">
-                              {{ l.salvandoEdicao ? 'Salvando...' : 'Salvar' }}
-                            </button>
-                          }
-                        </div>
-                      }
-                    </div>
+
+                @if (l.faixa; as f) {
+                  <td colspan="4" class="cel-faixa">
+                    @if (f.declarada && l.editavel) {
+                      <button type="button" class="chip chip-editado"
+                              [disabled]="salvandoNoDia(l.data)"
+                              (click)="abrirMenuDoDia(l, $event)">{{ f.texto }}</button>
+                    } @else {
+                      <span class="chip" [class.chip-editado]="f.declarada" [class.chip-fixo]="!f.declarada">{{ f.texto }}</span>
+                    }
                   </td>
-                </tr>
-              }
+                } @else {
+                  @for (c of l.celulas; track c.campo) {
+                    <td class="cel-hora">
+                      @if (editandoCelula(l.data, c.campo)) {
+                        <input #campoHora appHoraMask class="cel-input" [value]="rascunho()"
+                               (horaChange)="aoDigitar(l, c, $event)"
+                               (blur)="aoSair(l, c)" (keydown.escape)="cancelarEdicao()"
+                               inputmode="numeric" maxlength="5" placeholder="HH:MM"
+                               [attr.aria-label]="c.rotulo + ' de ' + l.dia">
+                      } @else if (l.editavel) {
+                        <button type="button" class="chip" [class.chip-editado]="c.corrigido"
+                                [class.chip-editavel]="!c.corrigido"
+                                [disabled]="salvandoNoDia(l.data)"
+                                [attr.aria-label]="c.rotulo + ' de ' + l.dia"
+                                (click)="abrirMenu(l, c, $event)">
+                          {{ c.valor || '+' }}
+                          @if (!c.corrigido) { <span class="lapis" aria-hidden="true">✎</span> }
+                        </button>
+                      } @else {
+                        <span class="chip" [class.chip-editado]="c.corrigido" [class.chip-fixo]="!c.corrigido">{{ c.valor || '—' }}</span>
+                      }
+                    </td>
+                  }
+                }
+
+                <td class="cel-fixa">{{ l.totalDia || '—' }}</td>
+                <td class="cel-fixa">{{ l.banco || '—' }}</td>
+              </tr>
             }
           </tbody>
         </table>
       </div>
 
-      <!-- Mobile: um card por dia -->
+      <!-- Celular: um card por dia, com as batidas em grade 2×2 -->
       <div class="vista-mobile">
         @for (l of linhas(); track l.dia) {
-          <div class="dia-card" [class.sel]="l.aberto" [class.retif]="l.ja_retificado"
-               [attr.title]="l.ja_retificado ? 'Ver retificação' : null"
-               (click)="l.ja_retificado ? toggleRetif(l) : null">
-            <div class="col-dia">
+          <div class="dia-card" [class.bloqueado]="!l.editavel" [class.editando]="editandoNoDia(l.data)"
+               [class.compacto]="!l.editavel && !l.corrigido && !l.faixa">
+            <div class="card-topo">
               <strong>{{ l.dia }}</strong>
-              @if (l.ja_retificado) {
-                <span class="badge-retif" title="Dia já retificado">✓</span>
-              } @else {
-                <button class="btn-pm" [class.on]="l.aberto" (click)="toggle(l)"
-                        [disabled]="bloqueado()"
-                        [attr.aria-label]="l.aberto ? 'Remover retificação' : 'Retificar este dia'">
-                  {{ l.aberto ? '−' : '+' }}
-                </button>
-              }
+              @if (!l.editavel) { <span class="cadeado" aria-label="Dia não editável">🔒</span> }
             </div>
 
-            @if (isStatus(l)) {
-              <div class="status-cell">{{ l.ent1 }}</div>
-            } @else {
-              <div class="cel c-ent1"><span class="lbl">Ent. 1</span><span class="val" [class.hora]="!!l.ent1">{{ l.ent1 || '—' }}</span></div>
-              <div class="cel c-sai1"><span class="lbl">Saí. 1</span><span class="val" [class.hora]="!!l.sai1">{{ l.sai1 || '—' }}</span></div>
-              <div class="cel c-ent2"><span class="lbl">Ent. 2</span><span class="val" [class.hora]="!!l.ent2">{{ l.ent2 || '—' }}</span></div>
-              <div class="cel c-sai2"><span class="lbl">Saí. 2</span><span class="val" [class.hora]="!!l.sai2">{{ l.sai2 || '—' }}</span></div>
+            @if (l.faixa; as f) {
+              <div class="card-faixa">
+                @if (f.declarada && l.editavel) {
+                  <button type="button" class="chip chip-editado" [disabled]="salvandoNoDia(l.data)"
+                          (click)="abrirMenuDoDia(l, $event)">{{ f.texto }}</button>
+                } @else {
+                  <span class="chip" [class.chip-editado]="f.declarada" [class.chip-fixo]="!f.declarada">{{ f.texto }}</span>
+                }
+              </div>
+            } @else if (l.editavel || l.corrigido) {
+              <div class="card-celulas">
+                @for (c of l.celulas; track c.campo) {
+                  <div class="cel-mobile">
+                    <span class="lbl">{{ c.rotulo }}</span>
+                    @if (editandoCelula(l.data, c.campo)) {
+                      <input #campoHora appHoraMask class="cel-input" [value]="rascunho()"
+                             (horaChange)="aoDigitar(l, c, $event)"
+                             (blur)="aoSair(l, c)" (keydown.escape)="cancelarEdicao()"
+                             inputmode="numeric" maxlength="5" placeholder="HH:MM"
+                             [attr.aria-label]="c.rotulo + ' de ' + l.dia">
+                    } @else if (l.editavel) {
+                      <button type="button" class="chip" [class.chip-editado]="c.corrigido"
+                              [class.chip-editavel]="!c.corrigido"
+                              [disabled]="salvandoNoDia(l.data)"
+                              [attr.aria-label]="c.rotulo + ' de ' + l.dia"
+                              (click)="abrirMenu(l, c, $event)">
+                        {{ c.valor || '+' }}
+                        @if (!c.corrigido) { <span class="lapis" aria-hidden="true">✎</span> }
+                      </button>
+                    } @else {
+                      <span class="chip" [class.chip-editado]="c.corrigido" [class.chip-fixo]="!c.corrigido">{{ c.valor || '—' }}</span>
+                    }
+                  </div>
+                }
+              </div>
             }
 
-            <div class="resumo total"><span class="lbl">Total dia</span><span class="val" [class.hora]="!!l.total_dia">{{ l.total_dia || '—' }}</span></div>
-            <div class="resumo banco"><span class="lbl">Banco</span><span class="val" [class.hora]="!!l.banco">{{ l.banco || '—' }}</span></div>
-          </div>
-          @if (l.aberto || (l.ja_retificado && l.retifExpandida)) {
-            <div class="retif-area retif-area-mobile">
-              <div class="retif-horas">
-                <label>Ent. 1<input appHoraMask [value]="l.r_ent1 || ''" (horaChange)="l.r_ent1 = $event"
-                       [disabled]="!!l.ja_retificado && !l.editando"
-                       inputmode="numeric" maxlength="5" placeholder="HH:MM"></label>
-                <label>Saí. 1<input appHoraMask [value]="l.r_sai1 || ''" (horaChange)="l.r_sai1 = $event"
-                       [disabled]="!!l.ja_retificado && !l.editando"
-                       inputmode="numeric" maxlength="5" placeholder="HH:MM"></label>
-                <label>Ent. 2<input appHoraMask [value]="l.r_ent2 || ''" (horaChange)="l.r_ent2 = $event"
-                       [disabled]="!!l.ja_retificado && !l.editando"
-                       inputmode="numeric" maxlength="5" placeholder="HH:MM"></label>
-                <label>Saí. 2<input appHoraMask [value]="l.r_sai2 || ''" (horaChange)="l.r_sai2 = $event"
-                       [disabled]="!!l.ja_retificado && !l.editando"
-                       inputmode="numeric" maxlength="5" placeholder="HH:MM"></label>
-              </div>
-              <label class="obs-label">Observações</label>
-              <textarea [(ngModel)]="l.observacoes" rows="3" maxlength="300"
-                        [disabled]="!!l.ja_retificado && !l.editando"></textarea>
-              @if (l.ja_retificado) {
-                <div class="retif-acoes">
-                  @if (!l.editando) {
-                    @if (!bloqueado()) {
-                      <button class="btn-outline" (click)="iniciarEdicao(l)">Editar</button>
-                    }
-                  } @else {
-                    <button class="btn-outline" (click)="cancelarEdicao(l)" [disabled]="!!l.salvandoEdicao">Cancelar</button>
-                    <button class="btn-primary-custom" (click)="salvarEdicao(l)" [disabled]="!!l.salvandoEdicao">
-                      {{ l.salvandoEdicao ? 'Salvando...' : 'Salvar' }}
-                    </button>
-                  }
-                </div>
-              }
+            <div class="card-pills">
+              <span class="pill"><span class="lbl">Total dia</span>{{ l.totalDia || '—' }}</span>
+              <span class="pill"><span class="lbl">Banco</span>{{ l.banco || '—' }}</span>
             </div>
-          }
+          </div>
+        }
+      </div>
+
+      <div class="legenda">
+        <span class="legenda-item"><span class="chip chip-editado amostra"></span> editado</span>
+        <span class="legenda-item"><span class="chip chip-fixo amostra"></span> não editável</span>
+      </div>
+    }
+
+    <!-- Menu da célula: as opções nascem ancoradas nela -->
+    @if (menu(); as m) {
+      <div class="popover" [class.acima]="m.acima" [style.left.px]="m.x" [style.top.px]="m.y"
+           (click)="$event.stopPropagation()">
+        <p class="pop-titulo">{{ m.titulo }}</p>
+        <button type="button" class="pop-item" [disabled]="salvandoNoDia(m.data)" (click)="editarHorario()">
+          Editar horário
+        </button>
+        @for (t of tipos(); track t.id) {
+          <button type="button" class="pop-item" [disabled]="salvandoNoDia(m.data)" (click)="declarar(t)">
+            {{ t.nome }}
+          </button>
+        }
+        @if (m.temCorrecao) {
+          <button type="button" class="pop-item pop-limpar" [disabled]="salvandoNoDia(m.data)" (click)="limpar()">
+            Limpar retificação
+          </button>
         }
       </div>
     }
 
-    <!-- Chat de ajuda com IA (piloto) — mesmo manual do /ponto; se auto-esconde sem a flag 'ajudaIa' -->
+    <!-- Chat de ajuda com IA — mesmo manual do /ponto; se auto-esconde sem a flag -->
     <app-ajuda-chat pagina="ponto-banco" titulo="Ajuda — Retificação de Ponto" />
   `,
   styles: [`
-    .periodo { margin: 0 0 8px; }
-    .prazo-aviso { margin: 0 0 16px; }
-    .ponto-table td { font-variant-numeric: tabular-nums; }
-    .row-sel td { background: #eff6ff; }
-    .btn-pm {
-      width: 30px; height: 30px; line-height: 1; font-size: 1.1rem; font-weight: 700;
-      border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text);
-      cursor: pointer; padding: 0;
-    }
-    .btn-pm:hover:not(:disabled) { background: var(--row-hover); }
-    .btn-pm:disabled { opacity: .4; cursor: not-allowed; }
-    .btn-pm.on { border-color: var(--primary); color: var(--primary); }
-    .badge-retif { font-size: .72rem; font-weight: 700; color: #047857; white-space: nowrap; }
-
-    /* Dia já retificado: linha acinzentada, clicável — expande o conteúdo gravado */
-    .row-retif { cursor: pointer; }
-    .row-retif td { background: #f4f4f5; }
-    .row-retif:hover td { background: #e9e9eb; }
-    .dia-card.retif { background: #f4f4f5; cursor: pointer; }
-    .retif-acoes { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
-    .retif-area input:disabled, .retif-area textarea:disabled {
-      background: #fafafa; color: var(--text); opacity: 1; cursor: default;
-    }
-
-    /* Topo: Voltar à esquerda, Salvar à direita (na mesma linha) */
+    .periodo { margin: 0 0 16px; }
     .topo-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
     .topo-bar .back-link { margin-bottom: 0; }
-    .salvar-top { margin-left: auto; }
-
-    /* Área de retificação inline (abaixo do dia, no desktop e no celular) */
-    .retif-area { margin: 0; }
-    .retif-area label { display: block; font-weight: 600; font-size: .9375rem; margin-bottom: 6px; }
-    .retif-area textarea { width: 100%; resize: vertical; box-sizing: border-box; }
-    .retif-area-mobile { padding: 0 2px 4px; }
-
-    /* 4 campos de hora (Ent.1/Saí.1/Ent.2/Saí.2) com máscara HH:MM */
-    .retif-horas { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; }
-    .retif-horas label {
-      display: flex; flex-direction: column; gap: 3px;
-      font-weight: 600; font-size: .8rem; margin-bottom: 0;
-    }
-    .retif-horas input {
-      height: 34px; text-align: center; font-variant-numeric: tabular-nums;
-      border: 1px solid var(--border); border-radius: 6px; padding: 0 4px; font-size: .9rem;
-    }
-    .obs-label { display: block; font-weight: 600; font-size: .9375rem; margin-bottom: 6px; }
-
-    /* aqui o box substitui o conteúdo da página — sem a margem superior da global */
     .error-box { margin-top: 0; }
-    .ok-box {
-      margin-top: 16px; background: #ecfdf5; color: #047857; border: 1px solid #6ee7b7;
-      border-radius: 8px; padding: 12px 16px; font-weight: 600;
+
+    .ponto-table td { font-variant-numeric: tabular-nums; vertical-align: middle; }
+    .ponto-table .col-dia { white-space: nowrap; }
+    .cadeado { margin-left: 6px; font-size: .8rem; opacity: .55; }
+    .cel-hora, .cel-faixa { text-align: center; padding: 4px 6px; }
+    .cel-fixa { color: var(--muted); }
+
+    /* A linha que não aceita edição fica visivelmente fora do jogo */
+    tr.bloqueada td { background: #f1f5f9; color: #64748b; }
+    tr.editando td { background: #eff6ff; }
+
+    /* A célula que aceita edição: tracejado discreto + lápis; vazia mostra o "+" */
+    .chip {
+      display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+      min-width: 62px; min-height: 28px; padding: 2px 8px; border-radius: 6px;
+      font-size: .875rem; font-variant-numeric: tabular-nums; line-height: 1.2;
+      background: transparent; color: var(--text); border: 1px solid transparent;
+    }
+    .chip-editavel {
+      border: 1px dashed #94a3b8; color: var(--text); cursor: pointer;
+    }
+    .chip-editavel:hover:not(:disabled) { background: #f8fafc; border-color: var(--primary); }
+    .lapis { font-size: .7rem; opacity: .5; }
+    .chip-editado {
+      background: #ecfdf5; border: 1px solid #009739; color: #047857; font-weight: 500; cursor: pointer;
+    }
+    .chip-editado:disabled, .chip-editavel:disabled { opacity: .5; cursor: default; }
+    .chip-fixo { color: #64748b; }
+    .cel-faixa .chip, .card-faixa .chip { min-width: 140px; }
+
+    /* Em edição: o campo toma o lugar da célula, sem botões de confirmar */
+    .cel-input {
+      width: 72px; height: 30px; text-align: center; font-variant-numeric: tabular-nums;
+      border: 2px solid #003b63; border-radius: 6px; padding: 0 4px; font-size: .9rem;
     }
 
-    /* ───── Responsivo: tabela no desktop, cards por dia no celular ───── */
+    .legenda {
+      display: flex; gap: 18px; align-items: center; flex-wrap: wrap;
+      margin: 14px 2px 0; font-size: .8rem; color: var(--muted);
+    }
+    .legenda-item { display: inline-flex; align-items: center; gap: 6px; }
+    .amostra { min-width: 26px; min-height: 18px; padding: 0; }
+    .legenda .amostra.chip-fixo { background: #f1f5f9; border: 1px solid #e2e8f0; }
+
+    /* Menu da célula — mesmo idioma do popover de ocorrências da grade */
+    .popover {
+      position: fixed; z-index: 60; min-width: 190px; max-width: 260px;
+      max-height: 280px; overflow-y: auto;
+      background: #fff; border: 1px solid var(--border); border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .18); padding: 6px;
+    }
+    .popover.acima { transform: translateY(-100%); }
+    .pop-titulo {
+      margin: 2px 6px 6px; font-size: .78rem; color: var(--muted);
+      border-bottom: 1px solid var(--border); padding-bottom: 4px;
+    }
+    .pop-item {
+      display: block; width: 100%; text-align: left; border: 0; background: transparent;
+      padding: 7px 8px; border-radius: 6px; font-size: .88rem; color: var(--text); cursor: pointer;
+    }
+    .pop-item:hover:not(:disabled) { background: var(--row-hover); }
+    .pop-item:disabled { opacity: .5; cursor: default; }
+    .pop-limpar { color: #b91c1c; }
+
+    /* ───── Responsivo: tabela no desktop, um card por dia no celular ───── */
     .vista-mobile { display: none; }
     @media (max-width: 640px) {
       .vista-desktop { display: none; }
       .vista-mobile { display: flex; flex-direction: column; gap: 8px; }
-      .retif-horas { grid-template-columns: repeat(2, 1fr); }
 
       .dia-card {
-        display: grid;
-        grid-template-columns: minmax(58px, .8fr) 1fr 1fr 1fr 1fr;
-        grid-template-rows: auto auto;
-        gap: 6px;
-        border: 1px solid var(--border); border-radius: 10px; padding: 8px;
+        display: flex; flex-direction: column; gap: 8px;
+        border: 1px solid var(--border); border-radius: 10px; padding: 10px;
       }
-      .dia-card.sel { background: #eff6ff; border-color: var(--primary); }
-      .col-dia {
-        grid-column: 1; grid-row: 1 / 3;
-        display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 8px;
-      }
-      .col-dia strong { font-size: .8rem; color: var(--primary); line-height: 1.15; word-break: break-word; }
+      .dia-card.bloqueado { background: #f1f5f9; border-color: #e2e8f0; }
+      .dia-card.editando { background: #eff6ff; border-color: var(--primary); }
+      .dia-card.compacto { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
+      .card-topo { display: flex; align-items: center; }
+      .card-topo strong { font-size: .85rem; color: var(--primary); }
+      .dia-card.bloqueado .card-topo strong { color: #64748b; }
 
-      .cel { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-      .cel .lbl { font-size: .6rem; font-weight: 600; color: #64748b; }
-      .cel .val { font-size: .82rem; font-variant-numeric: tabular-nums; }
-      /* Só o horário registrado ganha destaque; dia sem batida e rótulos ficam leves. */
-      .dia-card .val.hora { font-weight: 700; }
-      .c-ent1 { grid-column: 2; grid-row: 1; }
-      .c-sai1 { grid-column: 3; grid-row: 1; }
-      .c-ent2 { grid-column: 4; grid-row: 1; }
-      .c-sai2 { grid-column: 5; grid-row: 1; }
-      .status-cell {
-        grid-column: 2 / 6; grid-row: 1; align-self: center;
-        font-size: .85rem; font-weight: 600; color: var(--text);
+      .card-celulas { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .cel-mobile { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+      .cel-mobile .lbl { font-size: .62rem; font-weight: 600; color: #64748b; }
+      .cel-mobile .chip { width: 100%; }
+      .cel-input { width: 100%; box-sizing: border-box; }
+
+      .card-pills { display: flex; gap: 8px; }
+      .card-pills .pill {
+        flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 6px;
+        background: #f1f5f9; border-radius: 6px; padding: 4px 8px;
+        font-size: .76rem; font-variant-numeric: tabular-nums; color: var(--text);
       }
-      .resumo {
-        display: flex; align-items: center; justify-content: space-between; gap: 6px;
-        background: #f1f5f9; border-radius: 6px; padding: 4px 8px; font-size: .76rem;
-      }
-      .resumo .lbl { color: #475569; }
-      .resumo .val { font-variant-numeric: tabular-nums; color: var(--text); }
-      .total { grid-column: 2 / 4; grid-row: 2; }
-      .banco { grid-column: 4 / 6; grid-row: 2; }
+      .dia-card.compacto .card-pills { flex: 1; }
+      .card-pills .lbl { color: #475569; }
     }
   `],
 })
-export class PontoRetificarComponent implements OnInit, OnDestroy {
+export class PontoRetificarComponent implements OnInit {
   private api = inject(ApiService);
   private route = inject(ActivatedRoute);
-  private router = inject(Router);
   private toast = inject(ToastService);
 
-  dados = signal<DadosFolha | null>(null);
-  linhas = signal<LinhaPonto[]>([]);
-  loading = signal(true);
-  erro = signal('');
-  enviado = signal(false);
-  salvando = signal(false);
-  limiteFmt = signal<string | null>(null);
-  prazoExpirado = signal(false);
-  /** Competência da folha encerrada por folha mensal definitiva — bloqueio permanente, sem prazo. */
-  mesFechado = signal(false);
-  /** Nada de retificar nesta folha: ou o prazo venceu, ou o mês foi encerrado pela definitiva. */
-  bloqueado = computed(() => this.prazoExpirado() || this.mesFechado());
+  /**
+   * O campo em edição. A folha é desenhada duas vezes — tabela e cards —, e só uma delas está à
+   * vista; o foco procura a que o leitor está usando.
+   */
+  private readonly camposHora = viewChildren<ElementRef<HTMLInputElement>>('campoHora');
 
-  /** Canal de erro da carga das retificações (F63) — próprio, com retry; não é o `erro` do formulário. */
-  erroRetificacoes = signal('');
-  /** A listagem das retificações chegou: é o que destrava o envio (fail-closed — F63). */
-  retificacoesCarregadas = signal(false);
-  /** Carga em voo: sem isto, o Salvar e a caixa de erro somem JUNTOS e a tela fica muda no meio do retry. */
-  carregandoRetificacoes = signal(false);
-  /** Token de recência (idioma C9): dois cliques no "Tentar novamente" põem duas cargas em voo, e
-   *  um erro velho não pode re-bloquear o Salvar que uma carga nova já destravou. */
-  private seqRetificacoes = 0;
-
-  /** Handle da saída pós-sucesso — sem ele, o timer navega DEPOIS de o usuário já ter saído (F40). */
-  private timerSaida?: ReturnType<typeof setTimeout>;
-
-  /** Linhas com área aberta — filtradas da lista, então já em ordem cronológica. */
-  selecionadas = computed(() => this.linhas().filter(l => l.aberto));
   /** Todos (inclusive o admin, via card "Meu Ponto e Banco") chegam aqui pelo /ponto. */
   readonly voltarLink = '/ponto';
+
+  folha = signal<DadosFolha | null>(null);
+  loading = signal(true);
+  erro = signal('');
+
+  /** O que o servidor respondeu sobre os dias, as correções já feitas e as ocorrências ofertadas. */
+  private janela = signal<Record<string, DiaJanela>>({});
+  private correcoes = signal<Record<string, RetifSalva>>({});
+  tipos = signal<TipoDeclaravel[]>([]);
+  /** A resposta chegou: é o que destrava a edição. Sem ela, a folha é só leitura. */
+  private janelaCarregada = signal(false);
+  carregandoJanela = signal(false);
+  erroJanela = signal('');
+
+  /** Célula com o menu aberto; nula = nenhum. */
+  menu = signal<AlvoCelula | null>(null);
+  /** Célula sendo digitada; nula = nenhuma. */
+  private edicao = signal<EmEdicao | null>(null);
+  /** O que está no campo agora — o valor de partida vem da folha ou da correção. */
+  rascunho = signal('');
+  /** Dias com gravação em voo: enquanto ela existe, AQUELE dia não aceita novo gesto (os outros sim). */
+  private salvandoEm = signal<ReadonlySet<string>>(new Set());
+
+  /**
+   * Token de recência: uma carga nova invalida o que estiver em voo. Sem ele, a resposta de um
+   * "Tentar novamente" antigo poderia desfazer o que a carga mais nova já mostrou.
+   */
+  private seq = 0;
+
+  /** A folha como a tela a desenha: o que veio impresso, o que ele corrigiu e o que o dia aceita. */
+  linhas = computed<LinhaDia[]>(() => {
+    const folha = this.folha();
+    if (!folha) return [];
+    const janela = this.janela();
+    const correcoes = this.correcoes();
+    const podeEditar = this.janelaCarregada();
+
+    return (folha.linhas || []).map(l => {
+      const data = dataISO(l.dia);
+      const dia = janela[data];
+      const correcao = correcoes[data];
+      const fimDeSemana = ehFimDeSemana(data);
+      const marcacao = dia?.marcacao_global ?? null;
+      const editavel = podeEditar && !!dia?.aberto && !fimDeSemana && !marcacao;
+
+      const celulas = CAMPOS.map(({ campo, rotulo }) => {
+        const corrigido = !!correcao && !correcao.tipo_id && !!correcao[campo];
+        return {
+          campo,
+          rotulo,
+          valor: corrigido ? correcao[campo]! : (l[campo] || ''),
+          corrigido,
+        };
+      });
+
+      // A ocorrência declarada ocupa o dia inteiro. A marcação do administrador também, mas só
+      // enquanto ele não tiver corrigido horário nenhum ali: a correção vence a marcação na grade,
+      // e escondê-la aqui faria a tela contar uma história diferente da que a chefia enxerga.
+      const faixa: FaixaDia | null = correcao?.tipo_nome
+        ? { texto: correcao.tipo_nome, declarada: true }
+        : marcacao && !celulas.some(c => c.corrigido) ? { texto: marcacao, declarada: false } : null;
+
+      return {
+        dia: l.dia, data, fimDeSemana, editavel, celulas, faixa,
+        corrigido: !!correcao,
+        totalDia: l.total_dia,
+        banco: l.banco,
+      };
+    });
+  });
 
   ngOnInit(): void {
     const id = this.route.snapshot.paramMap.get('paginaId');
     if (!id) { this.erro.set('Folha não informada.'); this.loading.set(false); return; }
     this.api.get<any>(`/api/ponto/folha/${id}/dados`).subscribe({
       next: res => {
-        const d: DadosFolha = res.data;
-        this.dados.set(d);
-        this.linhas.set((d.linhas || []).map(l => ({ ...l, aberto: false })));
+        this.folha.set(res.data);
         this.loading.set(false);
-        this.carregarRetificacoes(id);
+        this.carregarJanela(id);
       },
       error: err => {
         this.erro.set(httpErrorMsg(err, 'Não foi possível carregar a folha.', ['error', 'message']));
@@ -420,221 +478,273 @@ export class PontoRetificarComponent implements OnInit, OnDestroy {
     });
   }
 
-  /** Retry da caixa de erro (F63) — o único gesto que destrava o Salvar depois de uma falha. */
-  recarregarRetificacoes(): void {
-    const id = this.dados()?.id ?? this.route.snapshot.paramMap.get('paginaId');
-    if (id) this.carregarRetificacoes(id);
+  /** Retry da caixa de erro — o único gesto que devolve a edição depois de uma falha de carga. */
+  recarregarJanela(): void {
+    const id = this.folha()?.id ?? this.route.snapshot.paramMap.get('paginaId');
+    if (id) this.carregarJanela(id);
   }
 
   /**
-   * Marca os dias já retificados e carrega o dia-limite / estado do prazo.
+   * Traz o que o servidor sabe do período: quais dias aceitam correção, o que já foi corrigido e
+   * quais ocorrências ele pode declarar.
    *
-   * FAIL-CLOSED (F63): a falha desta carga BLOQUEIA o envio. Antes ela era silenciosa (fail-open) —
-   * num 500/timeout a folha ficava na tela com todos os dias livres e sem prazo; o usuário abria um
-   * dia que já retificara, enviava, e levava o 400 "O dia … já foi retificado" sem ver retificação
-   * nenhuma na tela. E, como o lote é tudo-ou-nada (C10), o dia novo enviado junto TAMBÉM não
-   * gravava. É o sintoma que o C12 curou, ressuscitado por outra porta.
+   * <p>Enquanto isto não chega — ou se falhar — a folha fica só leitura. Deixar digitar sem saber
+   * o que o dia aceita produziria a pior tela possível: a que aceita e depois recusa.
    */
-  private carregarRetificacoes(paginaId: string): void {
-    const seq = ++this.seqRetificacoes;
-    this.erroRetificacoes.set('');
-    this.retificacoesCarregadas.set(false);
-    this.carregandoRetificacoes.set(true);
+  private carregarJanela(paginaId: string): void {
+    const seq = ++this.seq;
+    this.fecharMenu();
+    this.edicao.set(null);
+    this.salvandoEm.set(new Set());
+    this.erroJanela.set('');
+    this.janelaCarregada.set(false);
+    this.carregandoJanela.set(true);
     this.api.get<any>(`/api/ponto/folha/${paginaId}/retificacoes`).subscribe({
       next: res => {
-        if (seq !== this.seqRetificacoes) return;   // obsoleta: há uma carga mais nova em voo
+        if (seq !== this.seq) return;
         const d = res.data || {};
-        this.limiteFmt.set(d.limite_fmt ?? null);
-        this.prazoExpirado.set(!!d.prazo_expirado);
-        this.mesFechado.set(!!d.mes_fechado);
-        const porDia = new Map<string, RetifSalva>((d.retificacoes || []).map((r: RetifSalva) => [r.data, r]));
-        this.linhas.update(ls => ls.map(l => {
-          const retif = porDia.get(this.diaParaISO(l.dia));
-          return { ...l, ja_retificado: !!retif, retif };
-        }));
-        this.carregandoRetificacoes.set(false);
-        this.retificacoesCarregadas.set(true);
+        this.janela.set(porData<DiaJanela>(d.dias || []));
+        this.correcoes.set(porData<RetifSalva>(d.retificacoes || []));
+        this.tipos.set(d.tipos || []);
+        this.carregandoJanela.set(false);
+        this.janelaCarregada.set(true);
       },
       error: err => {
-        if (seq !== this.seqRetificacoes) return;   // um erro velho não re-bloqueia o que o retry destravou
-        this.carregandoRetificacoes.set(false);
-        this.erroRetificacoes.set(erroCargaMsg(err, GUIA_RETIFICACOES));
+        if (seq !== this.seq) return;
+        this.carregandoJanela.set(false);
+        this.erroJanela.set(erroCargaMsg(err, GUIA_JANELA));
       },
     });
   }
 
-  tipoLabel(): string { return this.dados()?.tipo === 'MENSAL' ? 'mensal' : 'semanal'; }
+  tipoLabel(): string { return this.folha()?.tipo === 'MENSAL' ? 'mensal' : 'semanal'; }
 
   /** Período do cabeçalho: mensal = "Junho/2026"; semanal = "dd/mm/aaaa a dd/mm/aaaa". */
   periodoFolhaLabel(): string {
-    const d = this.dados();
-    return d ? periodoFolha(d.tipo, d.data_inicio, d.data_fim, ' a ') : '';
+    const f = this.folha();
+    return f ? periodoFolha(f.tipo, f.data_inicio, f.data_fim, ' a ') : '';
   }
+
+  editandoCelula(data: string, campo: CampoHora): boolean {
+    const e = this.edicao();
+    return !!e && e.data === data && e.campo === campo;
+  }
+
+  editandoNoDia(data: string): boolean {
+    return this.edicao()?.data === data;
+  }
+
+  salvandoNoDia(data: string): boolean {
+    return this.salvandoEm().has(data);
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // O menu da célula
+  // ══════════════════════════════════════════════════════════════
 
   /**
-   * Valida os horários digitados de um dia: formato HH:MM, ao menos o par 1 completo e pares
-   * fechados (2 ou 4 horários). Devolve a mensagem de recusa ou null. Dia sem nenhum horário é
-   * recusado — retificação vazia apagava a célula do dia na grade e na planilha da chefia.
+   * Abre o menu ancorado na célula. O gesto é sempre o mesmo — em célula vazia, em célula com
+   * horário e na faixa da ocorrência declarada —, e é dele que saem os três caminhos: digitar um
+   * horário, declarar uma ocorrência para o dia ou apagar a correção.
    */
-  private erroHoras(l: LinhaPonto): string | null {
-    const horas = [l.r_ent1, l.r_sai1, l.r_ent2, l.r_sai2].map(h => (h || '').trim());
-    for (const h of horas) {
-      if (h && !HORA_RE.test(h)) return `Horário inválido em ${l.dia} (use HH:MM).`;
-    }
-    if (horas.every(h => !h)) {
-      return `Horário de entrada e saída são obrigatórios.`;
-    }
-    const par1Completo = !!horas[0] && !!horas[1];   // ≥1 par completo — e o par 1 vem primeiro
-    const par2Completo = !!horas[2] === !!horas[3];
-    if (!par1Completo || !par2Completo) return `Preencha os pares Ent./Saí. completos em ${l.dia}.`;
-    return null;
-  }
-
-  /** Dia de status (Feriado/Falta/DISPOSI/…) — tem letras nas células, não horas. */
-  isStatus(l: LinhaPonto): boolean {
-    return /[A-Za-zÀ-ÿ]/.test(l.ent1 || '');
-  }
-
-  /** "dd/mm/aa - diasem" → "20aa-mm-dd" (ISO); '' se não casar. */
-  private diaParaISO(dia: string): string {
-    const m = (dia || '').match(/^(\d{2})\/(\d{2})\/(\d{2})/);
-    return m ? `20${m[3]}-${m[2]}-${m[1]}` : '';
-  }
-
-  /** "+" abre a área do dia; "−" remove (exclui o que foi digitado). */
-  toggle(l: LinhaPonto): void {
-    l.aberto = !l.aberto;
-    if (!l.aberto) {
-      l.r_ent1 = l.r_sai1 = l.r_ent2 = l.r_sai2 = '';
-      l.observacoes = '';
-    }
-    this.linhas.set([...this.linhas()]);
-  }
-
-  /** Clique na linha retificada: expande/colapsa o conteúdo gravado (sempre a partir do servidor). */
-  toggleRetif(l: LinhaPonto): void {
-    if (!l.retif || l.salvandoEdicao) return;
-    l.retifExpandida = !l.retifExpandida;
-    l.editando = false;
-    if (l.retifExpandida) this.preencherDaRetif(l);
-    this.linhas.set([...this.linhas()]);
-  }
-
-  /** Leva o conteúdo gravado para os campos da área (leitura e ponto de partida da edição). */
-  private preencherDaRetif(l: LinhaPonto): void {
-    const r = l.retif!;
-    l.r_ent1 = r.ent1 || '';
-    l.r_sai1 = r.sai1 || '';
-    l.r_ent2 = r.ent2 || '';
-    l.r_sai2 = r.sai2 || '';
-    l.observacoes = r.observacoes || '';
-  }
-
-  iniciarEdicao(l: LinhaPonto): void {
-    l.editando = true;
-    this.linhas.set([...this.linhas()]);
-  }
-
-  /** Descarta o que foi digitado e volta à leitura com os valores gravados. */
-  cancelarEdicao(l: LinhaPonto): void {
-    l.editando = false;
-    this.preencherDaRetif(l);
-    this.linhas.set([...this.linhas()]);
-  }
-
-  /** Sobrescreve a retificação do dia (PUT) — a área continua aberta, de volta à leitura. */
-  salvarEdicao(l: LinhaPonto): void {
-    if (l.salvandoEdicao || !l.retif) return;
-    this.erro.set('');
-    if (this.mesFechado()) { this.erro.set('Mês encerrado pela folha de ponto definitiva.'); return; }
-    if (this.prazoExpirado()) { this.erro.set('Prazo de retificação encerrado.'); return; }
-    const msg = this.erroHoras(l);
-    if (msg) { this.erro.set(msg); return; }
-
-    const horas = [l.r_ent1, l.r_sai1, l.r_ent2, l.r_sai2].map(h => (h || '').trim());
-    l.salvandoEdicao = true;
-    this.linhas.set([...this.linhas()]);
-    this.api.put<any>(`/api/ponto/folha/${this.dados()!.id}/retificacoes/${l.retif.id}`, {
-      ent1: horas[0] || null, sai1: horas[1] || null,
-      ent2: horas[2] || null, sai2: horas[3] || null,
-      observacoes: (l.observacoes || '').trim(),
-    }).subscribe({
-      next: res => {
-        l.salvandoEdicao = false;
-        l.editando = false;
-        l.retif = res.data;
-        this.preencherDaRetif(l);
-        this.linhas.set([...this.linhas()]);
-        this.toast.success('Retificação atualizada.');
-      },
-      error: err => {
-        l.salvandoEdicao = false;
-        this.linhas.set([...this.linhas()]);
-        this.erro.set(erroCargaMsg(err, 'Não foi possível salvar a edição.'));
-      },
+  abrirMenu(l: LinhaDia, c: { campo: CampoHora; rotulo: string }, ev: MouseEvent): void {
+    ev.stopPropagation();   // senão o mesmo clique chega ao document e fecha o que acabou de abrir
+    if (!l.editavel || this.salvandoNoDia(l.data)) return;
+    this.edicao.set(null);
+    this.menu.set({
+      data: l.data,
+      campo: c.campo,
+      titulo: `${diaCurto(l.data)} · ${c.rotulo}`,
+      temCorrecao: l.corrigido,
+      ...ancoraDoClique(ev),
     });
   }
 
   /**
-   * Envia TODOS os dias abertos num único POST de lote — o backend grava numa transação só
-   * (F39). A trava de duplo clique tem duas camadas: o `[disabled]` do botão (visível) e este
-   * guard (que o `[disabled]` sozinho não garante — lição do C9).
+   * O mesmo menu, aberto pela faixa da ocorrência declarada: o alvo é o dia inteiro, e "Editar
+   * horário" entra pela primeira batida — digitar um horário é o que desfaz a declaração.
    */
-  salvar(): void {
-    if (this.salvando()) return;
-    this.erro.set('');
-    if (this.mesFechado()) { this.erro.set('Mês encerrado pela folha de ponto definitiva.'); return; }
-    if (this.prazoExpirado()) { this.erro.set('Prazo de retificação encerrado.'); return; }
-    // F63: o botão já some sem a listagem carregada — este guard é a segunda camada (lição do C9:
-    // esconder/desabilitar no template não é garantia de que o handler não roda).
-    if (!this.retificacoesCarregadas()) {
-      this.erro.set('Não foi possível concluir a operação.');
-      return;
-    }
+  abrirMenuDoDia(l: LinhaDia, ev: MouseEvent): void {
+    this.abrirMenu(l, { campo: 'ent1', rotulo: 'Dia' }, ev);
+  }
 
-    const payloads: Record<string, unknown>[] = [];
-    for (const l of this.selecionadas().filter(x => !x.ja_retificado)) {
-      const horas = [l.r_ent1, l.r_sai1, l.r_ent2, l.r_sai2].map(h => (h || '').trim());
-      const obs = (l.observacoes || '').trim();
+  fecharMenu(): void {
+    this.menu.set(null);
+  }
 
-      // Dia aberto e INTOCADO (o "+" clicado por engano): não é retificação — fica fora do lote.
-      if (horas.every(h => !h) && !obs) continue;
+  @HostListener('document:click')
+  onCliqueFora(): void {
+    if (this.menu()) this.fecharMenu();
+  }
 
-      // Um dia com observação e NENHUM horário é tentativa real de retificar: recusa visível,
-      // nunca descarte silencioso — as mesmas regras de conteúdo da edição (erroHoras).
-      const msg = this.erroHoras(l);
-      if (msg) { this.erro.set(msg); return; }
-      const data = this.diaParaISO(l.dia);
-      if (!data) { this.erro.set(`Data inválida em ${l.dia}.`); return; }
-      payloads.push({
-        data,
-        ent1: horas[0] || null, sai1: horas[1] || null,
-        ent2: horas[2] || null, sai2: horas[3] || null,
-        observacoes: obs,
+  @HostListener('document:keydown.escape')
+  onEscape(): void {
+    if (this.menu()) this.fecharMenu();
+    else if (this.edicao()) this.cancelarEdicao();
+  }
+
+  /** Primeira opção do menu: a célula vira campo, já com o valor que está à vista. */
+  editarHorario(): void {
+    const m = this.menu();
+    if (!m) return;
+    const celula = this.celulaDe(m.data, m.campo);
+    this.fecharMenu();
+    this.rascunho.set(celula && HORA_RE.test(celula.valor) ? celula.valor : '');
+    this.edicao.set({ data: m.data, campo: m.campo });
+    setTimeout(() => this.focarCampo());
+  }
+
+  /** Declara a ocorrência para o dia inteiro — os horários do dia saem junto. */
+  declarar(t: TipoDeclaravel): void {
+    const m = this.menu();
+    if (!m) return;
+    this.fecharMenu();
+    this.gravar(m.data, () => this.api.put<any>(`${this.rota()}/tipo`, { data: m.data, tipo_id: t.id }));
+  }
+
+  /** Apaga a correção do dia: ele volta a valer exatamente o que a folha trouxe. */
+  limpar(): void {
+    const m = this.menu();
+    if (!m) return;
+    this.fecharMenu();
+    const data = m.data;
+    this.emVoo(data, () => this.api.delete<any>(`${this.rota()}/${data}`), () => {
+      this.correcoes.update(atuais => {
+        const resto = { ...atuais };
+        delete resto[data];
+        return resto;
       });
-    }
-    if (!payloads.length) { this.erro.set('Nenhum dia preenchido para retificar.'); return; }
+    });
+  }
 
-    const id = this.dados()!.id;
-    this.salvando.set(true);
-    this.api.post<any>(`/api/ponto/folha/${id}/retificacoes`, { dias: payloads }).subscribe({
-      next: () => {
-        // segue travado: a tela já está de saída (o ok-box fica 1,4 s e o componente é destruído)
-        this.enviado.set(true);
-        this.timerSaida = setTimeout(() => this.router.navigateByUrl(this.voltarLink), 1400);
+  // ══════════════════════════════════════════════════════════════
+  // Digitação da célula
+  // ══════════════════════════════════════════════════════════════
+
+  /**
+   * Cada tecla passa por aqui. O horário completo grava sozinho — é o quarto dígito que fecha a
+   * conta, e esperar por um botão que não existe seria pedir um gesto a mais.
+   */
+  aoDigitar(l: LinhaDia, c: CelulaDia, valor: string): void {
+    this.rascunho.set(valor);
+    if (HORA_RE.test(valor)) this.gravarCelula(l, c, valor);
+  }
+
+  /**
+   * Sair do campo com o horário completo grava; com ele pela metade, descarta em silêncio. O que
+   * está incompleto não é uma correção — avisar sobre um "08:0" que ninguém terminou de digitar
+   * seria transformar hesitação em erro.
+   */
+  aoSair(l: LinhaDia, c: CelulaDia): void {
+    const valor = this.rascunho();
+    if (!this.editandoCelula(l.data, c.campo)) return;   // a gravação pelo 4º dígito já fechou o campo
+    this.edicao.set(null);
+    if (HORA_RE.test(valor)) this.gravarCelula(l, c, valor);
+  }
+
+  cancelarEdicao(): void {
+    this.edicao.set(null);
+    this.rascunho.set('');
+  }
+
+  private gravarCelula(l: LinhaDia, c: CelulaDia, valor: string): void {
+    this.edicao.set(null);   // fecha o campo ANTES do envio: o blur seguinte não grava de novo
+    this.rascunho.set('');
+    // Nada mudou: o campo abre com o horário que está à vista, e abrir para desistir não é
+    // correção — gravar aqui criaria uma retificação que repete a folha, palavra por palavra.
+    if (valor === c.valor) return;
+    this.gravar(l.data, () => this.api.put<any>(`${this.rota()}/celula`,
+      { data: l.data, campo: c.campo, valor }));
+  }
+
+  /** Gravação que devolve a correção do dia — a resposta substitui o que a tela mostrava. */
+  private gravar(data: string, req: () => Observable<any>): void {
+    this.emVoo(data, req, (res: any) => {
+      const salva: RetifSalva = res?.data;
+      if (salva?.data) this.correcoes.update(m => ({ ...m, [salva.data]: salva }));
+    });
+  }
+
+  /**
+   * O envio de um dia, com a fila e o desfecho no mesmo lugar: enquanto ele voa, aquele dia não
+   * aceita outro gesto — dois salvamentos do mesmo dia chegariam juntos ao servidor e um deles se
+   * perderia. Dias diferentes seguem livres: a espera de um não trava a folha inteira.
+   *
+   * <p>A requisição chega como receita e não como pedido já feito: o dia barrado pela fila não deve
+   * nem montar a chamada. Erro não mexe na tela — a célula continua com o que o servidor tem, e o
+   * aviso vai pelo toast.
+   */
+  private emVoo(data: string, req: () => Observable<any>, aoConcluir: (res: any) => void): void {
+    if (this.salvandoNoDia(data)) return;
+    const seq = this.seq;
+    this.entrarNaFila(data);
+    req().subscribe({
+      next: (res: any) => {
+        if (seq !== this.seq) return;   // a folha foi recarregada: esta resposta é de outra tela
+        this.sairDaFila(data);
+        aoConcluir(res);
       },
-      error: err => {
-        this.salvando.set(false);
-        // A recusa é uma TAREFA (qual dia consertar): a guia da tela — que o lote é tudo-ou-nada —
-        // vem na frente, e o motivo do backend, que nomeia o dia, vem anexado. Fica na tela.
-        this.erro.set(erroCargaMsg(err, 'Não foi possível concluir a operação.'));
-        this.carregarRetificacoes(id);   // re-sincroniza os dias que porventura passaram
+      error: (err: any) => {
+        if (seq !== this.seq) return;
+        this.sairDaFila(data);
+        this.toast.error(httpErrorMsg(err, 'Não foi possível salvar a correção.'));
       },
     });
   }
 
-  /** Sem isto, sair da tela dentro da janela de 1,4 s é arrancado de volta para /ponto (F40). */
-  ngOnDestroy(): void {
-    clearTimeout(this.timerSaida);
+  private entrarNaFila(data: string): void {
+    this.salvandoEm.update(fila => new Set(fila).add(data));
   }
+
+  private sairDaFila(data: string): void {
+    this.salvandoEm.update(fila => {
+      const resto = new Set(fila);
+      resto.delete(data);
+      return resto;
+    });
+  }
+
+  private rota(): string {
+    return `/api/ponto/folha/${this.folha()!.id}/retificacoes`;
+  }
+
+  /** O campo que está à vista — no celular, a tabela existe no documento, mas escondida. */
+  private focarCampo(): void {
+    const campos = this.camposHora().map(ref => ref.nativeElement);
+    (campos.find(el => el.offsetParent !== null) ?? campos[0])?.focus();
+  }
+
+  private celulaDe(data: string, campo: CampoHora): CelulaDia | undefined {
+    return this.linhas().find(l => l.data === data)?.celulas.find(c => c.campo === campo);
+  }
+}
+
+/** Indexa por dia o que o servidor manda em lista. */
+function porData<T extends { data: string }>(itens: T[]): Record<string, T> {
+  const out: Record<string, T> = {};
+  for (const item of itens) out[item.data] = item;
+  return out;
+}
+
+/** "dd/mm/aa - diasem" → "20aa-mm-dd"; vazio quando o rótulo não traz data legível. */
+function dataISO(dia: string): string {
+  const m = (dia || '').match(/^(\d{2})\/(\d{2})\/(\d{2})/);
+  return m ? `20${m[3]}-${m[2]}-${m[1]}` : '';
+}
+
+/** "2026-08-06" → "06/08" — o dia como o cabeçalho do menu o nomeia. */
+function diaCurto(data: string): string {
+  const m = (data || '').match(/^\d{4}-(\d{2})-(\d{2})$/);
+  return m ? `${m[2]}/${m[1]}` : data;
+}
+
+/**
+ * Sábado ou domingo? A data é montada em partes, no fuso local: `new Date('2026-08-08')` é meia-noite
+ * UTC e, aqui, ainda é o dia anterior — o fim de semana sairia deslocado.
+ */
+function ehFimDeSemana(data: string): boolean {
+  const m = (data || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return false;
+  const dow = new Date(+m[1], +m[2] - 1, +m[3]).getDay();
+  return dow === 0 || dow === 6;
 }

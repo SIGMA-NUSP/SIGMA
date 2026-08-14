@@ -3,6 +3,7 @@ import { ApiService } from '../../core/services/api.service';
 import { AuthService } from '../../core/services/auth.service';
 import { httpErrorMsg } from '../../core/helpers/http.helpers';
 import { MESES } from '../../core/helpers/table.helpers';
+import { ancoraDoClique } from '../../core/helpers/popover.helpers';
 import { ConfigurarTiposMarcacaoComponent, TipoMarcacao } from './configurar-tipos-marcacao.component';
 import { MesAno, MesAnoSelectorComponent, anosNavegaveis } from './mes-ano-selector.component';
 import { ToastService } from './toast.component';
@@ -12,7 +13,7 @@ type Categoria = 'operadores' | 'tecnicos' | 'administradores';
 
 /** Célula já resolvida pela precedência do §1 no backend (E10 passo 1). */
 interface Celula {
-  tipo: 'horarios' | 'banco' | 'marcacao_pessoa' | 'marcacao_global';
+  tipo: 'horarios' | 'banco' | 'ocorrencia' | 'marcacao_pessoa' | 'marcacao_global';
   texto: string;
   tem_obs: boolean;
   obs?: string;
@@ -347,10 +348,13 @@ export class GradeRetificacoesComponent implements OnInit {
    */
   private seqContexto = 0;
 
-  /** Escopo do catálogo correspondente ao que está sendo marcado. */
+  /**
+   * Escopo do catálogo correspondente ao que está sendo marcado. O tipo que o funcionário declara
+   * na própria folha fica de fora: marcá-lo aqui contaria como folga um dia que ninguém declarou.
+   */
   private tiposDoEscopo = computed(() => {
     const escopo = this.alvo()?.escopo === 'dia' ? 'GLOBAL' : 'INDIVIDUAL';
-    return this.tipos().filter(t => t.escopo === escopo);
+    return this.tipos().filter(t => t.escopo === escopo && !t.visivel_funcionario);
   });
 
   /** Opções do popover: "Nenhuma" (que desmarca) primeiro, depois os tipos do escopo. */
@@ -383,7 +387,11 @@ export class GradeRetificacoesComponent implements OnInit {
     return this.grade()?.celulas?.[pessoaId]?.[dia];
   }
 
-  /** Horários (2/4) agrupados em pares Ent./Saí. — cada par numa linha, para a coluna caber estreita. */
+  /**
+   * As batidas do dia agrupadas em pares Ent./Saí. — cada par numa linha, para a coluna caber
+   * estreita. A batida que ninguém preencheu chega marcada, e é o que mantém cada horário na
+   * própria posição quando o dia veio pela metade.
+   */
   horariosLinhas(texto: string): string[] {
     const partes = texto.split(' ').filter(p => p);
     const linhas: string[] = [];
@@ -447,13 +455,13 @@ export class GradeRetificacoesComponent implements OnInit {
 
   /**
    * A célula do funcionário só aceita ocorrência quando não há nada que prevaleça
-   * sobre ela: fim de semana, horários de retificação, folga aprovada ou uma
+   * sobre ela: fim de semana, qualquer retificação, folga aprovada ou uma
    * ocorrência geral no dia — nesses casos a marcação ficaria gravada e invisível.
    */
   celulaClicavel(pessoaId: string, d: DiaInfo): boolean {
     if (d.fim_semana || d.marcacao_global_id) return false;
     const tipo = this.celula(pessoaId, d.dia)?.tipo;
-    return tipo !== 'horarios' && tipo !== 'banco';
+    return tipo !== 'horarios' && tipo !== 'banco' && tipo !== 'ocorrencia';
   }
 
   chaveDia(dia: number): string { return `dia|${dia}`; }
@@ -469,7 +477,7 @@ export class GradeRetificacoesComponent implements OnInit {
     if (!this.diaClicavel(d) || this.salvandoEm()) return;
     this.abrir({
       escopo: 'dia', dia: d.dia, data: d.data, pessoaId: null,
-      atual: d.marcacao_global_id, ...ancora(ev),
+      atual: d.marcacao_global_id, ...ancoraDoClique(ev),
     }, ev);
   }
 
@@ -478,7 +486,7 @@ export class GradeRetificacoesComponent implements OnInit {
     const c = this.celula(f.id, d.dia);
     this.abrir({
       escopo: 'pessoa', dia: d.dia, data: d.data, pessoaId: f.id,
-      atual: c?.tipo === 'marcacao_pessoa' ? c.tipo_id ?? null : null, ...ancora(ev),
+      atual: c?.tipo === 'marcacao_pessoa' ? c.tipo_id ?? null : null, ...ancoraDoClique(ev),
     }, ev);
   }
 
@@ -627,26 +635,3 @@ function corpoPessoal(data: string, tipoId: string | null, pessoaId: string, pes
                 : { pessoais: { ...pessoa, remover: [data] } };
 }
 
-/** Largura e altura máximas do popover — as mesmas do CSS, e o que permite o encaixe sem medir o DOM. */
-const POPOVER_LARGURA = 260;
-const POPOVER_ALTURA = 280;
-const MARGEM_TELA = 8;
-
-/**
- * Onde o popover cabe a partir do elemento clicado, em coordenadas de viewport. Os últimos dias
- * do mês ficam no rodapé da tela e as últimas colunas na borda direita: sem o encaixe, a lista
- * abriria fora da janela. O cálculo é aritmético (a caixa tem tamanho máximo conhecido) — medir o
- * elemento renderizado exigiria esperar o frame seguinte, e a lista já nasce no lugar certo.
- */
-function ancora(ev: MouseEvent): { x: number; y: number; acima: boolean } {
-  const r = (ev.currentTarget as HTMLElement | null)?.getBoundingClientRect();
-  const esquerda = r?.left ?? 0, base = r?.bottom ?? 0, topo = r?.top ?? 0;
-  const limiteX = Math.max(MARGEM_TELA, window.innerWidth - POPOVER_LARGURA - MARGEM_TELA);
-  const espacoAbaixo = window.innerHeight - base;
-  const acima = espacoAbaixo < POPOVER_ALTURA && topo > espacoAbaixo;
-  return {
-    x: Math.round(Math.min(Math.max(esquerda, MARGEM_TELA), limiteX)),
-    y: Math.round(acima ? topo : base),
-    acima,
-  };
-}

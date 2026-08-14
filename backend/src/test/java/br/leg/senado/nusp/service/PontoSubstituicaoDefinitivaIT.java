@@ -204,11 +204,10 @@ class PontoSubstituicaoDefinitivaIT {
 
     /** Retificação real do dono pela folha indicada (o mesmo caminho da tela). */
     private Map<String, Object> retificar(PontoLotePagina pagina, LocalDate dia) {
-        Map<String, Object> item = new LinkedHashMap<>();
-        item.put("data", dia.toString());
-        item.put("ent1", "08:00");
-        item.put("sai1", "12:00");
-        return retificacaoService.criarRetificacoes(pagina.getId(), ana.getId(), Map.of("dias", List.of(item)));
+        retificacaoService.salvarCelula(pagina.getId(), ana.getId(),
+                Map.of("data", dia.toString(), "campo", "ent1", "valor", "08:00"));
+        return retificacaoService.salvarCelula(pagina.getId(), ana.getId(),
+                Map.of("data", dia.toString(), "campo", "sai1", "valor", "12:00"));
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -485,7 +484,6 @@ class PontoSubstituicaoDefinitivaIT {
         private PontoLote definitiva;
         private PontoLotePagina folhaSemanal;
         private PontoLotePagina folhaDefinitiva;
-        private String retificacaoDoDiaAberto;
 
         @BeforeEach
         void semanalPublicadaComUmDiaRetificado() {
@@ -494,8 +492,7 @@ class PontoSubstituicaoDefinitivaIT {
                 folhaSemanal = folhaDeAna(semanal);
             });
             pontoService.publicar(semanal.getId(), false, false, "master.teste");
-            retificacaoDoDiaAberto = String.valueOf(
-                    itens(retificar(folhaSemanal, DIA_RETIFICADO)).get(0).get("id"));
+            retificar(folhaSemanal, DIA_RETIFICADO);
         }
 
         /** Fecha julho: a mensal definitiva entra mesmo com a semanal do mesmo mês já publicada. */
@@ -531,25 +528,37 @@ class PontoSubstituicaoDefinitivaIT {
         }
 
         @Test
-        @DisplayName("a folha passa a se declarar fechada e a retificação já gravada não aceita mais edição")
+        @DisplayName("os dias da folha passam a vir fechados e a retificação já gravada não aceita mais edição")
         void mesFechadoBloqueiaAEdicaoDaRetificacaoJaGravada() {
-            assertFalse((Boolean) retificacoesNaFolha(folhaSemanal).get("mes_fechado"),
-                    "antes da definitiva o mês está aberto e a tela libera a folha inteira");
+            assertTrue(diaAberto(folhaSemanal, DIA_RETIFICADO),
+                    "antes da definitiva o dia está aberto");
 
             publicarADefinitivaDeJulho();
 
-            assertTrue((Boolean) retificacoesNaFolha(folhaSemanal).get("mes_fechado"),
+            assertFalse(diaAberto(folhaSemanal, DIA_RETIFICADO),
                     "todo o período da semanal cai em julho, que a definitiva encerrou");
 
-            ServiceValidationException edicao = recusaDe(() -> retificacaoService.editarRetificacao(
-                    folhaSemanal.getId(), retificacaoDoDiaAberto, ana.getId(),
-                    Map.of("ent1", "09:00", "sai1", "13:00")));
+            ServiceValidationException edicao = recusaDe(() -> retificacaoService.salvarCelula(
+                    folhaSemanal.getId(), ana.getId(),
+                    Map.of("data", DIA_RETIFICADO.toString(), "campo", "ent1", "valor", "09:00")));
             assertEquals(HttpStatus.BAD_REQUEST, edicao.getStatus());
             assertEquals("Não é possível retificar. Folha definitiva já publicada.", edicao.getMessage());
 
             Map<String, Object> mantida = itens(retificacoesNaFolha(folhaSemanal)).get(0);
             assertEquals("08:00", mantida.get("ent1"), "a recusa não pode ter gravado a edição pela metade");
             assertEquals("12:00", mantida.get("sai1"));
+        }
+
+        /** O dia, como a folha o apresenta ao dono: aberto ou não à retificação. */
+        @SuppressWarnings("unchecked")
+        private boolean diaAberto(PontoLotePagina pagina, LocalDate data) {
+            List<Map<String, Object>> dias =
+                    (List<Map<String, Object>>) retificacoesNaFolha(pagina).get("dias");
+            return dias.stream()
+                    .filter(d -> data.toString().equals(d.get("data")))
+                    .map(d -> Boolean.TRUE.equals(d.get("aberto")))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("o dia " + data + " não veio na folha"));
         }
     }
 }

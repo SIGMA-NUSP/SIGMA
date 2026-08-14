@@ -61,6 +61,11 @@ function payloadGrade(qtdFuncionarios = 3) {
         1: { tipo: 'banco', texto: 'Folga', tem_obs: false },
         6: { tipo: 'marcacao_global', texto: 'Feriado', tem_obs: false, tipo_id: 'tp-feriado' },
       },
+      // Ocorrência que o próprio funcionário declarou na retificação: vem sem tipo do catálogo,
+      // porque o administrador não marca por cima dela.
+      'op-3': {
+        7: { tipo: 'ocorrencia', texto: 'Atestado', tem_obs: false },
+      },
     },
   };
 }
@@ -91,11 +96,13 @@ describe('GradeRetificacoesComponent', () => {
    * tipos aparecem na lista do popover, logo abaixo do "Nenhuma".
    */
   const TIPOS: TipoMarcacao[] = [
-    { id: 'tp-feriado', nome: 'Feriado', badge: 'Fer', escopo: 'GLOBAL' },
-    { id: 'tp-facultativo', nome: 'Ponto Facultativo', badge: 'PF', escopo: 'GLOBAL' },
-    { id: 'tp-disposicao', nome: 'À Disposição', badge: 'Disp', escopo: 'INDIVIDUAL' },
-    { id: 'tp-atestado', nome: 'Atestado', badge: 'Atest', escopo: 'INDIVIDUAL' },
-    { id: 'tp-ferias', nome: 'Férias', badge: 'Fér', escopo: 'INDIVIDUAL' },
+    { id: 'tp-feriado', nome: 'Feriado', badge: 'Fer', escopo: 'GLOBAL', visivel_funcionario: false },
+    { id: 'tp-facultativo', nome: 'Ponto Facultativo', badge: 'PF', escopo: 'GLOBAL', visivel_funcionario: false },
+    { id: 'tp-disposicao', nome: 'À Disposição', badge: 'Disp', escopo: 'INDIVIDUAL', visivel_funcionario: false },
+    { id: 'tp-atestado', nome: 'Atestado', badge: 'Atest', escopo: 'INDIVIDUAL', visivel_funcionario: false },
+    { id: 'tp-ferias', nome: 'Férias', badge: 'Fér', escopo: 'INDIVIDUAL', visivel_funcionario: false },
+    // O tipo que o funcionário declara não entra na lista de ocorrências do administrador.
+    { id: 'tp-banco', nome: 'Banco de horas', badge: 'Ban', escopo: 'INDIVIDUAL', visivel_funcionario: true },
   ];
 
   /** Resposta de erro com corpo do backend. */
@@ -211,7 +218,7 @@ describe('GradeRetificacoesComponent', () => {
 
       expect(chamadasDe('tipos')).toBe(1);
       expect(chamadasDe('marcacoes')).toBe(0);
-      expect(comp.tipos()).toHaveLength(5);
+      expect(comp.tipos()).toHaveLength(6);
 
       comp.abrirNoDia(dia(comp, 1), clique());
       expect(chamadasDe('tipos')).toBe(1);       // o popover abre com o que já está em memória
@@ -542,7 +549,7 @@ describe('GradeRetificacoesComponent', () => {
     });
 
     it('sem tipo cadastrado no escopo, não há opção nenhuma (nem o "Nenhuma" sozinho)', () => {
-      respostas.tipos = () => of({ data: { tipos: [{ id: 'tp-feriado', nome: 'Feriado', badge: 'F', escopo: 'GLOBAL' }] } });
+      respostas.tipos = () => of({ data: { tipos: [{ id: 'tp-feriado', nome: 'Feriado', badge: 'F', escopo: 'GLOBAL', visivel_funcionario: false }] } });
       const comp = criarCarregado();
 
       abrirCelula(comp, 'op-3', 1);            // escopo INDIVIDUAL, catálogo só com GLOBAL
@@ -551,6 +558,22 @@ describe('GradeRetificacoesComponent', () => {
       comp.fecharPopover();
       comp.abrirNoDia(dia(comp, 1), clique()); // escopo GLOBAL: tem tipo
       expect(rotulos(comp)).toEqual(['Nenhuma', 'Feriado']);
+    });
+
+    it('a ocorrência declarada pelo funcionário não abre o popover — é retificação, não marcação', () => {
+      const comp = criarCarregado();
+      expect(comp.celulaClicavel('op-3', dia(comp, 7))).toBe(false);
+
+      abrirCelula(comp, 'op-3', 7);
+      expect(comp.alvo()).toBeNull();
+    });
+
+    it('o tipo que o funcionário declara fica fora das opções, ainda que seja individual', () => {
+      const comp = criarCarregado();
+      abrirCelula(comp, 'op-3', 1);
+
+      expect(comp.tipos().some(t => t.nome === 'Banco de horas')).toBe(true);
+      expect(rotulos(comp)).not.toContain('Banco de horas');
     });
   });
 

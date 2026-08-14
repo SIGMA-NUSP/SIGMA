@@ -1,84 +1,136 @@
-import { DebugElement } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { ActivatedRoute, Router } from '@angular/router';
-import { Subject, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { ApiService } from '../../core/services/api.service';
 import { PontoRetificarComponent } from './ponto-retificar.component';
 import { ToastService } from './toast.component';
 
 /**
- * PontoRetificarComponent: carga da folha e dos dias já retificados (fail-closed com retry),
- * prazo calculado no BACKEND (o front só lê `limite_fmt`/`prazo_expirado`/`mes_fechado` de
- * `GET /api/ponto/folha/{id}/retificacoes`; o mês encerrado pela folha definitiva bloqueia a
- * folha inteira e prevalece sobre o prazo), validação de pares Ent./Saí., teto de 300
- * caracteres na observação e gravação em UM POST de LOTE (`{dias:[…]}`, transacional), com
- * trava de duplo clique e timer de navegação cancelado no destroy. Dia JÁ retificado chega da
- * listagem com o conteúdo gravado (`retif`, com id), a linha expande em LEITURA no clique e,
- * dentro do prazo, é editável — sobrescrita via PUT; o sucesso da edição vai ao TOAST e a
- * recusa ao sinal `erro`, permanecendo em edição. TestBed sem `detectChanges()`;
- * `ApiService`/`Router`/`ActivatedRoute`/`ToastService` mockados via `useValue` (o
- * `RouterLink` do template resolve os mesmos mocks na criação). Fake timers COMPLETOS (não só
- * `Date`) — o `salvar()` feliz agenda `setTimeout(…, 1400)` — instalados APÓS
- * `compileComponents()`, que exige timers reais. ⚠️ Zoneless: `TestBed.createComponent` deixa
- * timers pendentes (`fixture.autoDetectChanges(false)` é PROIBIDO) e drenar timers
- * (`runAllTimers`/`advanceTimersByTime`) ACORDA a change detection, que roda o `ngOnInit` do
- * SUT — drenar SÓ onde o efeito do timer é o objeto do teste, e nunca assertar contagem de
- * chamadas à API depois de drenar.
+ * PontoRetificarComponent: a folha publicada virando planilha editável, uma CÉLULA por vez.
+ *
+ * A tela nasce de duas cargas independentes — `GET /dados` (as linhas impressas na folha) e
+ * `GET /retificacoes` (o que cada dia ainda aceita, o que já foi corrigido e as ocorrências
+ * ofertadas). A segunda é o que DESTRAVA a edição: enquanto ela não chega, ou se falha, nenhuma
+ * célula é editável e a caixa de erro com "Tentar novamente" é o único caminho de volta.
+ *
+ * Cada batida se grava sozinha: o clique abre um menu ancorado na célula, "Editar horário"
+ * transforma a célula num campo e o horário completo dispara `PUT .../celula` na hora — sem botão
+ * Salvar, sem par obrigatório, sem envio em lote e sem observação em nenhuma das rotas. O mesmo
+ * menu declara uma ocorrência para o dia inteiro (`PUT .../tipo`) ou apaga a correção
+ * (`DELETE .../{data}`). A tela nunca é otimista: só a resposta muda o que está à vista, o erro
+ * vai ao toast e o dia com gravação em voo não aceita outro gesto — os outros dias, sim.
+ *
+ * TestBed sem `detectChanges()` por padrão — `ngOnInit` à mão, filhos não instanciados;
+ * `ApiService`/`ToastService`/`Router`/`ActivatedRoute` mockados via `useValue` (o `RouterLink` do
+ * template resolve o mesmo mock de `Router` na criação). Fake timers instalados APÓS
+ * `compileComponents()`, que exige timers reais: "Editar horário" agenda o foco do campo num
+ * `setTimeout` que nenhum teste precisa drenar — e drenar timers no zoneless acordaria a change
+ * detection. Os payloads reproduzem a API como ela responde de verdade, OMITINDO as chaves nulas
+ * (dia sem marcação não traz `marcacao_global`; correção só de `ent1` não traz os outros campos).
  */
 describe('PontoRetificarComponent', () => {
   let apiGet: ReturnType<typeof vi.fn>;
-  let apiPost: ReturnType<typeof vi.fn>;
   let apiPut: ReturnType<typeof vi.fn>;
-  let toastSuccess: ReturnType<typeof vi.fn>;
-  let navigateByUrl: ReturnType<typeof vi.fn>;
+  let apiDelete: ReturnType<typeof vi.fn>;
+  let toastError: ReturnType<typeof vi.fn>;
   let paginaId: string | null;
+  /** Resposta corrente de cada carga — trocar UMA não toca na outra. */
+  let respostas: { dados: () => Observable<any>; janela: () => Observable<any> };
 
-  /** Folha semanal com 3 dias: 2 úteis + 1 de status (Feriado). */
+  type Linha = ReturnType<PontoRetificarComponent['linhas']>[number];
+  type Celula = Linha['celulas'][number];
+
+  /**
+   * Folha semanal de 03/08 a 09/08 como o servidor a imprime, com um dia para cada estado que a
+   * tela precisa distinguir.
+   */
   const FOLHA = {
     id: 'pag-1',
     tipo: 'SEMANAL',
-    data_inicio: '2026-07-06',
-    data_fim: '2026-07-10',
+    data_inicio: '2026-08-03',
+    data_fim: '2026-08-09',
     linhas: [
-      { dia: '06/07/26 - seg', ent1: '08:00', sai1: '12:00', ent2: '13:00', sai2: '17:00', total_dia: '08:00', banco: '00:00' },
-      { dia: '07/07/26 - ter', ent1: 'Feriado', sai1: '', ent2: '', sai2: '', total_dia: '', banco: '00:00' },
-      { dia: '08/07/26 - qua', ent1: '08:10', sai1: '12:00', ent2: '', sai2: '', total_dia: '03:50', banco: '-02:10' },
+      { dia: '03/08/26 - seg', ent1: '08:00', sai1: '12:00', ent2: '13:00', sai2: '17:00', total_dia: '08:00', banco: '00:00' },
+      { dia: '04/08/26 - ter', ent1: '08:12', sai1: '12:00', ent2: '', sai2: '', total_dia: '03:48', banco: '-04:12' },
+      { dia: '05/08/26 - qua', ent1: 'Falta', sai1: '', ent2: '', sai2: '', total_dia: '', banco: '-08:00' },
+      { dia: '06/08/26 - qui', ent1: '', sai1: '', ent2: '', sai2: '', total_dia: '', banco: '00:00' },
+      { dia: '07/08/26 - sex', ent1: '09:10', sai1: '12:00', ent2: '13:00', sai2: '18:00', total_dia: '07:50', banco: '-00:10' },
+      { dia: '08/08/26 - sáb', ent1: '', sai1: '', ent2: '', sai2: '', total_dia: '', banco: '00:00' },
     ],
   };
 
-  /** URL única de gravação: um POST de lote com todos os dias. */
-  const URL_LOTE = '/api/ponto/folha/pag-1/retificacoes';
+  /** Índice de cada linha da folha, pelo estado que ela representa. */
+  const ABERTO = 0;      // 03/08 (seg) — aceita correção e não tem nenhuma
+  const CORRIGIDO = 1;   // 04/08 (ter) — aceita correção e já tem uma, num campo só
+  const STATUS = 2;      // 05/08 (qua) — aceita correção, mas a folha traz "Falta" no lugar da hora
+  const FERIADO = 3;     // 06/08 (qui) — o administrador marcou o dia para todos
+  const FECHADO = 4;     // 07/08 (sex) — fora da janela, com correções já gravadas
+  const SABADO = 5;      // 08/08 (sáb) — fim de semana, ainda que a janela o diga aberto
 
-  /** Retificação já gravada do dia 08/07 (quarta), como a listagem devolve: id + conteúdo. */
-  const RETIF_QUA = {
-    id: 'ret-8',
-    data: '2026-07-08',
-    ent1: '08:00', sai1: '12:00', ent2: '13:00', sai2: '17:00',
-    observacoes: 'esqueci de bater',
+  /**
+   * `GET /retificacoes`: o que cada dia aceita, o que já foi corrigido e as ocorrências que o
+   * funcionário pode declarar. As chaves nulas NÃO vêm — é assim que a API responde.
+   */
+  const JANELA = {
+    dias: [
+      { data: '2026-08-03', aberto: true },
+      { data: '2026-08-04', aberto: true },
+      { data: '2026-08-05', aberto: true },
+      { data: '2026-08-06', aberto: true, marcacao_global: 'Feriado' },
+      { data: '2026-08-07', aberto: false },
+      { data: '2026-08-08', aberto: true },
+    ],
+    retificacoes: [
+      { id: 'ret-4', data: '2026-08-04', ent1: '08:00' },
+      { id: 'ret-7', data: '2026-08-07', ent1: '09:00', sai1: '12:30' },
+    ],
+    tipos: [
+      { id: 'tp-banco', nome: 'Banco de horas' },
+      { id: 'tp-atestado', nome: 'Atestado' },
+    ],
   };
 
-  /** URL do PUT que sobrescreve a retificação gravada (a edição não passa pelo lote). */
-  const URL_EDICAO = '/api/ponto/folha/pag-1/retificacoes/ret-8';
+  const URL_DADOS = '/api/ponto/folha/pag-1/dados';
+  const URL_JANELA = '/api/ponto/folha/pag-1/retificacoes';
+  const URL_CELULA = '/api/ponto/folha/pag-1/retificacoes/celula';
+  const URL_TIPO = '/api/ponto/folha/pag-1/retificacoes/tipo';
+
+  /** A correção do dia como o servidor a devolve depois de gravar uma batida. */
+  const ecoCelula = (body: any, extra: Record<string, unknown> = {}) =>
+    ({ data: { id: `ret-${body.data}`, data: body.data, [body.campo]: body.valor, ...extra } });
+
+  /** A correção do dia como o servidor a devolve depois de declarar uma ocorrência. */
+  const ecoTipo = (body: any) => ({
+    data: {
+      id: `ret-${body.data}`,
+      data: body.data,
+      tipo_id: body.tipo_id,
+      tipo_nome: JANELA.tipos.find(t => t.id === body.tipo_id)?.nome,
+      conta_folga: true,
+    },
+  });
+
+  /** Resposta de erro com corpo do backend. */
+  const falha = (corpo: Record<string, string>) => () => throwError(() => ({ error: corpo }));
 
   beforeEach(async () => {
     paginaId = 'pag-1';
-    apiGet = vi.fn().mockImplementation((url: string) =>
-      url.endsWith('/dados')
-        ? of({ data: structuredClone(FOLHA) })
-        : of({ data: { limite_fmt: null, prazo_expirado: false, retificacoes: [] } }),
-    );
-    apiPost = vi.fn().mockReturnValue(of({ ok: true }));
-    apiPut = vi.fn().mockReturnValue(of({ ok: true, data: structuredClone(RETIF_QUA) }));
-    toastSuccess = vi.fn();
-    navigateByUrl = vi.fn();
+    respostas = {
+      dados: () => of({ data: structuredClone(FOLHA) }),
+      janela: () => of({ data: structuredClone(JANELA) }),
+    };
+    apiGet = vi.fn((url: string) => (url.endsWith('/dados') ? respostas.dados() : respostas.janela()));
+    apiPut = vi.fn((url: string, body: any) => of(url.endsWith('/tipo') ? ecoTipo(body) : ecoCelula(body)));
+    apiDelete = vi.fn().mockReturnValue(of({ ok: true }));
+    toastError = vi.fn();
 
     await TestBed.configureTestingModule({
       imports: [PontoRetificarComponent],
       providers: [
-        { provide: ApiService, useValue: { get: apiGet, post: apiPost, put: apiPut } },
-        { provide: ToastService, useValue: { error: vi.fn(), success: toastSuccess, warning: vi.fn(), show: vi.fn() } },
-        { provide: Router, useValue: { navigateByUrl } },
+        { provide: ApiService, useValue: { get: apiGet, put: apiPut, delete: apiDelete, post: vi.fn() } },
+        { provide: ToastService, useValue: { error: toastError, success: vi.fn(), warning: vi.fn(), show: vi.fn() } },
+        { provide: Router, useValue: { navigateByUrl: vi.fn() } },
         {
           provide: ActivatedRoute,
           useValue: { snapshot: { paramMap: { get: (k: string) => (k === 'paginaId' ? paginaId : null) } } },
@@ -86,8 +138,7 @@ describe('PontoRetificarComponent', () => {
       ],
     }).compileComponents(); // com timers reais — só depois falsificamos
 
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-07-12T10:00:00-03:00'));
+    vi.useFakeTimers();     // o foco do campo é agendado; nenhum teste precisa dele
   });
 
   afterEach(() => {
@@ -96,1401 +147,1131 @@ describe('PontoRetificarComponent', () => {
   });
 
   /** Cria o componente cru (sem detectChanges → sem ngOnInit automático). */
-  function criar(): PontoRetificarComponent {
-    return TestBed.createComponent(PontoRetificarComponent).componentInstance;
-  }
+  const criar = () => TestBed.createComponent(PontoRetificarComponent).componentInstance;
 
-  /** Componente com a folha já carregada (ngOnInit chamado à mão). */
+  /** Componente com a folha e a janela já carregadas. */
   function criarCarregado(): PontoRetificarComponent {
     const comp = criar();
     comp.ngOnInit();
     return comp;
   }
 
-  /** Resposta do endpoint de retificações (limite/prazo/dias já retificados). */
-  function respostaRetificacoes(data: Record<string, unknown>) {
-    apiGet.mockImplementation((url: string) =>
-      url.endsWith('/dados') ? of({ data: structuredClone(FOLHA) }) : of({ data }),
-    );
+  /** Substitui a resposta da janela, preservando o resto do payload. */
+  function janelaCom(patch: Record<string, unknown>): void {
+    respostas.janela = () => of({ data: { ...structuredClone(JANELA), ...patch } });
   }
 
-  /** A folha carrega, mas a LISTAGEM das retificações falha (fail-closed). */
-  function retificacoesFalham(erro: unknown = { status: 500, error: { ok: false, error: 'Erro interno do servidor' } }) {
-    apiGet.mockImplementation((url: string) =>
-      url.endsWith('/dados') ? of({ data: structuredClone(FOLHA) }) : throwError(() => erro),
-    );
+  const linha = (comp: PontoRetificarComponent, idx: number): Linha => comp.linhas()[idx];
+  const celula = (comp: PontoRetificarComponent, idx: number, campo: string): Celula =>
+    linha(comp, idx).celulas.find(c => c.campo === campo)!;
+
+  /** Clique com a âncora do menu (o componente lê o retângulo do elemento clicado). */
+  function clique(): MouseEvent {
+    return {
+      stopPropagation: vi.fn(),
+      currentTarget: { getBoundingClientRect: () => ({ left: 120, bottom: 260, top: 240 }) },
+    } as unknown as MouseEvent;
   }
 
-  /** Abre o dia (por índice) e preenche os horários/observações da retificação. */
-  function preencher(
-    comp: PontoRetificarComponent,
-    idx: number,
-    horas: Partial<{ r_ent1: string; r_sai1: string; r_ent2: string; r_sai2: string; observacoes: string }>,
-  ) {
-    const linha = comp.linhas()[idx];
-    comp.toggle(linha);
-    Object.assign(comp.linhas()[idx], horas);
-    return comp.linhas()[idx];
+  /** Abre o menu na célula (linha, campo). */
+  function abrir(comp: PontoRetificarComponent, idx: number, campo = 'ent1'): void {
+    comp.abrirMenu(linha(comp, idx), celula(comp, idx, campo), clique());
   }
 
-  /** Os dias do corpo do lote (o único POST). */
-  const diasEnviados = (chamada = 0) => apiPost.mock.calls[chamada][1].dias;
-
-  /** Folha carregada com a retificação de 08/07 já gravada (conteúdo completo, com id). */
-  function criarComRetifGravada(extra: Record<string, unknown> = {}, prazoExpirado = false): PontoRetificarComponent {
-    respostaRetificacoes({
-      limite_fmt: '17/07/2026',
-      prazo_expirado: prazoExpirado,
-      retificacoes: [{ ...structuredClone(RETIF_QUA), ...extra }],
-    });
-    return criarCarregado();
+  /** Abre o menu e escolhe "Editar horário": a célula vira campo. */
+  function editar(comp: PontoRetificarComponent, idx: number, campo = 'ent1'): void {
+    abrir(comp, idx, campo);
+    comp.editarHorario();
   }
 
-  /** A linha do dia retificado (08/07), já expandida e com os campos habilitados para edição. */
-  function linhaEmEdicao(comp: PontoRetificarComponent) {
-    const l = comp.linhas()[2];
-    comp.toggleRetif(l);
-    comp.iniciarEdicao(l);
-    return l;
+  /** Digita no campo aberto (o que a máscara emite a cada tecla). */
+  function digitar(comp: PontoRetificarComponent, idx: number, campo: string, valor: string): void {
+    comp.aoDigitar(linha(comp, idx), celula(comp, idx, campo), valor);
+  }
+
+  /** Sai do campo (blur). */
+  function sair(comp: PontoRetificarComponent, idx: number, campo: string): void {
+    comp.aoSair(linha(comp, idx), celula(comp, idx, campo));
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // ngOnInit — carga da folha pela rota
+  // Carga — duas requisições, cabeçalho do período e a caixa de erro
   // ═══════════════════════════════════════════════════════════════════
-  describe('ngOnInit', () => {
+  describe('carga da folha', () => {
     it('sem paginaId na rota: erro e nenhuma chamada à API', () => {
       paginaId = null;
       const comp = criar();
       comp.ngOnInit();
+
       expect(comp.erro()).toBe('Folha não informada.');
       expect(comp.loading()).toBe(false);
       expect(apiGet).not.toHaveBeenCalled();
     });
 
-    it('carrega a folha, fecha todas as linhas e encerra o loading', () => {
+    it('as duas requisições saem, na ordem: a folha e depois o que ela ainda aceita', () => {
       const comp = criarCarregado();
-      expect(apiGet.mock.calls[0][0]).toBe('/api/ponto/folha/pag-1/dados');
-      expect(comp.dados()?.id).toBe('pag-1');
-      expect(comp.linhas()).toHaveLength(3);
-      expect(comp.linhas().every(l => l.aberto === false)).toBe(true);
+
+      expect(apiGet).toHaveBeenCalledTimes(2);
+      expect(apiGet.mock.calls[0][0]).toBe(URL_DADOS);
+      expect(apiGet.mock.calls[1][0]).toBe(URL_JANELA);
+      expect(comp.folha()?.id).toBe('pag-1');
+      expect(comp.linhas()).toHaveLength(6);
       expect(comp.loading()).toBe(false);
       expect(comp.erro()).toBe('');
+      expect(comp.erroJanela()).toBe('');
     });
 
-    it('encadeia a carga das retificações da mesma folha', () => {
-      criarCarregado();
-      expect(apiGet.mock.calls[1][0]).toBe('/api/ponto/folha/pag-1/retificacoes');
+    it('cabeçalho da folha semanal: o período com as duas datas', () => {
+      const comp = criarCarregado();
+
+      expect(comp.tipoLabel()).toBe('semanal');
+      expect(comp.periodoFolhaLabel()).toBe('03/08/2026 a 09/08/2026');
     });
 
-    it('erro na folha: mensagem do backend (campo error tem precedência) e nenhuma 2ª chamada', () => {
-      const comp = criar();
-      apiGet.mockReturnValue(throwError(() => ({ error: { error: 'Folha de outro usuário' } })));
-      comp.ngOnInit();
+    it('cabeçalho da folha mensal: a competência', () => {
+      respostas.dados = () =>
+        of({ data: { ...structuredClone(FOLHA), tipo: 'MENSAL', data_inicio: '2026-08-01', data_fim: '2026-08-31' } });
+      const comp = criarCarregado();
+
+      expect(comp.tipoLabel()).toBe('mensal');
+      expect(comp.periodoFolhaLabel()).toBe('Agosto/2026');
+    });
+
+    it('sem folha carregada o cabeçalho fica vazio (nada de período inventado)', () => {
+      expect(criar().periodoFolhaLabel()).toBe('');
+    });
+
+    it('erro na folha: mensagem do backend e nenhuma 2ª requisição', () => {
+      respostas.dados = falha({ error: 'Folha de outro usuário', message: 'ignorada' });
+      const comp = criarCarregado();
+
       expect(comp.erro()).toBe('Folha de outro usuário');
-      expect(comp.dados()).toBeNull();
+      expect(comp.folha()).toBeNull();
       expect(comp.loading()).toBe(false);
-      expect(apiGet).toHaveBeenCalledTimes(1); // não encadeia /retificacoes
+      expect(apiGet).toHaveBeenCalledTimes(1);
+      expect(comp.linhas()).toEqual([]);
     });
 
     it('erro sem corpo: cai no fallback', () => {
-      const comp = criar();
-      apiGet.mockReturnValue(throwError(() => new Error('rede')));
-      comp.ngOnInit();
+      respostas.dados = () => throwError(() => new Error('rede'));
+      const comp = criarCarregado();
+
       expect(comp.erro()).toBe('Não foi possível carregar a folha.');
     });
 
-    it('folha sem linhas: lista vazia (sem estourar)', () => {
-      const comp = criar();
-      apiGet.mockImplementation((url: string) =>
-        url.endsWith('/dados') ? of({ data: { ...FOLHA, linhas: undefined } }) : of({ data: {} }),
-      );
-      comp.ngOnInit();
+    it('resposta sem data: nenhuma linha, e a janela ainda é buscada pelo id da rota', () => {
+      respostas.dados = () => of({});
+      const comp = criarCarregado();
+
       expect(comp.linhas()).toEqual([]);
+      expect(apiGet.mock.calls[1][0]).toBe(URL_JANELA);
+    });
+
+    it('render: o erro da folha ocupa a tela, e a tabela não aparece', () => {
+      respostas.dados = falha({ error: 'Folha não encontrada.' });
+      const fixture = renderizar();
+
+      const caixa = fixture.debugElement.query(By.css('.error-box'));
+      expect(caixa).not.toBeNull();
+      expect(caixa!.nativeElement.textContent).toContain('Folha não encontrada.');
+      expect(fixture.debugElement.query(By.css('table.ponto-table'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('.vista-mobile .dia-card'))).toBeNull();
     });
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // carregarRetificacoes — dias já retificados + prazo (vêm do backend)
+  // Fail-closed — sem a resposta da janela, NADA é editável
   // ═══════════════════════════════════════════════════════════════════
-  describe('carregarRetificacoes', () => {
-    it('marca ja_retificado nos dias que casam com a data ISO da retificação', () => {
-      respostaRetificacoes({
-        limite_fmt: '17/07/2026',
-        prazo_expirado: false,
-        retificacoes: [{ data: '2026-07-08' }],
-      });
-      const comp = criarCarregado();
-      expect(comp.linhas().map(l => l.ja_retificado)).toEqual([false, false, true]);
-      expect(comp.limiteFmt()).toBe('17/07/2026');
-      expect(comp.prazoExpirado()).toBe(false);
-    });
-
-    it('sem retificações: nenhum dia marcado', () => {
-      const comp = criarCarregado();
-      expect(comp.linhas().every(l => l.ja_retificado === false)).toBe(true);
-      expect(comp.limiteFmt()).toBeNull();
-    });
-
-    it('a falha NÃO é mais silenciosa: caixa de erro própria e envio BLOQUEADO (fail-closed)', () => {
-      // Antes: o `error` era um bloco vazio. Num 500/timeout a folha ficava na tela com todos os dias
-      // livres e sem prazo (fail-open); o usuário abria um dia que JÁ retificara, enviava, e levava o
-      // 400 "O dia … já foi retificado" sem ver retificação nenhuma — e, como o lote é tudo-ou-nada,
-      // o dia novo enviado junto TAMBÉM não gravava.
-      retificacoesFalham();
+  describe('fail-closed: a edição só existe com a janela na mão', () => {
+    it('enquanto a janela não responde, a folha aparece e nenhuma célula é editável', () => {
+      const emVoo = new Subject<any>();
+      respostas.janela = () => emVoo;
       const comp = criarCarregado();
 
-      expect(comp.linhas()).toHaveLength(3);              // a folha continua visível (ela carregou)
-      expect(comp.erroRetificacoes()).toContain('Não foi possível concluir a operação.');
-      expect(comp.retificacoesCarregadas()).toBe(false);  // ← o que bloqueia o Salvar
-      expect(comp.erro()).toBe('');                       // canal do formulário intocado (não se misturam)
+      expect(comp.carregandoJanela()).toBe(true);
+      expect(comp.linhas()).toHaveLength(6);
+      expect(comp.linhas().every(l => !l.editavel)).toBe(true);
+      expect(comp.tipos()).toEqual([]);
 
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      comp.salvar();
-
-      expect(apiPost).not.toHaveBeenCalled();             // preencher e mandar salvar não passa
-      expect(comp.erro()).toContain('Não foi possível concluir a operação.');
+      emVoo.next({ data: structuredClone(JANELA) });
+      expect(comp.carregandoJanela()).toBe(false);
+      expect(linha(comp, ABERTO).editavel).toBe(true);
     });
 
-    it('o retry recarrega, aplica marcação/prazo e DESTRAVA o envio', () => {
-      retificacoesFalham();
-      const comp = criarCarregado();
-      expect(comp.retificacoesCarregadas()).toBe(false);
-
-      respostaRetificacoes({ limite_fmt: '17/07/2026', prazo_expirado: false, retificacoes: [{ data: '2026-07-08' }] });
-      comp.recarregarRetificacoes();
-
-      expect(comp.erroRetificacoes()).toBe('');
-      expect(comp.retificacoesCarregadas()).toBe(true);
-      expect(comp.limiteFmt()).toBe('17/07/2026');
-      expect(comp.linhas().map(l => l.ja_retificado)).toEqual([false, false, true]);
-
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      comp.salvar();
-      expect(apiPost).toHaveBeenCalledTimes(1);           // o envio voltou a funcionar
-    });
-
-    it('o re-sync que falha depois de um lote recusado BLOQUEIA o Salvar de novo', () => {
-      // O `error` do salvar() re-sincroniza os dias que porventura passaram. Se ESSE GET falhar, a tela
-      // volta a não saber quem já foi retificado — e o próximo envio seria o mesmo tiro no escuro.
-      const comp = criarCarregado();
-      expect(comp.retificacoesCarregadas()).toBe(true);
-
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      apiPost.mockReturnValue(throwError(() => ({ error: { error: 'O dia 06/07/2026 já foi retificado.' } })));
-      retificacoesFalham();                                // o re-sync vai falhar
-
-      comp.salvar();
-
-      expect(comp.erro()).toContain('O dia 06/07/2026 já foi retificado.');   // o motivo do backend fica
-      expect(comp.retificacoesCarregadas()).toBe(false);                       // e o envio trava
-      expect(comp.erroRetificacoes()).not.toBe('');
-
-      apiPost.mockClear();
-      comp.salvar();
-      expect(apiPost).not.toHaveBeenCalled();
-    });
-
-    it('um erro ATRASADO não re-bloqueia o envio que um retry bem-sucedido já destravou', () => {
-      // Dois cliques no "Tentar novamente": a 1ª carga falha DEPOIS de a 2ª ter sucedido. Sem o token
-      // de recência, o erro velho voltaria a esconder o botão Salvar de uma tela já sincronizada.
-      const primeira = new Subject<any>();
-      const segunda = new Subject<any>();
-      apiGet.mockImplementation((url: string) =>
-        url.endsWith('/dados') ? of({ data: structuredClone(FOLHA) }) : primeira,
-      );
-      const comp = criarCarregado();          // 1ª carga das retificações: em voo
-
-      apiGet.mockImplementation((url: string) =>
-        url.endsWith('/dados') ? of({ data: structuredClone(FOLHA) }) : segunda,
-      );
-      comp.recarregarRetificacoes();          // 2ª carga: em voo
-
-      segunda.next({ data: { limite_fmt: '17/07/2026', prazo_expirado: false, retificacoes: [] } });
-      expect(comp.retificacoesCarregadas()).toBe(true);
-
-      primeira.error(new Error('500'));       // a falha da carga VELHA chega atrasada
-
-      expect(comp.retificacoesCarregadas()).toBe(true);   // e é ignorada
-      expect(comp.erroRetificacoes()).toBe('');
-    });
-
-    it('a falha da carga da FOLHA (a outra) continua no canal do formulário — nenhum canal foi trocado', () => {
-      apiGet.mockImplementation((url: string) =>
-        url.endsWith('/dados') ? throwError(() => ({ error: { error: 'Folha não encontrada.' } })) : of({ data: {} }),
-      );
+    it('com a janela em voo o menu não abre — a tela não aceita o que não sabe se pode gravar', () => {
+      respostas.janela = () => new Subject<any>();
       const comp = criarCarregado();
 
-      expect(comp.erro()).toBe('Folha não encontrada.');
-      expect(comp.erroRetificacoes()).toBe('');   // nem chegou a pedir as retificações
-      expect(comp.dados()).toBeNull();
+      abrir(comp, ABERTO);
+      expect(comp.menu()).toBeNull();
     });
-  });
 
-  // ═══════════════════════════════════════════════════════════════════
-  // RENDER — o usuário VÊ a caixa com retry, e o Salvar não está lá
-  // ═══════════════════════════════════════════════════════════════════
-  describe('render: caixa de erro com retry e Salvar bloqueado', () => {
-    async function renderizarComDiaAberto(): Promise<ComponentFixture<PontoRetificarComponent>> {
-      const fixture = TestBed.createComponent(PontoRetificarComponent);
-      fixture.detectChanges();                     // ngOnInit + render (respostas síncronas)
-      preencher(fixture.componentInstance, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      fixture.detectChanges();
-      await fixture.whenStable();                  // bindings do template (NgModel do textarea)
-      fixture.detectChanges();
-      return fixture;
-    }
+    it('janela com erro: guia da tela + detalhe do backend, e a folha inteira fica só leitura', () => {
+      respostas.janela = falha({ error: 'Erro interno do servidor' });
+      const comp = criarCarregado();
 
-    it('com a carga das retificações falhando: caixa role=alert com retry, e NENHUM botão Salvar', async () => {
-      retificacoesFalham();
-      const fixture = await renderizarComDiaAberto();
+      expect(comp.erroJanela()).toBe('Não foi possível concluir a operação. (Erro interno do servidor)');
+      expect(comp.carregandoJanela()).toBe(false);
+      expect(comp.erro()).toBe('');                       // o canal da FOLHA não é o da janela
+      expect(comp.linhas().every(l => !l.editavel)).toBe(true);
+      expect(comp.tipos()).toEqual([]);
+    });
 
-      const caixa = fixture.debugElement.query(By.css('app-erro-carga [role="alert"], app-erro-carga.erro-carga, .erro-carga'));
+    it('erro sem corpo: só o guia da tela', () => {
+      respostas.janela = () => throwError(() => new Error('rede'));
+      const comp = criarCarregado();
+
+      expect(comp.erroJanela()).toBe('Não foi possível concluir a operação.');
+    });
+
+    it('o retry recarrega a janela e devolve a edição', () => {
+      respostas.janela = falha({ error: 'Erro interno do servidor' });
+      const comp = criarCarregado();
+      expect(comp.linhas().every(l => !l.editavel)).toBe(true);
+
+      respostas.janela = () => of({ data: structuredClone(JANELA) });
+      comp.recarregarJanela();
+
+      expect(apiGet.mock.calls.filter(c => c[0] === URL_JANELA)).toHaveLength(2);
+      expect(comp.erroJanela()).toBe('');
+      expect(linha(comp, ABERTO).editavel).toBe(true);
+      expect(comp.tipos()).toHaveLength(2);
+    });
+
+    it('render: a caixa com "Tentar novamente" aparece e nenhuma célula é um botão', () => {
+      respostas.janela = falha({ error: 'Erro interno do servidor' });
+      const fixture = renderizar();
+
+      const caixa = fixture.debugElement.query(By.css('.erro-carga'));
       expect(caixa).not.toBeNull();
       expect(caixa!.nativeElement.textContent).toContain('Não foi possível concluir a operação.');
-      expect(fixture.debugElement.query(By.css('button.salvar-top'))).toBeNull();   // sem Salvar
+      expect(fixture.debugElement.query(By.css('table.ponto-table'))).not.toBeNull();   // a folha continua à vista
+      expect(fixture.debugElement.queryAll(By.css('.vista-desktop td.cel-hora button'))).toEqual([]);
     });
 
-    it('o clique em "Tentar novamente" recarrega e o botão Salvar VOLTA à tela', async () => {
-      retificacoesFalham();
-      const fixture = await renderizarComDiaAberto();
-
-      respostaRetificacoes({ limite_fmt: '17/07/2026', prazo_expirado: false, retificacoes: [] });
-      const btnRetry = fixture.debugElement
-        .queryAll(By.css('.erro-carga button'))
-        .find(b => (b.nativeElement as HTMLButtonElement).textContent?.includes('Tentar novamente'))!;
-      btnRetry.nativeElement.click();
-      fixture.detectChanges();
-      await fixture.whenStable();
-      fixture.detectChanges();
-
-      expect(fixture.debugElement.query(By.css('.erro-carga'))).toBeNull();
-      const salvar = fixture.debugElement.query(By.css('button.salvar-top'));
-      expect(salvar).not.toBeNull();
-      expect((salvar!.nativeElement as HTMLButtonElement).disabled).toBe(false);
-    });
-
-    it('durante a recarga a tela NÃO fica muda: sai a caixa, entra o "Verificando..." (e o Salvar segue fora)', async () => {
-      // A caixa (que contém o botão de retry) sumia no clique e NADA a substituía —
-      // num GET lento o usuário ficava sem Salvar, sem caixa e sem pista.
-      retificacoesFalham();
-      const fixture = await renderizarComDiaAberto();
+    it('render: durante a recarga a tela avisa, e o clique no retry destrava as células', () => {
+      respostas.janela = falha({ error: 'Erro interno do servidor' });
+      const fixture = renderizar();
 
       const emVoo = new Subject<any>();
-      apiGet.mockImplementation((url: string) =>
-        url.endsWith('/dados') ? of({ data: structuredClone(FOLHA) }) : emVoo,
-      );
+      respostas.janela = () => emVoo;
       (fixture.debugElement.query(By.css('.erro-carga button')).nativeElement as HTMLButtonElement).click();
       fixture.detectChanges();
 
       expect(fixture.debugElement.query(By.css('.erro-carga'))).toBeNull();
-      expect(fixture.nativeElement.textContent).toContain('Verificando os dias já retificados');
-      expect(fixture.debugElement.query(By.css('button.salvar-top'))).toBeNull();   // ainda bloqueado
+      expect(fixture.nativeElement.textContent).toContain('Verificando o que ainda pode ser corrigido');
+      expect(fixture.debugElement.queryAll(By.css('.vista-desktop td.cel-hora button'))).toEqual([]);
 
-      emVoo.next({ data: { limite_fmt: '17/07/2026', prazo_expirado: false, retificacoes: [] } });
-      fixture.detectChanges();
-      await fixture.whenStable();
+      emVoo.next({ data: structuredClone(JANELA) });
       fixture.detectChanges();
 
-      expect(fixture.nativeElement.textContent).not.toContain('Verificando os dias já retificados');
-      expect(fixture.debugElement.query(By.css('button.salvar-top'))).not.toBeNull();
-    });
-
-    it('carga bem-sucedida (o caminho normal): sem caixa de erro e com o Salvar disponível', async () => {
-      const fixture = await renderizarComDiaAberto();
-      expect(fixture.debugElement.query(By.css('.erro-carga'))).toBeNull();
-      expect(fixture.debugElement.query(By.css('button.salvar-top'))).not.toBeNull();
+      expect(fixture.nativeElement.textContent).not.toContain('Verificando o que ainda pode ser corrigido');
+      expect(fixture.debugElement.queryAll(By.css('.vista-desktop td.cel-hora button')).length).toBeGreaterThan(0);
     });
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // Prazo de retificação — 5 dias após a publicação (calculado no BACKEND)
-  // Datas congeladas distintas, derivadas do mesmo instante
+  // A linha — o que cada dia aceita e o que ele mostra
   // ═══════════════════════════════════════════════════════════════════
-  describe('prazo de retificação (relógio congelado dentro e fora dos 5 dias)', () => {
-    const PUBLICADO = new Date('2026-07-10T09:00:00-03:00'); // folha publicada em 10/07
-    const LIMITE = '15/07/2026'; // publicação + 5 dias (regra do RetificacaoService)
-
-    it('DENTRO do prazo (D+2): exibe o dia-limite e o submit passa', () => {
-      vi.setSystemTime(new Date(PUBLICADO.getTime() + 2 * 24 * 3600_000)); // 12/07 — antes do limite
-      respostaRetificacoes({ limite_fmt: LIMITE, prazo_expirado: false, retificacoes: [] });
+  describe('estados da linha', () => {
+    it('dia aberto: editável, com as batidas que a folha imprimiu', () => {
       const comp = criarCarregado();
+      const l = linha(comp, ABERTO);
 
-      expect(comp.limiteFmt()).toBe(LIMITE);
-      expect(comp.prazoExpirado()).toBe(false);
-
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      comp.salvar();
-
-      expect(apiPost).toHaveBeenCalledTimes(1);
-      expect(comp.erro()).toBe('');
-      expect(comp.enviado()).toBe(true);
+      expect(l.data).toBe('2026-08-03');
+      expect(l.editavel).toBe(true);
+      expect(l.faixa).toBeNull();
+      expect(l.corrigido).toBe(false);
+      expect(l.celulas.map(c => c.valor)).toEqual(['08:00', '12:00', '13:00', '17:00']);
+      expect(l.celulas.every(c => !c.corrigido)).toBe(true);
+      expect(l.totalDia).toBe('08:00');
+      expect(l.banco).toBe('00:00');
     });
 
-    it('FORA do prazo (D+7): submit barrado, nenhum POST', () => {
-      vi.setSystemTime(new Date(PUBLICADO.getTime() + 7 * 24 * 3600_000)); // 17/07 — depois do limite
-      respostaRetificacoes({ limite_fmt: LIMITE, prazo_expirado: true, retificacoes: [] });
+    it('a correção substitui só o campo corrigido; o resto continua sendo a folha', () => {
       const comp = criarCarregado();
+      const l = linha(comp, CORRIGIDO);
 
-      expect(comp.prazoExpirado()).toBe(true);
-
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      comp.salvar();
-
-      expect(comp.erro()).toBe('Prazo de retificação encerrado.');
-      expect(apiPost).not.toHaveBeenCalled();
-      expect(comp.enviado()).toBe(false);
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // Mês encerrado pela folha de ponto definitiva — bloqueio permanente,
-  // independente do prazo (o backend anuncia por `mes_fechado`)
-  // ═══════════════════════════════════════════════════════════════════
-  describe('mês encerrado pela folha definitiva', () => {
-    const TEXTO_MES_FECHADO =
-      'Não é possível retificar esta folha.';
-
-    /** Folha carregada com o mês encerrado; o prazo, por padrão, ainda está correndo. */
-    function criarComMesFechado(extra: Record<string, unknown> = {}): PontoRetificarComponent {
-      respostaRetificacoes({ limite_fmt: '17/07/2026', prazo_expirado: false, mes_fechado: true, retificacoes: [], ...extra });
-      return criarCarregado();
-    }
-
-    it('a folha chega bloqueada mesmo com o prazo correndo', () => {
-      const comp = criarComMesFechado();
-      expect(comp.mesFechado()).toBe(true);
-      expect(comp.prazoExpirado()).toBe(false);
-      expect(comp.bloqueado()).toBe(true);
+      expect(l.corrigido).toBe(true);
+      expect(celula(comp, CORRIGIDO, 'ent1')).toMatchObject({ valor: '08:00', corrigido: true });
+      expect(celula(comp, CORRIGIDO, 'sai1')).toMatchObject({ valor: '12:00', corrigido: false });
+      expect(celula(comp, CORRIGIDO, 'ent2')).toMatchObject({ valor: '', corrigido: false });
     });
 
-    it('sem a chave (ou com ela em false) nada muda: o bloqueio segue sendo só o do prazo', () => {
-      expect(criarCarregado().mesFechado()).toBe(false);            // o mock padrão nem manda a chave
-      expect(criarCarregado().bloqueado()).toBe(false);
+    it('sábado não é editável nem com a janela dizendo que o dia está aberto', () => {
+      const comp = criarCarregado();
+      const l = linha(comp, SABADO);
 
-      respostaRetificacoes({ limite_fmt: '17/07/2026', prazo_expirado: false, mes_fechado: false, retificacoes: [] });
-      expect(criarCarregado().bloqueado()).toBe(false);
-
-      respostaRetificacoes({ limite_fmt: '17/07/2026', prazo_expirado: true, retificacoes: [] });
-      const vencida = criarCarregado();
-      expect(vencida.mesFechado()).toBe(false);
-      expect(vencida.bloqueado()).toBe(true);                       // o prazo sozinho ainda bloqueia
+      expect(l.fimDeSemana).toBe(true);
+      expect(l.editavel).toBe(false);
     });
 
-    it('salvar() recusa com o motivo do mês, sem tocar a API — o prazo em dia não vale de nada', () => {
-      const comp = criarComMesFechado();
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
+    it('dia marcado pelo administrador: faixa única com o nome, e nada a editar', () => {
+      const comp = criarCarregado();
+      const l = linha(comp, FERIADO);
 
-      comp.salvar();
-
-      expect(comp.erro()).toBe('Mês encerrado pela folha de ponto definitiva.');
-      expect(apiPost).not.toHaveBeenCalled();
-      expect(comp.enviado()).toBe(false);
+      expect(l.faixa).toEqual({ texto: 'Feriado', declarada: false });
+      expect(l.editavel).toBe(false);
     });
 
-    it('com o mês encerrado E o prazo vencido, o motivo anunciado é o do mês', () => {
-      const comp = criarComMesFechado({ prazo_expirado: true });
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-
-      comp.salvar();
-
-      expect(comp.erro()).toBe('Mês encerrado pela folha de ponto definitiva.');
-      expect(apiPost).not.toHaveBeenCalled();
-    });
-
-    it('salvarEdicao() da retificação gravada também recusa, sem PUT', () => {
-      respostaRetificacoes({
-        limite_fmt: '17/07/2026', prazo_expirado: false, mes_fechado: true,
-        retificacoes: [structuredClone(RETIF_QUA)],
+    it('a ocorrência declarada pelo funcionário vira faixa dele, e o dia segue editável', () => {
+      janelaCom({
+        retificacoes: [{ id: 'ret-3', data: '2026-08-03', tipo_id: 'tp-banco', tipo_nome: 'Banco de horas', conta_folga: true }],
       });
       const comp = criarCarregado();
-      const l = linhaEmEdicao(comp);
-      Object.assign(l, { r_ent1: '07:30', r_sai1: '11:30' });
+      const l = linha(comp, ABERTO);
 
-      comp.salvarEdicao(l);
-
-      expect(comp.erro()).toBe('Mês encerrado pela folha de ponto definitiva.');
-      expect(apiPut).not.toHaveBeenCalled();
-      expect(l.editando).toBe(true);          // o usuário não perde o que digitou
+      expect(l.faixa).toEqual({ texto: 'Banco de horas', declarada: true });
+      expect(l.editavel).toBe(true);
+      expect(l.celulas.every(c => !c.corrigido)).toBe(true);   // ou horários, ou ocorrência
     });
 
-    // ─── RENDER: o bloqueio é o que o usuário VÊ (guards são a 2ª camada) ───
-    async function renderizar(
-      data: Record<string, unknown>,
-      opcoes: { abrirDia?: boolean } = {},
-    ): Promise<ComponentFixture<PontoRetificarComponent>> {
-      respostaRetificacoes(data);
-      const fixture = TestBed.createComponent(PontoRetificarComponent);
-      fixture.detectChanges();                     // ngOnInit + render (as respostas do mock são síncronas)
-      if (opcoes.abrirDia) preencher(fixture.componentInstance, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      fixture.detectChanges();
-      await fixture.whenStable();                  // bindings do template (NgModel do textarea)
-      fixture.detectChanges();
-      return fixture;
-    }
-
-    const textoDe = (el: HTMLElement) => el.textContent!.replace(/\s+/g, ' ').trim();
-
-    const botoesMais = (fixture: ComponentFixture<PontoRetificarComponent>, vista: string) =>
-      fixture.debugElement.queryAll(By.css(`${vista} button.btn-pm`))
-        .map(b => b.nativeElement as HTMLButtonElement);
-
-    it('a caixa do mês encerrado entra NO LUGAR do aviso de prazo, e o Salvar some com o dia preenchido', async () => {
-      const fixture = await renderizar(
-        { limite_fmt: '17/07/2026', prazo_expirado: false, mes_fechado: true, retificacoes: [] },
-        { abrirDia: true },
-      );
-
-      const caixas = fixture.debugElement.queryAll(By.css('.error-box'));
-      expect(caixas).toHaveLength(1);
-      expect(textoDe(caixas[0].nativeElement)).toBe(TEXTO_MES_FECHADO);
-      expect(fixture.debugElement.query(By.css('p.prazo-aviso'))).toBeNull();      // o prazo não é mais a notícia
-      expect(fixture.nativeElement.textContent).not.toContain('Retificações permitidas até');
-
-      expect(fixture.componentInstance.selecionadas()).toHaveLength(1);            // há dia preenchido…
-      expect(fixture.debugElement.query(By.css('button.salvar-top'))).toBeNull();  // …e mesmo assim não há Salvar
-    });
-
-    it('os "+" ficam desabilitados nas duas vistas — nem se abre um dia novo', async () => {
-      const fixture = await renderizar(
-        { limite_fmt: '17/07/2026', prazo_expirado: false, mes_fechado: true, retificacoes: [] },
-      );
-
-      const desktop = botoesMais(fixture, '.vista-desktop');
-      const mobile = botoesMais(fixture, '.vista-mobile');
-      expect(desktop).toHaveLength(3);
-      expect(mobile).toHaveLength(3);
-      expect(desktop.every(b => b.disabled)).toBe(true);
-      expect(mobile.every(b => b.disabled)).toBe(true);
-    });
-
-    it('a retificação já gravada continua legível, mas perde o botão "Editar"', async () => {
-      const fixture = await renderizar({
-        limite_fmt: '17/07/2026', prazo_expirado: false, mes_fechado: true,
-        retificacoes: [structuredClone(RETIF_QUA)],
+    it('a ocorrência declarada vence a marcação do administrador no mesmo dia', () => {
+      janelaCom({
+        retificacoes: [{ id: 'ret-6', data: '2026-08-06', tipo_id: 'tp-atestado', tipo_nome: 'Atestado' }],
       });
-
-      (fixture.debugElement.queryAll(By.css('.vista-desktop tbody tr'))[2].nativeElement as HTMLTableRowElement).click();
-      fixture.detectChanges();
-      await fixture.whenStable();     // bindings do template (o disabled do NgModel é assíncrono)
-      fixture.detectChanges();
-
-      const inputs = fixture.debugElement.queryAll(By.css('.vista-desktop .retif-area input'))
-        .map(i => i.nativeElement as HTMLInputElement);
-      expect(inputs).toHaveLength(4);                       // a consulta ao que foi gravado permanece
-      expect(inputs.every(i => i.disabled)).toBe(true);
-      expect(fixture.debugElement.queryAll(By.css('.vista-desktop .retif-acoes button'))).toEqual([]);
-    });
-
-    it('contraprova: com o mês aberto e o prazo correndo, volta o aviso de prazo, o Salvar e os "+"', async () => {
-      const fixture = await renderizar(
-        { limite_fmt: '17/07/2026', prazo_expirado: false, retificacoes: [] },
-        { abrirDia: true },
-      );
-
-      expect(fixture.debugElement.queryAll(By.css('.error-box'))).toEqual([]);
-      expect(textoDe(fixture.debugElement.query(By.css('p.prazo-aviso')).nativeElement))
-        .toBe('Retificações permitidas até 17/07/2026.');
-      expect(fixture.debugElement.query(By.css('button.salvar-top'))).not.toBeNull();
-      expect(botoesMais(fixture, '.vista-desktop').some(b => b.disabled)).toBe(false);
-    });
-
-    it('contraprova: com o prazo vencido e o mês aberto, a caixa exibida é a do PRAZO', async () => {
-      const fixture = await renderizar({ limite_fmt: '17/07/2026', prazo_expirado: true, retificacoes: [] });
-
-      const caixas = fixture.debugElement.queryAll(By.css('.error-box'));
-      expect(caixas).toHaveLength(1);
-      expect(textoDe(caixas[0].nativeElement)).toBe('Prazo de retificação encerrado em 17/07/2026.');
-      expect(fixture.nativeElement.textContent).not.toContain('folha de ponto definitiva do mês já foi publicada');
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // toggle / selecionadas — abertura e limpeza da área do dia
-  // ═══════════════════════════════════════════════════════════════════
-  describe('toggle', () => {
-    it('"+" abre o dia e re-emite o signal com nova referência', () => {
       const comp = criarCarregado();
-      const antes = comp.linhas();
-      comp.toggle(comp.linhas()[0]);
-      expect(comp.linhas()[0].aberto).toBe(true);
-      expect(comp.linhas()).not.toBe(antes);
+
+      expect(linha(comp, FERIADO).faixa).toEqual({ texto: 'Atestado', declarada: true });
+      expect(linha(comp, FERIADO).editavel).toBe(false);       // o dia marcado segue fechado à edição
     });
 
-    it('"−" fecha e DESCARTA o que foi digitado (horas e observações)', () => {
+    it('horário corrigido num dia marcado: a faixa sai e as batidas aparecem', () => {
+      // A correção prevalece sobre a marcação na grade da chefia; esconder as batidas aqui faria
+      // esta tela contar uma história diferente da que eles enxergam.
+      janelaCom({ retificacoes: [{ id: 'ret-6', data: '2026-08-06', ent1: '08:05' }] });
       const comp = criarCarregado();
-      const l = preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00', observacoes: 'esqueci de bater' });
-      comp.toggle(l);
-      expect(l.aberto).toBe(false);
-      expect([l.r_ent1, l.r_sai1, l.r_ent2, l.r_sai2]).toEqual(['', '', '', '']);
-      expect(l.observacoes).toBe('');
+      const l = linha(comp, FERIADO);
+
+      expect(l.faixa).toBeNull();
+      expect(celula(comp, FERIADO, 'ent1')).toMatchObject({ valor: '08:05', corrigido: true });
+      expect(l.editavel).toBe(false);
     });
 
-    it('selecionadas() traz só os dias abertos, em ordem cronológica', () => {
+    it('dia fora da janela: não é editável, mas as correções já feitas continuam à vista', () => {
       const comp = criarCarregado();
-      comp.toggle(comp.linhas()[2]);
-      comp.toggle(comp.linhas()[0]); // aberto depois, mas é o dia anterior
-      expect(comp.selecionadas().map(l => l.dia)).toEqual(['06/07/26 - seg', '08/07/26 - qua']);
+      const l = linha(comp, FECHADO);
+
+      expect(l.editavel).toBe(false);
+      expect(l.corrigido).toBe(true);
+      expect(celula(comp, FECHADO, 'ent1')).toMatchObject({ valor: '09:00', corrigido: true });
+      expect(celula(comp, FECHADO, 'sai1')).toMatchObject({ valor: '12:30', corrigido: true });
+      expect(celula(comp, FECHADO, 'sai2')).toMatchObject({ valor: '18:00', corrigido: false });
     });
 
-    it('sem nenhum dia aberto, selecionadas() é vazia', () => {
+    it('dia que a janela nem menciona não é editável', () => {
+      janelaCom({ dias: structuredClone(JANELA.dias).filter(d => d.data !== '2026-08-03') });
       const comp = criarCarregado();
-      expect(comp.selecionadas()).toEqual([]);
-    });
-  });
 
-  // ═══════════════════════════════════════════════════════════════════
-  // Helpers de exibição — isStatus / tipoLabel / periodoFolhaLabel / diaParaISO
-  // ═══════════════════════════════════════════════════════════════════
-  describe('helpers', () => {
-    it('isStatus: dia com letras em ENT.1 é status; horário e vazio não são', () => {
-      const comp = criarCarregado();
-      const [seg, ter] = comp.linhas();
-      expect(comp.isStatus(ter)).toBe(true); // "Feriado"
-      expect(comp.isStatus(seg)).toBe(false); // "08:00"
-      expect(comp.isStatus({ ...seg, ent1: '' })).toBe(false);
-      expect(comp.isStatus({ ...seg, ent1: 'FÉRIAS' })).toBe(true); // acentuado (À-ÿ)
+      expect(linha(comp, ABERTO).editavel).toBe(false);
     });
 
-    it('tipoLabel: MENSAL → "mensal"; qualquer outro → "semanal"', () => {
-      const comp = criarCarregado();
-      expect(comp.tipoLabel()).toBe('semanal'); // a folha da fixture é SEMANAL
-      comp.dados.set({ ...comp.dados()!, tipo: 'MENSAL' });
-      expect(comp.tipoLabel()).toBe('mensal');
-      comp.dados.set(null);
-      expect(comp.tipoLabel()).toBe('semanal'); // sem folha também cai no "semanal"
-    });
-
-    it('periodoFolhaLabel: semanal junta as datas com " a "; mensal usa a competência; sem folha é vazio', () => {
-      const comp = criarCarregado();
-      expect(comp.periodoFolhaLabel()).toBe('06/07/2026 a 10/07/2026'); // a folha da fixture é SEMANAL
-      comp.dados.set({ ...comp.dados()!, tipo: 'MENSAL', data_inicio: '2026-06-01', data_fim: '2026-06-30' });
-      expect(comp.periodoFolhaLabel()).toBe('Junho/2026');
-      comp.dados.set(null);
-      expect(comp.periodoFolhaLabel()).toBe('');
-    });
-
-    it('diaParaISO: "dd/mm/aa - diasem" vira ISO; formato inesperado vira ""', () => {
-      const comp = criarCarregado();
-      const iso = (d: string) => (comp as any).diaParaISO(d);
-      expect(iso('06/07/26 - seg')).toBe('2026-07-06');
-      expect(iso('31/12/26')).toBe('2026-12-31');
-      expect(iso('6/7/26 - seg')).toBe(''); // sem zero à esquerda não casa
-      expect(iso('')).toBe('');
-    });
-
-    it('voltarLink é sempre /ponto (inclusive para o admin com folha)', () => {
-      expect(criar().voltarLink).toBe('/ponto');
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // RENDER — cabeçalho "Folha {tipo} — {período}" (o período vem pronto
-  // de periodoFolhaLabel(); mensal mostra a competência, nunca as datas)
-  // ═══════════════════════════════════════════════════════════════════
-  describe('render do cabeçalho da folha', () => {
-    const cabecalho = (fixture: ComponentFixture<PontoRetificarComponent>) =>
-      (fixture.debugElement.query(By.css('p.periodo')).nativeElement as HTMLElement)
-        .textContent!.replace(/\s+/g, ' ').trim();
-
-    it('folha semanal: "Folha semanal — dd/mm/aaaa a dd/mm/aaaa"', () => {
-      const fixture = TestBed.createComponent(PontoRetificarComponent);
-      fixture.detectChanges();   // ngOnInit + render (as respostas do mock são síncronas)
-      expect(cabecalho(fixture)).toBe('Folha semanal — 06/07/2026 a 10/07/2026');
-    });
-
-    it('folha mensal: "Folha mensal — Junho/2026" (a competência substitui as datas)', () => {
-      apiGet.mockImplementation((url: string) =>
-        url.endsWith('/dados')
-          ? of({ data: { ...structuredClone(FOLHA), tipo: 'MENSAL', data_inicio: '2026-06-01', data_fim: '2026-06-30' } })
-          : of({ data: { limite_fmt: null, prazo_expirado: false, retificacoes: [] } }),
-      );
-      const fixture = TestBed.createComponent(PontoRetificarComponent);
-      fixture.detectChanges();
-      expect(cabecalho(fixture)).toBe('Folha mensal — Junho/2026');
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // salvar — validação (HORA_RE + regra de pares Q32)
-  // ═══════════════════════════════════════════════════════════════════
-  describe('salvar — validação', () => {
-    it('horário fora de HH:MM válido: recusa nomeando o dia', () => {
-      const comp = criarCarregado();
-      preencher(comp, 0, { r_ent1: '25:00', r_sai1: '12:00' });
-      comp.salvar();
-      expect(comp.erro()).toBe('Horário inválido em 06/07/26 - seg (use HH:MM).');
-      expect(apiPost).not.toHaveBeenCalled();
-    });
-
-    it('horário sem máscara completa ("8:0") também é recusado', () => {
-      const comp = criarCarregado();
-      preencher(comp, 0, { r_ent1: '8:0', r_sai1: '12:00' });
-      comp.salvar();
-      expect(comp.erro()).toContain('Horário inválido');
-      expect(apiPost).not.toHaveBeenCalled();
-    });
-
-    it('minuto inválido (":60") é recusado', () => {
-      const comp = criarCarregado();
-      preencher(comp, 0, { r_ent1: '08:60', r_sai1: '12:00' });
-      comp.salvar();
-      expect(comp.erro()).toContain('Horário inválido');
-    });
-
-    it('par 1 incompleto (só entrada): recusa', () => {
-      const comp = criarCarregado();
-      preencher(comp, 0, { r_ent1: '08:00' });
-      comp.salvar();
-      expect(comp.erro()).toBe('Preencha os pares Ent./Saí. completos em 06/07/26 - seg.');
-      expect(apiPost).not.toHaveBeenCalled();
-    });
-
-    it('par 2 incompleto (entrada sem saída): recusa', () => {
-      const comp = criarCarregado();
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00', r_ent2: '13:00' });
-      comp.salvar();
-      expect(comp.erro()).toContain('Preencha os pares');
-      expect(apiPost).not.toHaveBeenCalled();
-    });
-
-    it('par 2 sem par 1 (Q32): recusa mesmo com o par 2 completo', () => {
-      const comp = criarCarregado();
-      preencher(comp, 0, { r_ent2: '13:00', r_sai2: '17:00' });
-      comp.salvar();
-      expect(comp.erro()).toContain('Preencha os pares');
-      expect(apiPost).not.toHaveBeenCalled();
-    });
-
-    it('nenhum dia aberto: recusa sem tocar a API', () => {
-      const comp = criarCarregado();
-      comp.salvar();
-      expect(comp.erro()).toBe('Nenhum dia preenchido para retificar.');
-      expect(apiPost).not.toHaveBeenCalled();
-    });
-
-    it('só dias JÁ retificados abertos: recusa (eles são pulados no payload)', () => {
-      respostaRetificacoes({ limite_fmt: null, prazo_expirado: false, retificacoes: [{ data: '2026-07-06' }] });
-      const comp = criarCarregado();
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' }); // dia já retificado
-      comp.salvar();
-      expect(comp.erro()).toBe('Nenhum dia preenchido para retificar.');
-      expect(apiPost).not.toHaveBeenCalled();
-    });
-
-    it('dia com rótulo fora do padrão dd/mm/aa: recusa com "Data inválida"', () => {
-      const comp = criar();
-      apiGet.mockImplementation((url: string) =>
-        url.endsWith('/dados')
-          ? of({ data: { ...FOLHA, linhas: [{ ...FOLHA.linhas[0], dia: 'Total do período' }] } })
-          : of({ data: {} }),
-      );
-      comp.ngOnInit();
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      comp.salvar();
-      expect(comp.erro()).toBe('Data inválida em Total do período.');
-      expect(apiPost).not.toHaveBeenCalled();
-    });
-
-    it('a validação limpa o erro anterior a cada tentativa', () => {
-      const comp = criarCarregado();
-      comp.erro.set('sujeira de antes');
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      comp.salvar();
-      expect(comp.erro()).toBe('');
-    });
-
-    it('a validação de um dia barra o LOTE inteiro: nenhum dia é enviado se um deles estiver torto', () => {
-      const comp = criarCarregado();
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' }); // este está bom…
-      preencher(comp, 2, { r_ent1: '09:00' });                  // …e este, incompleto
-      comp.salvar();
-      expect(comp.erro()).toContain('08/07/26 - qua');
-      expect(apiPost).not.toHaveBeenCalled();
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // salvar — submit (UM POST de LOTE, tudo-ou-nada no backend)
-  // ═══════════════════════════════════════════════════════════════════
-  describe('salvar — submit', () => {
-    it('2 horários: um POST no endpoint de LOTE, com o dia dentro de "dias"', () => {
-      const comp = criarCarregado();
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00', observacoes: '  esqueci de bater  ' });
-      comp.salvar();
-
-      expect(apiPost).toHaveBeenCalledTimes(1);
-      expect(apiPost.mock.calls[0][0]).toBe(URL_LOTE);
-      expect(apiPost.mock.calls[0][1]).toEqual({
-        dias: [{
-          data: '2026-07-06',
-          ent1: '08:00', sai1: '12:00',
-          ent2: null, sai2: null,
-          observacoes: 'esqueci de bater', // trim aplicado
-        }],
-      });
-    });
-
-    it('4 horários: envia os dois pares', () => {
-      const comp = criarCarregado();
-      preencher(comp, 2, { r_ent1: '08:00', r_sai1: '12:00', r_ent2: '13:00', r_sai2: '17:30' });
-      comp.salvar();
-
-      expect(diasEnviados()).toEqual([{
-        data: '2026-07-08',
-        ent1: '08:00', sai1: '12:00',
-        ent2: '13:00', sai2: '17:30',
-        observacoes: '',
-      }]);
-    });
-
-    it('espaços em volta do horário são tolerados (trim antes da validação)', () => {
-      const comp = criarCarregado();
-      preencher(comp, 0, { r_ent1: ' 08:00 ', r_sai1: '12:00 ' });
-      comp.salvar();
-      expect(diasEnviados()[0]).toMatchObject({ ent1: '08:00', sai1: '12:00' });
-    });
-
-    it('dois dias abertos: UM ÚNICO POST com os dois dias (em ordem cronológica)', () => {
-      // Antes eram 2 POSTs paralelos (`forkJoin`), cada um numa transação própria: um falhar
-      // deixava o outro gravado — e sem edição/exclusão na v1, isso era definitivo.
-      const comp = criarCarregado();
-      preencher(comp, 2, { r_ent1: '09:00', r_sai1: '15:00' });
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      comp.salvar();
-
-      expect(apiPost).toHaveBeenCalledTimes(1);
-      expect(apiPost.mock.calls[0][0]).toBe(URL_LOTE);
-      expect(diasEnviados().map((d: any) => d.data)).toEqual(['2026-07-06', '2026-07-08']);
-    });
-
-    it('2º clique enquanto o lote está no ar NÃO dispara um 2º POST (guard do salvando)', () => {
-      const comp = criarCarregado();
-      apiPost.mockReturnValue(new Subject<any>()); // POST no ar: nunca responde
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-
-      comp.salvar();
-      comp.salvar(); // 2º clique antes de a resposta chegar
-
-      expect(apiPost).toHaveBeenCalledTimes(1);
-      expect(comp.salvando()).toBe(true);
-    });
-
-    it('a trava é liberada quando o lote é recusado: o usuário conserta e reenvia', () => {
-      const comp = criarCarregado();
-      apiPost.mockReturnValue(throwError(() => ({ error: { error: 'O dia 08/07/2026 já foi retificado.' } })));
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-
-      comp.salvar();
-      expect(comp.salvando()).toBe(false);
-
-      apiPost.mockReturnValue(of({ ok: true }));
-      comp.salvar();
-      expect(apiPost).toHaveBeenCalledTimes(2);
-      expect(comp.enviado()).toBe(true);
-    });
-
-    it('sucesso: marca "enviada" e volta para /ponto depois de 1,4 s', () => {
-      const comp = criarCarregado();
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      comp.salvar();
-
-      expect(comp.enviado()).toBe(true);
-      expect(navigateByUrl).not.toHaveBeenCalled(); // ainda não — o aviso fica 1,4 s na tela
-      vi.advanceTimersByTime(1400); // ⚠️ drenar timer acorda a CD (ver cabeçalho): só o efeito do timer é assertado
-      expect(navigateByUrl).toHaveBeenCalledWith('/ponto');
-    });
-
-    it('sair da tela dentro da janela de 1,4 s CANCELA a navegação (o timer morre no destroy)', () => {
-      // Antes, o handle do setTimeout não era guardado e o componente não implementava OnDestroy:
-      // o timer disparava mesmo fora da tela e arrancava o usuário da rota nova de volta para /ponto.
-      const fixture = TestBed.createComponent(PontoRetificarComponent);
-      const comp = fixture.componentInstance;
-      comp.ngOnInit();
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      comp.salvar();
-
-      fixture.destroy(); // o usuário navegou para outra rota
-
-      vi.advanceTimersByTime(1400);
-      expect(navigateByUrl).not.toHaveBeenCalled();
-    });
-
-    it('lote recusado: a tela diz que NENHUM dia foi gravado (não há mais falha parcial) e preserva o motivo, que nomeia o dia', () => {
-      // Inversão da caracterização: antes, um POST podia gravar e o outro falhar — a tela dizia
-      // "não foi possível salvar" enquanto dias já estavam no banco, e a 2ª tentativa batia na UK.
-      // Agora é um lote só: se ele é recusado, nada foi gravado — e a tela afirma isso.
-      const comp = criarCarregado();
-      apiPost.mockReturnValue(throwError(() => ({ error: { message: 'O dia 08/07/2026 já foi retificado.' } })));
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      comp.salvar();
-
-      expect(comp.erro()).toBe(
-        'Não foi possível concluir a operação. (O dia 08/07/2026 já foi retificado.)');
-      expect(comp.enviado()).toBe(false);
-      expect(navigateByUrl).not.toHaveBeenCalled(); // o setTimeout de saída nem chega a ser agendado
-      // re-sync: 2º GET /retificacoes (dias que porventura passaram) — sem drenar timers,
-      // senão a CD zoneless acorda e roda o ngOnInit de novo (ver cabeçalho: ⚠️ timers).
-      const retifs = apiGet.mock.calls.filter(c => String(c[0]).endsWith('/retificacoes'));
-      expect(retifs).toHaveLength(2);
-    });
-
-    it('erro sem corpo (500 mudo): a guia da tela sozinha — o usuário fica sabendo que nada foi gravado', () => {
-      const comp = criarCarregado();
-      apiPost.mockReturnValue(throwError(() => new Error('rede')));
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      comp.salvar();
-      expect(comp.erro()).toBe('Não foi possível concluir a operação.');
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // RENDER — a trava de duplo clique no DOM (o guard sozinho é invisível)
-  // ═══════════════════════════════════════════════════════════════════
-  describe('render do botão Salvar (trava de duplo clique)', () => {
-    // Exceção deliberada ao GATE "só lógica não-visual": o
-    // `[disabled]` de um controle DESTRUTIVO vive só no template. Sem este teste, apagar o binding
-    // deixaria a suíte verde e devolveria o defeito na pior forma — o usuário clicando duas vezes
-    // num botão que parece ativo (o 2º lote morreria na UK, com o error-box junto do ok-box).
-
-    async function renderizarComDiaAberto(): Promise<ComponentFixture<PontoRetificarComponent>> {
-      const fixture = TestBed.createComponent(PontoRetificarComponent);
-      fixture.detectChanges();                       // ngOnInit + render (as respostas são síncronas)
-      const comp = fixture.componentInstance;
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
-      fixture.detectChanges();
-      await fixture.whenStable();                    // bindings do template (promises não são falsificadas)
-      fixture.detectChanges();
-      return fixture;
-    }
-
-    const botaoSalvar = (fixture: ComponentFixture<PontoRetificarComponent>) =>
-      fixture.debugElement.query(By.css('button.salvar-top')).nativeElement as HTMLButtonElement;
-
-    it('com um dia preenchido, o botão está ativo e diz "Salvar"', async () => {
-      const fixture = await renderizarComDiaAberto();
-      const botao = botaoSalvar(fixture);
-      expect(botao.disabled).toBe(false);
-      expect(botao.textContent?.trim()).toBe('Salvar');
-    });
-
-    it('durante o voo do lote o botão fica DESABILITADO — dois cliques REAIS disparam um POST só', async () => {
-      apiPost.mockReturnValue(new Subject<any>()); // o lote fica no ar
-      const fixture = await renderizarComDiaAberto();
-      const botao = botaoSalvar(fixture);
-
-      botao.click();                                // 1º clique — dispara o lote
-      fixture.detectChanges();
-      await fixture.whenStable();
-      fixture.detectChanges();
-
-      expect(botao.disabled).toBe(true);
-      expect(botao.textContent?.trim()).toBe('Salvando...');
-
-      botao.click();                                // 2º clique real, com o lote ainda no ar
-      expect(apiPost).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // par mínimo de horários e teto da observação
-  // ═══════════════════════════════════════════════════════════════════
-  describe('retificação sem horários não existe mais', () => {
-    it('dia aberto e INTOCADO (o "+" por engano) fica FORA do lote — sem erro, sem POST', () => {
-      // A retificação vazia vencia a precedência na grade e na planilha da chefia: o dia que dizia
-      // "Banco de horas"/"Férias" virava célula vazia e a contagem de folgas caía 1 — sem desfazer.
-      const comp = criarCarregado();
-      preencher(comp, 1, {});                                   // abriu e não digitou nada
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' }); // o dia de verdade
-
-      comp.salvar();
-
-      expect(apiPost).toHaveBeenCalledTimes(1);
-      expect(diasEnviados()).toEqual([{
-        data: '2026-07-06',
-        ent1: '08:00', sai1: '12:00', ent2: null, sai2: null,
-        observacoes: '',
-      }]);
-      expect(comp.erro()).toBe('');
-    });
-
-    it('nenhum horário em NENHUM dia aberto: recusa sem tocar a API', () => {
-      const comp = criarCarregado();
-      preencher(comp, 0, {});
-      comp.salvar();
-      expect(comp.erro()).toBe('Nenhum dia preenchido para retificar.');
-      expect(apiPost).not.toHaveBeenCalled();
-    });
-
-    it('dia com OBSERVAÇÃO e nenhum horário BLOQUEIA o envio, nomeando o dia (nunca descarte silencioso)', () => {
-      // O usuário quis retificar — descartar o dia calado apagaria o que ele escreveu; enviá-lo é o
-      // bug. A saída honesta é a recusa visível, no idioma da tela.
-      const comp = criarCarregado();
-      preencher(comp, 0, { observacoes: 'estava em reunião externa' });
-
-      comp.salvar();
-
-      expect(comp.erro()).toBe(
-        'Horário de entrada e saída são obrigatórios.');
-      expect(apiPost).not.toHaveBeenCalled();
-    });
-
-    it('um dia sem horários derruba o LOTE inteiro no front: nem o dia válido é enviado', () => {
-      const comp = criarCarregado();
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });   // válido
-      preencher(comp, 2, { observacoes: 'sem horários' });        // ✗
-
-      comp.salvar();
-
-      expect(comp.erro()).toContain('Horário de entrada e saída são obrigatórios');
-      expect(apiPost).not.toHaveBeenCalled();
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // o dia retificado por OUTRA folha da mesma pessoa chega travado
-  // ═══════════════════════════════════════════════════════════════════
-  describe('dia retificado por outra folha vem marcado e travado (render)', () => {
-    // Semanais cumulativas (01–05, 01–12…) dão à mesma pessoa DUAS folhas publicadas cobrindo o
-    // mesmo dia. A listagem do backend filtrava por PAGINA_ID enquanto a gravação valida pela UK
-    // (pessoa+dia): na folha B o dia já retificado pela folha A vinha LIVRE e habilitado, e o envio
-    // levava 400 "O dia … já foi retificado" sem NENHUMA retificação visível na tela — sem edição
-    // nem exclusão na v1, o dia ficava congelado sem explicação.
-    // Corrigida a chave de leitura, o front (que só enxerga `data`, nunca a proveniência) trava o
-    // dia sozinho. É o que estes testes provam — no DOM das DUAS vistas, e no corpo do POST.
-
-    /** A resposta da listagem com o dia 08/07 já retificado — para o front, uma data como outra qualquer. */
-    function comDiaRetificadoPorOutraFolha() {
-      respostaRetificacoes({
-        limite_fmt: '17/07/2026',
-        prazo_expirado: false,
-        retificacoes: [
-          { data: '2026-07-08', ent1: '08:00', sai1: '12:00', ent2: null, sai2: null, observacoes: null },
-        ],
-      });
-    }
-
-    function renderizar(): ComponentFixture<PontoRetificarComponent> {
-      comDiaRetificadoPorOutraFolha();
-      const fixture = TestBed.createComponent(PontoRetificarComponent);
-      fixture.detectChanges();   // ngOnInit + render (as respostas do mock são síncronas)
-      return fixture;
-    }
-
-    it('desktop: o dia traz o selo "✓ Retificado" e NÃO oferece o "+" (os campos ficam inalcançáveis)', () => {
+    it('render: a linha bloqueada tem cadeado e chips fixos; a editável, botões', () => {
       const fixture = renderizar();
       const linhas = fixture.debugElement.queryAll(By.css('.vista-desktop tbody tr'));
-      expect(linhas).toHaveLength(3);   // nenhum dia aberto → uma linha por dia
 
-      const retificado = linhas[2];     // 08/07/26 — o dia que veio da outra folha
-      expect(retificado.query(By.css('.badge-retif'))?.nativeElement.textContent).toContain('Retificado');
-      expect(retificado.query(By.css('button.btn-pm'))).toBeNull();
+      expect(linhas).toHaveLength(6);
+      expect(linhas[ABERTO].queryAll(By.css('td.cel-hora button.chip'))).toHaveLength(4);
+      expect(linhas[ABERTO].query(By.css('.cadeado'))).toBeNull();
 
-      const livre = linhas[0];          // os demais dias seguem retificáveis
-      expect(livre.query(By.css('.badge-retif'))).toBeNull();
-      expect(livre.query(By.css('button.btn-pm'))).not.toBeNull();
+      expect(linhas[SABADO].queryAll(By.css('td.cel-hora button'))).toEqual([]);
+      expect(linhas[SABADO].queryAll(By.css('td.cel-hora span.chip-fixo'))).toHaveLength(4);
+      expect(linhas[SABADO].query(By.css('.cadeado'))).not.toBeNull();
+
+      const faixa = linhas[FERIADO].query(By.css('td.cel-faixa'));
+      expect(faixa.nativeElement.textContent.trim()).toBe('Feriado');
+      expect(faixa.nativeElement.getAttribute('colspan')).toBe('4');
+      expect(faixa.query(By.css('button'))).toBeNull();
     });
 
-    it('celular: o mesmo dia traz o selo e perde o "+" no card (as duas vistas contam — o usuário do ponto usa o celular)', () => {
+    it('render: a célula corrigida ganha a marca de editada', () => {
+      const fixture = renderizar();
+      const chips = fixture.debugElement
+        .queryAll(By.css('.vista-desktop tbody tr'))[CORRIGIDO]
+        .queryAll(By.css('td.cel-hora .chip'));
+
+      expect((chips[0].nativeElement as HTMLElement).classList.contains('chip-editado')).toBe(true);
+      expect((chips[1].nativeElement as HTMLElement).classList.contains('chip-editado')).toBe(false);
+    });
+
+    it('render (cards): o dia bloqueado e sem nada corrigido não mostra as batidas', () => {
+      // No celular, a linha morta vira uma tira compacta: repetir quatro traços por dia
+      // empurraria os dias que importam para fora da tela.
       const fixture = renderizar();
       const cards = fixture.debugElement.queryAll(By.css('.vista-mobile .dia-card'));
-      expect(cards).toHaveLength(3);
 
-      expect(cards[2].query(By.css('.badge-retif'))).not.toBeNull();
-      expect(cards[2].query(By.css('button.btn-pm'))).toBeNull();
-      expect(cards[0].query(By.css('button.btn-pm'))).not.toBeNull();
+      const sabado = cards[SABADO].nativeElement as HTMLElement;
+      expect(sabado.classList.contains('compacto')).toBe(true);
+      expect(cards[SABADO].query(By.css('.card-celulas'))).toBeNull();
+
+      const fechado = cards[FECHADO].nativeElement as HTMLElement;
+      expect(fechado.classList.contains('compacto')).toBe(false);
+      expect(cards[FECHADO].queryAll(By.css('.card-celulas .chip'))
+        .map(c => (c.nativeElement as HTMLElement).textContent?.trim()))
+        .toEqual(['09:00', '12:30', '13:00', '18:00']);
+      expect(cards[FECHADO].queryAll(By.css('.card-celulas button'))).toEqual([]);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // O menu da célula — onde nascem os três caminhos
+  // ═══════════════════════════════════════════════════════════════════
+  describe('menu da célula', () => {
+    it('o clique abre o menu com o dia e o rótulo da batida no título', () => {
+      const comp = criarCarregado();
+      const ev = clique();
+      comp.abrirMenu(linha(comp, ABERTO), celula(comp, ABERTO, 'ent1'), ev);
+
+      expect(comp.menu()).toMatchObject({
+        data: '2026-08-03', campo: 'ent1', titulo: '03/08 · Ent. 1', temCorrecao: false,
+      });
+      expect(ev.stopPropagation).toHaveBeenCalled();   // senão o clique fecharia o que acabou de abrir
     });
 
-    it('o dia travado fica FORA do lote: o POST leva só o dia livre — o 400 misterioso não acontece mais', () => {
-      comDiaRetificadoPorOutraFolha();
+    it('o título acompanha a batida clicada', () => {
+      const comp = criarCarregado();
+      abrir(comp, ABERTO, 'sai2');
+
+      expect(comp.menu()?.titulo).toBe('03/08 · Saí. 2');
+    });
+
+    it('"Limpar retificação" só existe onde há correção no dia', () => {
       const comp = criarCarregado();
 
-      // forçando a abertura do dia travado (a UI não oferece o "+", mas o filtro do payload é o que
-      // impede o dia de chegar ao backend e derrubar o LOTE INTEIRO na UK — tudo-ou-nada)
-      preencher(comp, 2, { r_ent1: '09:00', r_sai1: '15:00' });
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00' });
+      abrir(comp, ABERTO);
+      expect(comp.menu()?.temCorrecao).toBe(false);
 
-      comp.salvar();
-
-      expect(apiPost).toHaveBeenCalledTimes(1);
-      expect(diasEnviados()).toEqual([{
-        data: '2026-07-06',
-        ent1: '08:00', sai1: '12:00', ent2: null, sai2: null,
-        observacoes: '',
-      }]);
-      expect(comp.erro()).toBe('');
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // retificação gravada — a listagem traz o CONTEÚDO (com id) e a linha
-  // do dia expande em LEITURA, sempre a partir do servidor
-  // ═══════════════════════════════════════════════════════════════════
-  describe('retificação gravada: conteúdo por dia e expansão (toggleRetif)', () => {
-    it('guarda a retificação (com id) na linha do dia correspondente; os demais ficam sem conteúdo', () => {
-      const comp = criarComRetifGravada();
-      expect(comp.linhas()[2].retif).toEqual(RETIF_QUA);
-      expect(comp.linhas()[2].ja_retificado).toBe(true);
-      expect(comp.linhas()[0].retif).toBeUndefined();
-      expect(comp.linhas()[1].retif).toBeUndefined();
+      comp.fecharMenu();
+      abrir(comp, CORRIGIDO);
+      expect(comp.menu()?.temCorrecao).toBe(true);
     });
 
-    it('o clique expande em LEITURA com os valores do servidor nos campos', () => {
-      const comp = criarComRetifGravada();
-      const l = comp.linhas()[2];
-      comp.toggleRetif(l);
-      expect(l.retifExpandida).toBe(true);
-      expect(l.editando).toBe(false);
-      expect([l.r_ent1, l.r_sai1, l.r_ent2, l.r_sai2]).toEqual(['08:00', '12:00', '13:00', '17:00']);
-      expect(l.observacoes).toBe('esqueci de bater');
+    it('Esc e clique no documento fecham o menu', () => {
+      const comp = criarCarregado();
+
+      abrir(comp, ABERTO);
+      comp.onEscape();
+      expect(comp.menu()).toBeNull();
+
+      abrir(comp, ABERTO);
+      comp.onCliqueFora();
+      expect(comp.menu()).toBeNull();
     });
 
-    it('par 2 e observação NULOS viram campos vazios (nunca "null" na tela)', () => {
-      const comp = criarComRetifGravada({ ent2: null, sai2: null, observacoes: null });
-      const l = comp.linhas()[2];
-      comp.toggleRetif(l);
-      expect([l.r_ent2, l.r_sai2]).toEqual(['', '']);
-      expect(l.observacoes).toBe('');
+    it('Esc sem menu aberto cancela a digitação em curso', () => {
+      const comp = criarCarregado();
+      editar(comp, ABERTO);
+
+      comp.onEscape();
+
+      expect(comp.editandoCelula('2026-08-03', 'ent1')).toBe(false);
+      expect(apiPut).not.toHaveBeenCalled();
     });
 
-    it('o 2º clique colapsa a área', () => {
-      const comp = criarComRetifGravada();
-      const l = comp.linhas()[2];
-      comp.toggleRetif(l);
-      comp.toggleRetif(l);
-      expect(l.retifExpandida).toBe(false);
+    it('dia bloqueado não abre menu nenhum: fim de semana, marcado ou fora da janela', () => {
+      const comp = criarCarregado();
+
+      abrir(comp, SABADO);
+      expect(comp.menu()).toBeNull();
+
+      abrir(comp, FERIADO);
+      expect(comp.menu()).toBeNull();
+
+      abrir(comp, FECHADO);
+      expect(comp.menu()).toBeNull();
     });
 
-    it('colapsar no meio da edição DESCARTA o digitado: re-expandir volta aos valores gravados', () => {
-      const comp = criarComRetifGravada();
-      const l = comp.linhas()[2];
-      comp.toggleRetif(l);
-      comp.iniciarEdicao(l);
-      Object.assign(l, { r_ent1: '09:30', observacoes: 'rascunho abandonado' });
-
-      comp.toggleRetif(l);   // fecha (o gesto de desistir)
-      comp.toggleRetif(l);   // reabre
-
-      expect(l.editando).toBe(false);
-      expect(l.r_ent1).toBe('08:00');
-      expect(l.observacoes).toBe('esqueci de bater');
-    });
-
-    it('linha SEM retificação gravada: toggleRetif é inerte (nada expande)', () => {
-      const comp = criarComRetifGravada();
-      const l = comp.linhas()[0];
-      comp.toggleRetif(l);
-      expect(l.retifExpandida).toBeUndefined();
-    });
-
-    it('com o PUT de edição no ar o clique NÃO colapsa a área (a linha está travada)', () => {
-      apiPut.mockReturnValue(new Subject<any>());   // o PUT fica em voo
-      const comp = criarComRetifGravada();
-      const l = linhaEmEdicao(comp);
-      comp.salvarEdicao(l);
-
-      comp.toggleRetif(l);
-
-      expect(l.retifExpandida).toBe(true);
-      expect(l.editando).toBe(true);
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // edição da retificação gravada — Editar habilita, Cancelar restaura
-  // ═══════════════════════════════════════════════════════════════════
-  describe('edição da retificação gravada: iniciar/cancelar', () => {
-    it('iniciarEdicao habilita os campos (editando) sem mexer nos valores', () => {
-      const comp = criarComRetifGravada();
-      const l = comp.linhas()[2];
-      comp.toggleRetif(l);
-      comp.iniciarEdicao(l);
-      expect(l.editando).toBe(true);
-      expect([l.r_ent1, l.r_sai1, l.r_ent2, l.r_sai2]).toEqual(['08:00', '12:00', '13:00', '17:00']);
-    });
-
-    it('cancelarEdicao RESTAURA os valores gravados e volta à leitura, com a área ainda aberta', () => {
-      const comp = criarComRetifGravada();
-      const l = linhaEmEdicao(comp);
-      Object.assign(l, { r_ent1: '09:30', r_sai2: '', observacoes: 'texto abandonado' });
-
-      comp.cancelarEdicao(l);
-
-      expect(l.editando).toBe(false);
-      expect(l.retifExpandida).toBe(true);
-      expect([l.r_ent1, l.r_sai1, l.r_ent2, l.r_sai2]).toEqual(['08:00', '12:00', '13:00', '17:00']);
-      expect(l.observacoes).toBe('esqueci de bater');
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // salvarEdicao — PUT de sobrescrita (payload, sucesso, recusa e a
-  // MESMA validação de conteúdo da criação)
-  // ═══════════════════════════════════════════════════════════════════
-  describe('salvarEdicao — submit', () => {
-    it('payload exato: UM PUT na URL com o id, null nos pares vazios e observação com trim', () => {
-      const comp = criarComRetifGravada();
-      const l = linhaEmEdicao(comp);
-      Object.assign(l, { r_ent1: '07:30', r_sai1: '11:30', r_ent2: '', r_sai2: '', observacoes: '  ajustei os horários  ' });
-
-      comp.salvarEdicao(l);
-
-      expect(apiPut).toHaveBeenCalledTimes(1);
-      expect(apiPut.mock.calls[0][0]).toBe(URL_EDICAO);
-      expect(apiPut.mock.calls[0][1]).toEqual({
-        ent1: '07:30', sai1: '11:30',
-        ent2: null, sai2: null,
-        observacoes: 'ajustei os horários', // trim aplicado
-      });
-      expect(apiPost).not.toHaveBeenCalled();   // a edição não passa pelo POST de lote
-    });
-
-    it('espaços em volta do horário são tolerados (trim antes da validação e do envio)', () => {
-      const comp = criarComRetifGravada();
-      const l = linhaEmEdicao(comp);
-      Object.assign(l, { r_ent1: ' 07:30 ', r_sai1: '11:30 ', r_ent2: '', r_sai2: '' });
-      comp.salvarEdicao(l);
-      expect(apiPut.mock.calls[0][1]).toMatchObject({ ent1: '07:30', sai1: '11:30' });
-    });
-
-    it('sucesso: guarda a resposta do servidor, volta à LEITURA e avisa no toast', () => {
-      const atualizada = { ...RETIF_QUA, ent1: '07:30', sai1: '11:30', ent2: null, sai2: null, observacoes: 'ajustei' };
-      apiPut.mockReturnValue(of({ ok: true, data: atualizada }));
-      const comp = criarComRetifGravada();
-      comp.erro.set('sujeira de antes');
-      const l = linhaEmEdicao(comp);
-      Object.assign(l, { r_ent1: '07:30', r_sai1: '11:30', r_ent2: '', r_sai2: '', observacoes: 'ajustei' });
-
-      comp.salvarEdicao(l);
-
-      expect(l.retif).toEqual(atualizada);              // a verdade volta do servidor
-      expect(l.editando).toBe(false);
-      expect(l.salvandoEdicao).toBe(false);
-      expect(l.retifExpandida).toBe(true);              // a área segue aberta, agora em leitura
-      expect([l.r_ent1, l.r_sai1, l.r_ent2, l.r_sai2]).toEqual(['07:30', '11:30', '', '']);
-      expect(l.observacoes).toBe('ajustei');
-      expect(comp.erro()).toBe('');
-      expect(toastSuccess).toHaveBeenCalledWith('Retificação atualizada.');
-    });
-
-    it('recusa do backend: guia + motivo no sinal erro, PERMANECE em edição e a trava libera', () => {
-      apiPut.mockReturnValue(throwError(() => ({ status: 404, error: { ok: false, error: 'Retificação não encontrada.' } })));
-      const comp = criarComRetifGravada();
-      const l = linhaEmEdicao(comp);
-      Object.assign(l, { r_ent1: '07:30', r_sai1: '11:30' });
-
-      comp.salvarEdicao(l);
-
-      expect(comp.erro()).toBe('Não foi possível salvar a edição. (Retificação não encontrada.)');
-      expect(l.editando).toBe(true);                    // o usuário não perde o que digitou
-      expect(l.r_ent1).toBe('07:30');
-      expect(l.salvandoEdicao).toBe(false);
-      expect(l.retif).toEqual(RETIF_QUA);               // o gravado não muda
-      expect(toastSuccess).not.toHaveBeenCalled();
-    });
-
-    it('erro sem corpo (500 mudo): só a guia da tela', () => {
-      apiPut.mockReturnValue(throwError(() => new Error('rede')));
-      const comp = criarComRetifGravada();
-      const l = linhaEmEdicao(comp);
-      comp.salvarEdicao(l);
-      expect(comp.erro()).toBe('Não foi possível salvar a edição.');
-    });
-
-    it('2º clique com o PUT no ar NÃO dispara outro (trava salvandoEdicao)', () => {
+    it('com uma gravação em voo naquele dia o menu não abre', () => {
+      const comp = criarCarregado();
       apiPut.mockReturnValue(new Subject<any>());
-      const comp = criarComRetifGravada();
-      const l = linhaEmEdicao(comp);
+      editar(comp, ABERTO);
+      digitar(comp, ABERTO, 'ent1', '09:30');
 
-      comp.salvarEdicao(l);
-      comp.salvarEdicao(l);
+      abrir(comp, ABERTO, 'sai1');
+
+      expect(comp.menu()).toBeNull();
+      expect(comp.salvandoNoDia('2026-08-03')).toBe(true);
+    });
+
+    it('a faixa da ocorrência abre o menu do DIA, e "Editar horário" entra pela 1ª batida', () => {
+      janelaCom({
+        retificacoes: [{ id: 'ret-3', data: '2026-08-03', tipo_id: 'tp-banco', tipo_nome: 'Banco de horas' }],
+      });
+      const comp = criarCarregado();
+
+      comp.abrirMenuDoDia(linha(comp, ABERTO), clique());
+
+      expect(comp.menu()).toMatchObject({
+        data: '2026-08-03', campo: 'ent1', titulo: '03/08 · Dia', temCorrecao: true,
+      });
+    });
+
+    it('abrir o menu encerra a digitação que estava aberta em outra célula', () => {
+      const comp = criarCarregado();
+      editar(comp, ABERTO, 'ent1');
+
+      abrir(comp, ABERTO, 'sai1');
+
+      expect(comp.editandoNoDia('2026-08-03')).toBe(false);
+    });
+
+    it('render: o clique na célula abre o menu ancorado, com as três saídas', () => {
+      const fixture = renderizar();
+
+      chipDe(fixture, ABERTO, 0).click();
+      fixture.detectChanges();
+
+      expect(popover(fixture)).not.toBeNull();
+      expect(tituloMenu(fixture)).toBe('03/08 · Ent. 1');
+      expect(itensMenu(fixture)).toEqual(['Editar horário', 'Banco de horas', 'Atestado']);
+    });
+
+    it('render: no dia com correção, o menu oferece limpar a retificação', () => {
+      const fixture = renderizar();
+
+      chipDe(fixture, CORRIGIDO, 0).click();
+      fixture.detectChanges();
+
+      expect(itensMenu(fixture)).toEqual(['Editar horário', 'Banco de horas', 'Atestado', 'Limpar retificação']);
+    });
+
+    it('render: a faixa da ocorrência declarada também abre o menu', () => {
+      janelaCom({
+        retificacoes: [{ id: 'ret-3', data: '2026-08-03', tipo_id: 'tp-banco', tipo_nome: 'Banco de horas' }],
+      });
+      const fixture = renderizar();
+
+      const faixa = fixture.debugElement
+        .queryAll(By.css('.vista-desktop tbody tr'))[ABERTO]
+        .query(By.css('td.cel-faixa button'));
+      expect(faixa).not.toBeNull();
+      (faixa.nativeElement as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      expect(tituloMenu(fixture)).toBe('03/08 · Dia');
+      expect(itensMenu(fixture)).toContain('Limpar retificação');
+    });
+
+    it('render: um clique REAL no documento fecha o menu; o que o abriu, não', () => {
+      const fixture = renderizar();
+
+      chipDe(fixture, ABERTO, 0).click();
+      fixture.detectChanges();
+      expect(popover(fixture)).not.toBeNull();
+
+      document.body.click();
+      fixture.detectChanges();
+      expect(popover(fixture)).toBeNull();
+    });
+
+    it('render: clicar dentro do menu não o fecha', () => {
+      const fixture = renderizar();
+      chipDe(fixture, ABERTO, 0).click();
+      fixture.detectChanges();
+
+      (popover(fixture).nativeElement as HTMLElement).click();
+      fixture.detectChanges();
+
+      expect(popover(fixture)).not.toBeNull();
+    });
+
+    it('render: Esc de verdade fecha o menu', () => {
+      const fixture = renderizar();
+      chipDe(fixture, ABERTO, 0).click();
+      fixture.detectChanges();
+
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      fixture.detectChanges();
+
+      expect(popover(fixture)).toBeNull();
+    });
+
+    it('render: a lista nasce ancorada na célula clicada', () => {
+      const fixture = renderizar();
+      const chip = chipDe(fixture, ABERTO, 0);
+      chip.getBoundingClientRect = () => ({ left: 340, bottom: 210, top: 190 }) as DOMRect;
+
+      chip.click();
+      fixture.detectChanges();
+
+      const caixa = popover(fixture).nativeElement as HTMLElement;
+      expect(caixa.style.left).toBe('340px');
+      expect(caixa.style.top).toBe('210px');
+      expect(caixa.classList.contains('acima')).toBe(false);
+    });
+
+    it('render: clicar numa célula bloqueada não abre nada', () => {
+      const fixture = renderizar();
+
+      (fixture.debugElement
+        .queryAll(By.css('.vista-desktop tbody tr'))[SABADO]
+        .query(By.css('td.cel-hora .chip')).nativeElement as HTMLElement).click();
+      fixture.detectChanges();
+
+      expect(popover(fixture)).toBeNull();
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Edição da célula — o horário completo grava sozinho
+  // ═══════════════════════════════════════════════════════════════════
+  describe('edição por célula', () => {
+    it('"Editar horário" abre o campo com o valor que está à vista', () => {
+      const comp = criarCarregado();
+      editar(comp, ABERTO, 'sai1');
+
+      expect(comp.editandoCelula('2026-08-03', 'sai1')).toBe(true);
+      expect(comp.editandoNoDia('2026-08-03')).toBe(true);
+      expect(comp.rascunho()).toBe('12:00');
+      expect(comp.menu()).toBeNull();          // o menu sai de cena quando o campo entra
+    });
+
+    it('o campo parte da correção já gravada, não do que a folha imprimiu', () => {
+      const comp = criarCarregado();
+      editar(comp, CORRIGIDO, 'ent1');
+
+      expect(comp.rascunho()).toBe('08:00');   // a folha trazia 08:12
+    });
+
+    it('célula com status no lugar da hora abre o campo VAZIO', () => {
+      const comp = criarCarregado();
+      editar(comp, STATUS, 'ent1');
+
+      expect(comp.rascunho()).toBe('');        // "Falta" não é horário que se possa continuar digitando
+    });
+
+    it('célula vazia abre o campo vazio', () => {
+      const comp = criarCarregado();
+      editar(comp, CORRIGIDO, 'ent2');
+
+      expect(comp.rascunho()).toBe('');
+    });
+
+    it('o horário completo grava sozinho e fecha o campo', () => {
+      const comp = criarCarregado();
+      editar(comp, ABERTO, 'ent1');
+
+      digitar(comp, ABERTO, 'ent1', '09:30');
 
       expect(apiPut).toHaveBeenCalledTimes(1);
-      expect(l.salvandoEdicao).toBe(true);
+      expect(apiPut).toHaveBeenCalledWith(URL_CELULA, { data: '2026-08-03', campo: 'ent1', valor: '09:30' });
+      expect(comp.editandoCelula('2026-08-03', 'ent1')).toBe(false);
+      expect(comp.rascunho()).toBe('');
+      expect(celula(comp, ABERTO, 'ent1')).toMatchObject({ valor: '09:30', corrigido: true });
     });
 
-    it('apagar TODOS os horários recusa nomeando o dia — a edição não vira exclusão', () => {
-      const comp = criarComRetifGravada();
-      const l = linhaEmEdicao(comp);
-      Object.assign(l, { r_ent1: '', r_sai1: '', r_ent2: '', r_sai2: '' });
-
-      comp.salvarEdicao(l);
-
-      expect(comp.erro()).toBe(
-        'Horário de entrada e saída são obrigatórios.');
-      expect(apiPut).not.toHaveBeenCalled();
-      expect(l.editando).toBe(true);
-    });
-
-    it('par incompleto recusa com a MESMA mensagem da criação', () => {
-      const comp = criarComRetifGravada();
-      const l = linhaEmEdicao(comp);
-      Object.assign(l, { r_ent1: '07:30', r_sai1: '', r_ent2: '', r_sai2: '' });
-      comp.salvarEdicao(l);
-      expect(comp.erro()).toBe('Preencha os pares Ent./Saí. completos em 08/07/26 - qua.');
-      expect(apiPut).not.toHaveBeenCalled();
-    });
-
-    it('horário fora de HH:MM recusa com a MESMA mensagem da criação', () => {
-      const comp = criarComRetifGravada();
-      const l = linhaEmEdicao(comp);
-      Object.assign(l, { r_ent1: '25:00' });
-      comp.salvarEdicao(l);
-      expect(comp.erro()).toBe('Horário inválido em 08/07/26 - qua (use HH:MM).');
-      expect(apiPut).not.toHaveBeenCalled();
-    });
-
-    it('prazo expirado: recusa antes de qualquer validação de conteúdo, sem PUT', () => {
-      const comp = criarComRetifGravada({}, true);   // a folha já chega com o prazo vencido
-      const l = linhaEmEdicao(comp);
-      comp.salvarEdicao(l);
-      expect(comp.erro()).toBe('Prazo de retificação encerrado.');
-      expect(apiPut).not.toHaveBeenCalled();
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // RENDER — o dia retificado é clicável, expande somente-leitura e o
-  // Editar habilita os campos (e some com o prazo vencido)
-  // ═══════════════════════════════════════════════════════════════════
-  describe('render do dia retificado (expansão, leitura e edição)', () => {
-    function renderizarComRetif(prazoExpirado = false): ComponentFixture<PontoRetificarComponent> {
-      respostaRetificacoes({
-        limite_fmt: '17/07/2026',
-        prazo_expirado: prazoExpirado,
-        retificacoes: [structuredClone(RETIF_QUA)],
-      });
-      const fixture = TestBed.createComponent(PontoRetificarComponent);
-      fixture.detectChanges();   // ngOnInit + render (as respostas do mock são síncronas)
-      return fixture;
-    }
-
-    /** Clica na linha retificada (desktop) e estabiliza os bindings da área expandida. */
-    async function expandirPorClique(fixture: ComponentFixture<PontoRetificarComponent>): Promise<void> {
-      const linha = fixture.debugElement.queryAll(By.css('.vista-desktop tbody tr'))[2];
-      (linha.nativeElement as HTMLTableRowElement).click();
-      fixture.detectChanges();
-      await fixture.whenStable();     // bindings do template (o disabled do NgModel é assíncrono)
-      fixture.detectChanges();
-    }
-
-    const inputsDesktop = (fixture: ComponentFixture<PontoRetificarComponent>) =>
-      fixture.debugElement.queryAll(By.css('.vista-desktop .retif-area input'))
-        .map(i => i.nativeElement as HTMLInputElement);
-
-    const textareaDesktop = (fixture: ComponentFixture<PontoRetificarComponent>) =>
-      fixture.debugElement.query(By.css('.vista-desktop .retif-area textarea'))!.nativeElement as HTMLTextAreaElement;
-
-    const botaoAcao = (fixture: ComponentFixture<PontoRetificarComponent>, rotulo: string) =>
-      fixture.debugElement.queryAll(By.css('.vista-desktop .retif-acoes button'))
-        .find(b => (b.nativeElement as HTMLButtonElement).textContent?.trim() === rotulo);
-
-    it('a linha retificada é clicável nas DUAS vistas: classe própria e title "Ver retificação"', () => {
-      const fixture = renderizarComRetif();
-
-      const linhas = fixture.debugElement.queryAll(By.css('.vista-desktop tbody tr'));
-      expect(linhas[2].nativeElement.classList.contains('row-retif')).toBe(true);
-      expect(linhas[2].nativeElement.getAttribute('title')).toBe('Ver retificação');
-      expect(linhas[0].nativeElement.classList.contains('row-retif')).toBe(false);
-      expect(linhas[0].nativeElement.getAttribute('title')).toBeNull();
-
-      const cards = fixture.debugElement.queryAll(By.css('.vista-mobile .dia-card'));
-      expect(cards[2].nativeElement.classList.contains('retif')).toBe(true);
-      expect(cards[2].nativeElement.getAttribute('title')).toBe('Ver retificação');
-      expect(cards[0].nativeElement.classList.contains('retif')).toBe(false);
-    });
-
-    it('o clique expande a área SOMENTE-LEITURA com os valores gravados — e o selo permanece', async () => {
-      const fixture = renderizarComRetif();
-      await expandirPorClique(fixture);
-
-      const inputs = inputsDesktop(fixture);
-      expect(inputs).toHaveLength(4);
-      expect(inputs.map(i => i.value)).toEqual(['08:00', '12:00', '13:00', '17:00']);
-      expect(inputs.every(i => i.disabled)).toBe(true);
-      expect(textareaDesktop(fixture).disabled).toBe(true);
-      expect(textareaDesktop(fixture).value).toBe('esqueci de bater');
-      expect(fixture.debugElement.query(By.css('.vista-desktop .badge-retif'))?.nativeElement.textContent)
-        .toContain('Retificado');
-    });
-
-    it('"Editar" HABILITA os campos e troca os botões por Cancelar/Salvar', async () => {
-      const fixture = renderizarComRetif();
-      await expandirPorClique(fixture);
-
-      (botaoAcao(fixture, 'Editar')!.nativeElement as HTMLButtonElement).click();
-      fixture.detectChanges();
-      await fixture.whenStable();
-      fixture.detectChanges();
-
-      expect(inputsDesktop(fixture).every(i => !i.disabled)).toBe(true);
-      expect(textareaDesktop(fixture).disabled).toBe(false);
-      expect(botaoAcao(fixture, 'Editar')).toBeUndefined();
-      expect(botaoAcao(fixture, 'Cancelar')).not.toBeUndefined();
-      expect(botaoAcao(fixture, 'Salvar')).not.toBeUndefined();
-    });
-
-    it('com o prazo VENCIDO a área ainda expande (consulta), mas SEM o botão Editar', async () => {
-      const fixture = renderizarComRetif(true);
-      await expandirPorClique(fixture);
-
-      expect(inputsDesktop(fixture)).toHaveLength(4);          // a leitura continua disponível
-      expect(inputsDesktop(fixture).every(i => i.disabled)).toBe(true);
-      expect(fixture.debugElement.queryAll(By.css('.vista-desktop .retif-acoes button'))).toEqual([]);
-    });
-  });
-
-  describe('teto de 300 caracteres nas observações (render)', () => {
-    it('os textareas de observação (desktop e celular) têm maxlength="300"', () => {
-      // OBSERVACOES é VARCHAR2(2000) em BYTES: sem o teto, ~1.100 caracteres acentuados estouravam a
-      // coluna e o ORA-12899 era respondido como "o dia já foi retificado" — o usuário ia embora
-      // achando que gravou, com o prazo de 5 dias correndo.
-      const fixture = TestBed.createComponent(PontoRetificarComponent);
-      fixture.detectChanges();                  // ngOnInit + render (as respostas são síncronas)
-      const comp = fixture.componentInstance;
-      comp.toggle(comp.linhas()[0]);            // a área de retificação só existe com o dia aberto
-      fixture.detectChanges();
-
-      const textareas = fixture.debugElement.queryAll(By.css('.retif-area textarea'));
-      expect(textareas.length).toBe(2);   // a tabela do desktop e o card do celular
-      for (const ta of textareas) {
-        expect((ta.nativeElement as HTMLTextAreaElement).getAttribute('maxlength')).toBe('300');
-      }
-    });
-
-    it('a recusa de 400 do backend (shape real {ok:false, error}) chega à tela nomeando o campo', () => {
-      apiPost.mockReturnValue(throwError(() => ({
-        status: 400,
-        error: { ok: false, error: 'A observação do dia 06/07/2026 excede o máximo de 300 caracteres (foram 420).' },
-      })));
+    it('o horário pela metade não grava nada', () => {
       const comp = criarCarregado();
-      preencher(comp, 0, { r_ent1: '08:00', r_sai1: '12:00', observacoes: 'x'.repeat(420) });
+      editar(comp, ABERTO, 'ent1');
 
-      comp.salvar();
+      digitar(comp, ABERTO, 'ent1', '09:');
+      digitar(comp, ABERTO, 'ent1', '09:3');
 
-      expect(comp.erro()).toContain('Não foi possível concluir a operação.');   // a guia da tela
-      expect(comp.erro()).toContain('máximo de 300 caracteres');   // o motivo do backend
-      expect(comp.enviado()).toBe(false);
-      expect(comp.salvando()).toBe(false);                         // a trava é liberada: dá para consertar
+      expect(apiPut).not.toHaveBeenCalled();
+      expect(comp.editandoCelula('2026-08-03', 'ent1')).toBe(true);
+      expect(comp.rascunho()).toBe('09:3');
     });
-  });
 
-  describe('card do celular: destaque só nas horas', () => {
-    /** Textos das células em negrito do card (a classe que o CSS do celular engrossa). */
-    const emNegrito = (card: DebugElement) =>
-      card.queryAll(By.css('.val.hora')).map(e => e.nativeElement.textContent.trim());
+    it('sair do campo com o horário pela metade descarta em silêncio', () => {
+      const comp = criarCarregado();
+      editar(comp, ABERTO, 'ent1');
+      digitar(comp, ABERTO, 'ent1', '09:3');
 
-    it('horário registrado sai destacado; dia sem batida, status e rótulos não', () => {
-      const fixture = TestBed.createComponent(PontoRetificarComponent);
+      sair(comp, ABERTO, 'ent1');
+
+      expect(apiPut).not.toHaveBeenCalled();
+      expect(comp.editandoCelula('2026-08-03', 'ent1')).toBe(false);
+      expect(celula(comp, ABERTO, 'ent1')).toMatchObject({ valor: '08:00', corrigido: false });
+    });
+
+    it('sair do campo com o horário mudado grava', () => {
+      const comp = criarCarregado();
+      editar(comp, ABERTO, 'ent1');
+      digitar(comp, ABERTO, 'ent1', '09:3');   // incompleto: ainda não grava
+      digitar(comp, ABERTO, 'ent1', '09:35');
+
+      expect(apiPut).toHaveBeenCalledWith(URL_CELULA, { data: '2026-08-03', campo: 'ent1', valor: '09:35' });
+    });
+
+    it('abrir o campo e sair sem mexer não grava nada', () => {
+      // O campo abre com o horário que já está à vista; desistir dele não é uma correção, e gravar
+      // criaria uma retificação repetindo a folha.
+      const comp = criarCarregado();
+      editar(comp, ABERTO, 'ent1');
+
+      sair(comp, ABERTO, 'ent1');
+
+      expect(apiPut).not.toHaveBeenCalled();
+    });
+
+    it('Esc cancela a digitação sem requisição nenhuma', () => {
+      const comp = criarCarregado();
+      editar(comp, ABERTO, 'ent1');
+      digitar(comp, ABERTO, 'ent1', '09:3');
+
+      comp.cancelarEdicao();
+
+      expect(apiPut).not.toHaveBeenCalled();
+      expect(comp.editandoCelula('2026-08-03', 'ent1')).toBe(false);
+      expect(comp.rascunho()).toBe('');
+    });
+
+    it('o que gravou pelo horário completo NÃO grava de novo ao sair do campo', () => {
+      // O campo já fechou na gravação; o blur que vem em seguida não pode virar um segundo PUT.
+      const comp = criarCarregado();
+      editar(comp, ABERTO, 'ent1');
+
+      digitar(comp, ABERTO, 'ent1', '09:30');
+      sair(comp, ABERTO, 'ent1');
+
+      expect(apiPut).toHaveBeenCalledTimes(1);
+    });
+
+    it('regravar o valor que já está gravado não custa requisição', () => {
+      const comp = criarCarregado();
+      editar(comp, CORRIGIDO, 'ent1');
+
+      digitar(comp, CORRIGIDO, 'ent1', '08:00');   // idêntico à correção existente
+
+      expect(apiPut).not.toHaveBeenCalled();
+      expect(comp.editandoCelula('2026-08-04', 'ent1')).toBe(false);
+    });
+
+    it('digitar exatamente o horário que já está à vista não vira requisição', () => {
+      // Vale tanto para o que veio da folha quanto para o que ele já corrigiu: nos dois casos a
+      // célula continuaria mostrando a mesma coisa.
+      const comp = criarCarregado();
+      editar(comp, ABERTO, 'sai1');
+
+      digitar(comp, ABERTO, 'sai1', '12:00');   // é o que a folha imprimiu nessa célula
+
+      expect(apiPut).not.toHaveBeenCalled();
+    });
+
+    it('voltar ao horário que a folha imprimiu, num campo corrigido, grava a volta', () => {
+      // A célula corrigida mostra 08:00 sobre um 07:45 impresso: digitar 07:45 é desfazer a
+      // correção daquela batida, e isso o servidor precisa saber.
+      const comp = criarCarregado();
+      editar(comp, CORRIGIDO, 'ent1');
+
+      digitar(comp, CORRIGIDO, 'ent1', '08:12');   // o valor original da folha naquele dia
+
+      expect(apiPut).toHaveBeenCalledWith(URL_CELULA, { data: '2026-08-04', campo: 'ent1', valor: '08:12' });
+    });
+
+    it('render: "Editar horário" troca a célula pelo campo, já preenchido', () => {
+      const fixture = renderizar();
+      chipDe(fixture, ABERTO, 0).click();
       fixture.detectChanges();
-      const cards = fixture.debugElement.queryAll(By.css('.vista-mobile .dia-card'));
 
-      expect(emNegrito(cards[0])).toEqual(['08:00', '12:00', '13:00', '17:00', '08:00', '00:00']);
-      expect(emNegrito(cards[2])).toEqual(['08:10', '12:00', '03:50', '-02:10']);   // sem a 2ª metade do dia
-      expect(cards[2].queryAll(By.css('.val:not(.hora)')).map(e => e.nativeElement.textContent.trim()))
-        .toEqual(['—', '—']);
+      itemMenu(fixture, 'Editar horário').click();
+      fixture.detectChanges();
 
-      expect(emNegrito(cards[1])).toEqual(['00:00']);   // o Feriado não é hora; o banco do dia é
-      expect(cards[1].query(By.css('.status-cell')).nativeElement.textContent.trim()).toBe('Feriado');
+      const campo = fixture.debugElement.query(By.css('.vista-desktop input.cel-input'));
+      expect(campo).not.toBeNull();
+      expect((campo.nativeElement as HTMLInputElement).value).toBe('08:00');
+      expect(popover(fixture)).toBeNull();
+    });
+
+    it('render: digitar os quatro dígitos grava o horário mascarado', () => {
+      const fixture = renderizar();
+      const campo = abrirCampo(fixture, ABERTO, 0);
+
+      campo.value = '0930';
+      campo.dispatchEvent(new InputEvent('input', { inputType: 'insertText', bubbles: true }));
+      fixture.detectChanges();
+
+      expect(apiPut).toHaveBeenCalledWith(URL_CELULA, { data: '2026-08-03', campo: 'ent1', valor: '09:30' });
+      expect(fixture.debugElement.query(By.css('.vista-desktop input.cel-input'))).toBeNull();
+    });
+
+    it('render: sair do campo com dois dígitos não grava', () => {
+      const fixture = renderizar();
+      const campo = abrirCampo(fixture, ABERTO, 0);
+
+      campo.value = '09';
+      campo.dispatchEvent(new InputEvent('input', { inputType: 'insertText', bubbles: true }));
+      campo.dispatchEvent(new Event('blur'));
+      fixture.detectChanges();
+
+      expect(apiPut).not.toHaveBeenCalled();
+      expect(fixture.debugElement.query(By.css('.vista-desktop input.cel-input'))).toBeNull();
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // O corpo enviado — só o que a rota precisa
+  // ═══════════════════════════════════════════════════════════════════
+  describe('corpo das requisições', () => {
+    it('a gravação de uma batida manda exatamente data, campo e valor', () => {
+      const comp = criarCarregado();
+      editar(comp, ABERTO, 'ent2');
+      digitar(comp, ABERTO, 'ent2', '13:15');
+
+      const [url, body] = apiPut.mock.calls[0];
+      expect(url).toBe(URL_CELULA);
+      expect(body).toEqual({ data: '2026-08-03', campo: 'ent2', valor: '13:15' });
+      expect(Object.keys(body)).toEqual(['data', 'campo', 'valor']);
+    });
+
+    it('a declaração de ocorrência manda exatamente data e tipo', () => {
+      const comp = criarCarregado();
+      abrir(comp, ABERTO);
+      comp.declarar(comp.tipos()[0]);
+
+      const [url, body] = apiPut.mock.calls[0];
+      expect(url).toBe(URL_TIPO);
+      expect(body).toEqual({ data: '2026-08-03', tipo_id: 'tp-banco' });
+      expect(Object.keys(body)).toEqual(['data', 'tipo_id']);
+    });
+
+    it('a limpeza é só a URL com a data — sem corpo', () => {
+      const comp = criarCarregado();
+      abrir(comp, CORRIGIDO);
+      comp.limpar();
+
+      expect(apiDelete).toHaveBeenCalledWith('/api/ponto/folha/pag-1/retificacoes/2026-08-04');
+      expect(apiDelete.mock.calls[0]).toHaveLength(1);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Declarar ocorrência — o dia inteiro sob um nome
+  // ═══════════════════════════════════════════════════════════════════
+  describe('declarar ocorrência', () => {
+    it('escolher o tipo grava e a resposta vira a faixa do dia', () => {
+      const comp = criarCarregado();
+      abrir(comp, ABERTO);
+
+      comp.declarar(comp.tipos()[1]);
+
+      expect(apiPut).toHaveBeenCalledWith(URL_TIPO, { data: '2026-08-03', tipo_id: 'tp-atestado' });
+      expect(comp.menu()).toBeNull();
+      expect(linha(comp, ABERTO).faixa).toEqual({ texto: 'Atestado', declarada: true });
+      expect(linha(comp, ABERTO).corrigido).toBe(true);
+    });
+
+    it('a ocorrência declarada apaga os horários corrigidos daquele dia', () => {
+      const comp = criarCarregado();
+      abrir(comp, CORRIGIDO);
+
+      comp.declarar(comp.tipos()[0]);
+
+      expect(linha(comp, CORRIGIDO).faixa).toEqual({ texto: 'Banco de horas', declarada: true });
+      expect(linha(comp, CORRIGIDO).celulas.every(c => !c.corrigido)).toBe(true);
+    });
+
+    it('sem menu aberto não há o que declarar', () => {
+      const comp = criarCarregado();
+      comp.declarar(comp.tipos()[0]);
+
+      expect(apiPut).not.toHaveBeenCalled();
+    });
+
+    it('render: escolher o tipo na lista grava e a linha vira faixa', () => {
+      const fixture = renderizar();
+      chipDe(fixture, ABERTO, 0).click();
+      fixture.detectChanges();
+
+      itemMenu(fixture, 'Banco de horas').click();
+      fixture.detectChanges();
+
+      expect(apiPut).toHaveBeenCalledWith(URL_TIPO, { data: '2026-08-03', tipo_id: 'tp-banco' });
+      const faixa = fixture.debugElement
+        .queryAll(By.css('.vista-desktop tbody tr'))[ABERTO]
+        .query(By.css('td.cel-faixa'));
+      expect(faixa.nativeElement.textContent.trim()).toBe('Banco de horas');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Limpar — o dia volta a valer o que a folha trouxe
+  // ═══════════════════════════════════════════════════════════════════
+  describe('limpar a retificação', () => {
+    it('o DELETE leva a data e a correção some da tela', () => {
+      const comp = criarCarregado();
+      abrir(comp, CORRIGIDO);
+
+      comp.limpar();
+
+      expect(apiDelete).toHaveBeenCalledWith('/api/ponto/folha/pag-1/retificacoes/2026-08-04');
+      expect(comp.menu()).toBeNull();
+      expect(linha(comp, CORRIGIDO).corrigido).toBe(false);
+      expect(celula(comp, CORRIGIDO, 'ent1')).toMatchObject({ valor: '08:12', corrigido: false });
+    });
+
+    it('limpar um dia não mexe na correção dos outros', () => {
+      const comp = criarCarregado();
+      abrir(comp, CORRIGIDO);
+
+      comp.limpar();
+
+      expect(linha(comp, FECHADO).corrigido).toBe(true);
+    });
+
+    it('limpar a ocorrência declarada devolve as batidas da folha', () => {
+      janelaCom({
+        retificacoes: [{ id: 'ret-3', data: '2026-08-03', tipo_id: 'tp-banco', tipo_nome: 'Banco de horas' }],
+      });
+      const comp = criarCarregado();
+      abrir(comp, ABERTO);
+
+      comp.limpar();
+
+      expect(linha(comp, ABERTO).faixa).toBeNull();
+      expect(linha(comp, ABERTO).celulas.map(c => c.valor)).toEqual(['08:00', '12:00', '13:00', '17:00']);
+    });
+
+    it('sem menu aberto não há o que limpar', () => {
+      const comp = criarCarregado();
+      comp.limpar();
+
+      expect(apiDelete).not.toHaveBeenCalled();
+    });
+
+    it('render: "Limpar retificação" apaga a marca de editada da célula', () => {
+      const fixture = renderizar();
+      chipDe(fixture, CORRIGIDO, 0).click();
+      fixture.detectChanges();
+
+      itemMenu(fixture, 'Limpar retificação').click();
+      fixture.detectChanges();
+
+      const chip = chipDe(fixture, CORRIGIDO, 0);
+      expect(chip.classList.contains('chip-editado')).toBe(false);
+      expect(chip.textContent).toContain('08:12');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Erro de gravação — o toast avisa e a tela não inventa valor
+  // ═══════════════════════════════════════════════════════════════════
+  describe('erro de gravação', () => {
+    it('a mensagem do backend vai ao toast e a célula continua com o valor de antes', () => {
+      const comp = criarCarregado();
+      apiPut.mockReturnValue(throwError(() => ({ error: { message: 'A folha não aceita mais correções.' } })));
+      editar(comp, ABERTO, 'ent1');
+
+      digitar(comp, ABERTO, 'ent1', '09:30');
+
+      expect(toastError).toHaveBeenCalledWith('A folha não aceita mais correções.');
+      expect(celula(comp, ABERTO, 'ent1')).toMatchObject({ valor: '08:00', corrigido: false });
+      expect(comp.erro()).toBe('');            // o canal da carga não é o da gravação
+      expect(comp.salvandoNoDia('2026-08-03')).toBe(false);
+    });
+
+    it('erro sem corpo: fallback', () => {
+      const comp = criarCarregado();
+      apiPut.mockReturnValue(throwError(() => new Error('rede')));
+      editar(comp, ABERTO, 'ent1');
+
+      digitar(comp, ABERTO, 'ent1', '09:30');
+
+      expect(toastError).toHaveBeenCalledWith('Não foi possível salvar a correção.');
+    });
+
+    it('a declaração que falha não pinta faixa nenhuma', () => {
+      const comp = criarCarregado();
+      apiPut.mockReturnValue(throwError(() => ({ error: { message: 'Tipo indisponível.' } })));
+      abrir(comp, ABERTO);
+
+      comp.declarar(comp.tipos()[0]);
+
+      expect(toastError).toHaveBeenCalledWith('Tipo indisponível.');
+      expect(linha(comp, ABERTO).faixa).toBeNull();
+    });
+
+    it('a limpeza que falha mantém a correção na tela', () => {
+      const comp = criarCarregado();
+      apiDelete.mockReturnValue(throwError(() => ({ error: { message: 'Fora do prazo.' } })));
+      abrir(comp, CORRIGIDO);
+
+      comp.limpar();
+
+      expect(toastError).toHaveBeenCalledWith('Fora do prazo.');
+      expect(celula(comp, CORRIGIDO, 'ent1')).toMatchObject({ valor: '08:00', corrigido: true });
+    });
+
+    it('a resposta sem correção no corpo não apaga o que estava lá', () => {
+      const comp = criarCarregado();
+      apiPut.mockReturnValue(of({ ok: true }));
+      editar(comp, CORRIGIDO, 'sai1');
+
+      digitar(comp, CORRIGIDO, 'sai1', '12:30');
+
+      expect(celula(comp, CORRIGIDO, 'ent1')).toMatchObject({ valor: '08:00', corrigido: true });
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Fila — uma gravação por dia
+  // ═══════════════════════════════════════════════════════════════════
+  describe('fila de gravação', () => {
+    it('com a gravação em voo, o segundo gesto do mesmo dia não vira requisição', () => {
+      const comp = criarCarregado();
+      const emVoo = new Subject<any>();
+      apiPut.mockReturnValue(emVoo);
+      editar(comp, ABERTO, 'ent1');
+
+      digitar(comp, ABERTO, 'ent1', '09:30');
+      expect(comp.salvandoNoDia('2026-08-03')).toBe(true);
+
+      digitar(comp, ABERTO, 'ent1', '09:31');   // clique impaciente enquanto a 1ª não volta
+      expect(apiPut).toHaveBeenCalledTimes(1);
+
+      emVoo.next(ecoCelula({ data: '2026-08-03', campo: 'ent1', valor: '09:30' }));
+      expect(comp.salvandoNoDia('2026-08-03')).toBe(false);
+    });
+
+    it('a espera de um dia não trava os outros: o gesto em outro dia grava na hora', () => {
+      // A fila é por DIA. Travar a folha inteira faria o funcionário esperar por uma resposta que
+      // não tem nada a ver com a batida que ele está corrigindo agora.
+      const comp = criarCarregado();
+      apiPut.mockReturnValue(new Subject<any>());
+      editar(comp, ABERTO, 'ent1');
+      digitar(comp, ABERTO, 'ent1', '09:30');
+
+      editar(comp, STATUS, 'ent1');
+      digitar(comp, STATUS, 'ent1', '08:00');
+
+      expect(apiPut).toHaveBeenCalledTimes(2);
+      expect(comp.salvandoNoDia('2026-08-03')).toBe(true);
+      expect(comp.salvandoNoDia('2026-08-05')).toBe(true);
+      expect(toastError).not.toHaveBeenCalled();
+    });
+
+    it('render: os chips do dia em gravação ficam desabilitados', () => {
+      const fixture = renderizar();
+      apiPut.mockReturnValue(new Subject<any>());
+      const campo = abrirCampo(fixture, ABERTO, 0);
+
+      campo.value = '0930';
+      campo.dispatchEvent(new InputEvent('input', { inputType: 'insertText', bubbles: true }));
+      fixture.detectChanges();
+
+      const chips = fixture.debugElement
+        .queryAll(By.css('.vista-desktop tbody tr'))[ABERTO]
+        .queryAll(By.css('td.cel-hora button.chip'));
+      expect(chips.every(c => (c.nativeElement as HTMLButtonElement).disabled)).toBe(true);
+
+      const outroDia = fixture.debugElement
+        .queryAll(By.css('.vista-desktop tbody tr'))[STATUS]
+        .queryAll(By.css('td.cel-hora button.chip'));
+      expect(outroDia.every(c => (c.nativeElement as HTMLButtonElement).disabled)).toBe(false);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Recência — a resposta atrasada não manda na tela nova
+  // ═══════════════════════════════════════════════════════════════════
+  describe('recência das respostas', () => {
+    it('a gravação que volta depois de a janela recarregar não altera a tela', () => {
+      const comp = criarCarregado();
+      const emVoo = new Subject<any>();
+      apiPut.mockReturnValue(emVoo);
+      editar(comp, ABERTO, 'ent1');
+      digitar(comp, ABERTO, 'ent1', '09:30');
+
+      comp.recarregarJanela();
+      emVoo.next(ecoCelula({ data: '2026-08-03', campo: 'ent1', valor: '09:30' }));
+
+      expect(celula(comp, ABERTO, 'ent1')).toMatchObject({ valor: '08:00', corrigido: false });
+    });
+
+    it('o erro de uma gravação obsoleta não pinta toast na tela nova', () => {
+      const comp = criarCarregado();
+      const emVoo = new Subject<any>();
+      apiPut.mockReturnValue(emVoo);
+      editar(comp, ABERTO, 'ent1');
+      digitar(comp, ABERTO, 'ent1', '09:30');
+
+      comp.recarregarJanela();
+      emVoo.error({ error: { message: 'falhou' } });
+
+      expect(toastError).not.toHaveBeenCalled();
+    });
+
+    it('recarregar a janela destrava a tela: nada fica preso em "gravando"', () => {
+      const comp = criarCarregado();
+      apiPut.mockReturnValue(new Subject<any>());
+      editar(comp, ABERTO, 'ent1');
+      digitar(comp, ABERTO, 'ent1', '09:30');
+      expect(comp.salvandoNoDia('2026-08-03')).toBe(true);
+
+      comp.recarregarJanela();
+
+      expect(comp.salvandoNoDia('2026-08-03')).toBe(false);
+      expect(comp.menu()).toBeNull();
+      expect(comp.editandoNoDia('2026-08-03')).toBe(false);
+    });
+
+    it('a carga de janela atrasada não sobrescreve a que já está na tela', () => {
+      const lenta = new Subject<any>();
+      respostas.janela = () => lenta;
+      const comp = criarCarregado();
+
+      respostas.janela = () => of({ data: { ...structuredClone(JANELA), retificacoes: [] } });
+      comp.recarregarJanela();                       // a 2ª carga responde na hora
+      expect(linha(comp, CORRIGIDO).corrigido).toBe(false);
+
+      lenta.next({ data: structuredClone(JANELA) }); // a 1ª chega atrasada
+      expect(linha(comp, CORRIGIDO).corrigido).toBe(false);
+    });
+
+    it('o erro de uma carga de janela atrasada não trava a tela que já carregou', () => {
+      const lenta = new Subject<any>();
+      respostas.janela = () => lenta;
+      const comp = criarCarregado();
+
+      respostas.janela = () => of({ data: structuredClone(JANELA) });
+      comp.recarregarJanela();
+      lenta.error({ error: { message: 'timeout' } });
+
+      expect(comp.erroJanela()).toBe('');
+      expect(linha(comp, ABERTO).editavel).toBe(true);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Auxiliares de render
+  // ═══════════════════════════════════════════════════════════════════
+
+  /** Componente renderizado com as duas cargas resolvidas (as respostas do mock são síncronas). */
+  function renderizar(): ComponentFixture<PontoRetificarComponent> {
+    const fixture = TestBed.createComponent(PontoRetificarComponent);
+    fixture.detectChanges();   // ngOnInit + render
+    return fixture;
+  }
+
+  /** A célula (linha, batida) da tabela, como o usuário a clica. */
+  function chipDe(f: ComponentFixture<PontoRetificarComponent>, idx: number, campoIdx: number): HTMLElement {
+    return f.debugElement
+      .queryAll(By.css('.vista-desktop tbody tr'))[idx]
+      .queryAll(By.css('td.cel-hora .chip'))[campoIdx].nativeElement as HTMLElement;
+  }
+
+  const popover = (f: ComponentFixture<PontoRetificarComponent>) => f.debugElement.query(By.css('.popover'));
+
+  const tituloMenu = (f: ComponentFixture<PontoRetificarComponent>) =>
+    (f.debugElement.query(By.css('.popover .pop-titulo')).nativeElement as HTMLElement).textContent?.trim();
+
+  const itensMenu = (f: ComponentFixture<PontoRetificarComponent>) =>
+    f.debugElement.queryAll(By.css('.popover .pop-item'))
+      .map(b => (b.nativeElement as HTMLElement).textContent?.trim());
+
+  /** Opção do menu, pelo rótulo. */
+  function itemMenu(f: ComponentFixture<PontoRetificarComponent>, rotulo: string): HTMLButtonElement {
+    return f.debugElement.queryAll(By.css('.popover .pop-item'))
+      .find(b => (b.nativeElement as HTMLElement).textContent?.trim() === rotulo)!
+      .nativeElement as HTMLButtonElement;
+  }
+
+  /** Abre a célula em modo de digitação e devolve o campo renderizado. */
+  function abrirCampo(f: ComponentFixture<PontoRetificarComponent>, idx: number, campoIdx: number): HTMLInputElement {
+    chipDe(f, idx, campoIdx).click();
+    f.detectChanges();
+    itemMenu(f, 'Editar horário').click();
+    f.detectChanges();
+    return f.debugElement.query(By.css('.vista-desktop input.cel-input')).nativeElement as HTMLInputElement;
+  }
 });

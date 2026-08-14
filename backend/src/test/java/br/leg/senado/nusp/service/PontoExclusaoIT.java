@@ -209,11 +209,10 @@ class PontoExclusaoIT {
 
     /** Retificação real do dono, pela folha indicada (mesmo caminho do usuário). */
     private void retificar(PontoLotePagina pagina, Operador pessoa, LocalDate dia) {
-        Map<String, Object> item = new LinkedHashMap<>();
-        item.put("data", dia.toString());
-        item.put("ent1", "08:00");
-        item.put("sai1", "12:00");
-        retificacaoService.criarRetificacoes(pagina.getId(), pessoa.getId(), Map.of("dias", List.of(item)));
+        retificacaoService.salvarCelula(pagina.getId(), pessoa.getId(),
+                Map.of("data", dia.toString(), "campo", "ent1", "valor", "08:00"));
+        retificacaoService.salvarCelula(pagina.getId(), pessoa.getId(),
+                Map.of("data", dia.toString(), "campo", "sai1", "valor", "12:00"));
     }
 
     /** Cria os PDFs em disco (o upload real os cria; o CenarioFactory só grava os caminhos). */
@@ -651,14 +650,14 @@ class PontoExclusaoIT {
 
     // ══════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("interação com o prazo de retificação — excluir a folha LIBERTA o dia")
-    class InteracaoComOPrazo {
+    @DisplayName("interação com a janela de retificação — excluir a folha LIBERTA o dia")
+    class InteracaoComAJanela {
 
         /**
-         * A retificação é única por (pessoa, dia) — UK. Enquanto ela existe, o dia está travado em
-         * TODAS as folhas da pessoa que o cobrem. Excluir a folha que a ancorou mata a
-         * retificação: o dia volta a ficar livre, e a folha que continua publicada (com a janela dela
-         * aberta) volta a aceitá-lo.
+         * A retificação é única por (pessoa, dia) — UK — e aparece em TODAS as folhas da pessoa que
+         * cobrem o dia. Excluir a folha que a ancorou mata a retificação; e como a janela é a ordem
+         * das folhas publicadas, a folha que sobra volta a ser a primeira a mostrar aquele dia — que
+         * assim volta a aceitar edição.
          */
         @Test
         @DisplayName("morta a retificação com a folha A, o dia some da listagem de B e volta a GRAVAR por ela")
@@ -670,21 +669,22 @@ class PontoExclusaoIT {
             PontoLote loteB = tx.execute(status -> loteEmRevisao("SEMANAL", JUNHO_INI, LocalDate.of(2026, 6, 19)));
             PontoLotePagina folhaB = tx.execute(status ->
                     CenarioFactory.novaPaginaLote(em, loteB, 1, ana.getId(), "OPERADOR"));
+
+            // A entra sozinha e o dia é novidade dela; B, publicada depois, fecha o que A já mostrara.
             pontoService.publicar(loteA.getId(), false, false, "master.teste");
+            retificar(folhaA, ana, dia);
             pontoService.publicar(loteB.getId(), false, false, "master.teste");
 
-            retificar(folhaA, ana, dia);   // o dia entra pela folha A (semanais cumulativas cobrem os dois)
-
             assertEquals(List.of("2026-06-05"), diasListadosNaFolha(folhaB, ana),
-                    "o dia retificado por A aparece travado na folha B (a chave é pessoa+dia)");
+                    "o dia retificado por A aparece na folha B (a chave é pessoa+dia)");
             assertThrows(ServiceValidationException.class, () -> retificar(folhaB, ana, dia),
-                    "e a UK recusa regravá-lo por B");
+                    "e o dia, já mostrado por A, não aceita mais edição");
 
             service.excluirLote(loteA.getId(), MASTER, admin.getId());
 
             assertTrue(diasListadosNaFolha(folhaB, ana).isEmpty(),
                     "morta a folha que ancorava a retificação, o dia deixa de aparecer retificado");
-            retificar(folhaB, ana, dia);   // e agora GRAVA — dentro da janela DE B
+            retificar(folhaB, ana, dia);   // sem A, o dia passa a ser novidade de B
             assertEquals(List.of("2026-06-05"), diasListadosNaFolha(folhaB, ana));
         }
 

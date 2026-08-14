@@ -91,7 +91,7 @@ class PontoPublicacaoGuardaIT {
         // vínculo continua batendo no Oracle, não num mock.
         service = new PontoService(loteRepo, paginaRepo, folhaLinhaRepo, operadorRepo, tecnicoRepo,
                 administradorRepo,
-                avisoService, saldoAberturaService, mock(RetificacaoService.class),
+                avisoService, saldoAberturaService,
                 new PessoaCadastroLookup(operadorRepo, tecnicoRepo, administradorRepo));
         // Diretório inexistente de propósito: a extração do BANCO falha com WARN e não aborta nada.
         ReflectionTestUtils.setField(service, "filesDir", "/tmp/nusp-test-files-inexistente");

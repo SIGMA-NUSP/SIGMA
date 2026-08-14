@@ -2,13 +2,18 @@ package br.leg.senado.nusp.service;
 
 import br.leg.senado.nusp.entity.PontoDiaMarcacao;
 import br.leg.senado.nusp.entity.PontoPessoaMarcacao;
+import br.leg.senado.nusp.entity.PontoRetificacao;
 import br.leg.senado.nusp.entity.PontoTipoMarcacao;
 import br.leg.senado.nusp.entity.PontoTipoMarcacaoExclusaoLog;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
+import br.leg.senado.nusp.repository.PontoRetificacaoRepository;
 import br.leg.senado.nusp.repository.PontoTipoMarcacaoExclusaoLogRepository;
 import br.leg.senado.nusp.repository.PontoTipoMarcacaoRepository;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,6 +25,7 @@ import org.mockito.Captor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -55,6 +61,7 @@ class TipoMarcacaoServiceTest {
     @Mock private PontoTipoMarcacaoRepository tipoRepo;
     @Mock private PontoDiaMarcacaoRepository diaRepo;
     @Mock private PontoPessoaMarcacaoRepository pessoaRepo;
+    @Mock private PontoRetificacaoRepository retificacaoRepo;
     @Mock private PontoTipoMarcacaoExclusaoLogRepository trilhaRepo;
     @Mock private PessoaCadastroLookup pessoaCadastro;
 
@@ -66,7 +73,7 @@ class TipoMarcacaoServiceTest {
     @BeforeEach
     void setUp() {
         // ObjectMapper REAL: o RESUMO da trilha é JSON de verdade, e é ele que a auditoria guarda.
-        service = new TipoMarcacaoService(tipoRepo, diaRepo, pessoaRepo, trilhaRepo,
+        service = new TipoMarcacaoService(tipoRepo, diaRepo, pessoaRepo, retificacaoRepo, trilhaRepo,
                 pessoaCadastro, new ObjectMapper());
         ReflectionTestUtils.setField(service, "masterUsername", MASTER);
     }
@@ -81,6 +88,13 @@ class TipoMarcacaoServiceTest {
         t.setBadge(badge);
         t.setBadgeNorm(TipoMarcacaoService.normalizar(badge));
         t.setEscopo(escopo);
+        return t;
+    }
+
+    /** O tipo que o funcionário escolhe ao retificar o próprio dia — está no catálogo, mas não é do admin. */
+    private static PontoTipoMarcacao tipoDoFuncionario(String id, String nome, String badge, String escopo) {
+        PontoTipoMarcacao t = tipo(id, nome, badge, escopo);
+        t.setVisivelFuncionario(true);
         return t;
     }
 
@@ -103,8 +117,33 @@ class TipoMarcacaoServiceTest {
         return m;
     }
 
+    /** O dia que o próprio funcionário declarou com aquele tipo na retificação da folha. */
+    private static PontoRetificacao retificado(String pessoaId, String pessoaTipo,
+                                               LocalDate data, String tipoId) {
+        PontoRetificacao r = new PontoRetificacao();
+        r.setPessoaId(pessoaId);
+        r.setPessoaTipo(pessoaTipo);
+        r.setData(data);
+        r.setTipoId(tipoId);
+        return r;
+    }
+
     private static Map<String, Object> pedido(String nome, String badge, String escopo) {
         return Map.of("nome", nome, "badge", badge, "escopo", escopo);
+    }
+
+    /** Roda a ação com o log da classe capturado — a linha registrada faz parte do que a exclusão entrega. */
+    private static List<ILoggingEvent> capturandoOLog(Runnable acao) {
+        Logger logger = (Logger) LoggerFactory.getLogger(TipoMarcacaoService.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            acao.run();
+        } finally {
+            logger.detachAppender(appender);
+        }
+        return appender.list;
     }
 
     @SuppressWarnings("unchecked")
@@ -134,7 +173,7 @@ class TipoMarcacaoServiceTest {
                 assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
                 assertEquals("forbidden", ex.getMessage());
             }
-            verifyNoInteractions(tipoRepo, diaRepo, pessoaRepo, trilhaRepo, pessoaCadastro);
+            verifyNoInteractions(tipoRepo, diaRepo, pessoaRepo, retificacaoRepo, trilhaRepo, pessoaCadastro);
         }
 
         @Test
@@ -173,8 +212,24 @@ class TipoMarcacaoServiceTest {
 
             assertEquals(List.of("Feriado", "Férias", "Recesso"),
                     tipos.stream().map(t -> t.get("nome")).toList());
-            assertEquals(Map.of("id", "t1", "nome", "Feriado", "badge", "Fer", "escopo", "GLOBAL"),
+            assertEquals(Map.of("id", "t1", "nome", "Feriado", "badge", "Fer", "escopo", "GLOBAL",
+                            "visivel_funcionario", false),
                     tipos.get(0));
+        }
+
+        @Test
+        @DisplayName("o resumo diz quais tipos são do funcionário — os que a tela não oferece ao administrador")
+        void resumoMarcaOTipoDoFuncionario() {
+            when(tipoRepo.findAll()).thenReturn(List.of(
+                    tipo("t1", "Feriado", "Fer", "GLOBAL"),
+                    tipoDoFuncionario("t9", "Banco de horas", "Ban", "INDIVIDUAL")));
+
+            List<Map<String, Object>> tipos = itens(service.listar(null), "tipos");
+
+            assertEquals("Banco de horas", tipos.get(0).get("nome"));
+            assertEquals(true, tipos.get(0).get("visivel_funcionario"));
+            assertEquals("Feriado", tipos.get(1).get("nome"));
+            assertEquals(false, tipos.get(1).get("visivel_funcionario"));
         }
 
         @Test
@@ -390,6 +445,53 @@ class TipoMarcacaoServiceTest {
         }
 
         @Test
+        @DisplayName("preview separa o que o admin marcou do que o funcionário declarou, e une as pessoas das duas fontes")
+        void previewSeparaMarcacoesDeRetificacoes() {
+            when(tipoRepo.findById("t2")).thenReturn(java.util.Optional.of(
+                    tipo("t2", "Férias", "Fé", "INDIVIDUAL")));
+            when(pessoaRepo.findByTipoIdOrderByData("t2")).thenReturn(List.of(
+                    pessoaMarcada("op-1", "OPERADOR", LocalDate.of(2026, 7, 6), "t2"),
+                    pessoaMarcada("op-1", "OPERADOR", LocalDate.of(2026, 7, 7), "t2")));
+            when(retificacaoRepo.findByTipoIdOrderByData("t2")).thenReturn(List.of(
+                    retificado("op-1", "OPERADOR", LocalDate.of(2026, 7, 8), "t2"),
+                    retificado("tec-2", "TECNICO", LocalDate.of(2026, 7, 9), "t2"),
+                    retificado("tec-2", "TECNICO", LocalDate.of(2026, 7, 10), "t2")));
+            when(pessoaCadastro.nome("op-1", "OPERADOR")).thenReturn("Bruno Alves");
+            when(pessoaCadastro.nome("tec-2", "TECNICO")).thenReturn("Ana Prado");
+
+            Map<String, Object> pv = service.previewExclusao("t2", MASTER);
+
+            // A tela nomeia as duas coisas: marcação é o que o administrador pôs no calendário,
+            // retificação é o que o funcionário declarou na própria folha — as cinco linhas nunca
+            // viram um número só.
+            assertEquals(2, pv.get("marcacoes"));
+            assertEquals(3, pv.get("retificacoes"));
+            // quem tem marcação E declaração aparece uma vez
+            assertEquals(2, pv.get("pessoas_afetadas"));
+            assertEquals(List.of("Ana Prado", "Bruno Alves"), pv.get("pessoas"));
+        }
+
+        @Test
+        @DisplayName("as declarações entram no preview do tipo geral também — elas não olham o escopo")
+        void previewGlobalContaAsRetificacoes() {
+            when(tipoRepo.findById("t1")).thenReturn(java.util.Optional.of(
+                    tipo("t1", "Feriado", "Fer", "GLOBAL")));
+            when(diaRepo.findByTipoIdOrderByData("t1")).thenReturn(List.of(
+                    diaMarcado(LocalDate.of(2026, 7, 9), "t1")));
+            when(retificacaoRepo.findByTipoIdOrderByData("t1")).thenReturn(List.of(
+                    retificado("op-1", "OPERADOR", LocalDate.of(2026, 7, 10), "t1")));
+            when(pessoaCadastro.nome("op-1", "OPERADOR")).thenReturn("Bruno Alves");
+
+            Map<String, Object> pv = service.previewExclusao("t1", MASTER);
+
+            assertEquals(1, pv.get("marcacoes"));
+            assertEquals(1, pv.get("retificacoes"));
+            // o tipo geral não tem marcação de pessoa: quem aparece na lista veio da declaração
+            assertEquals(List.of("Bruno Alves"), pv.get("pessoas"));
+            verify(pessoaRepo, never()).findByTipoIdOrderByData(anyString());
+        }
+
+        @Test
         @DisplayName("tipo inexistente: 404 no preview e na exclusão")
         void tipoInexistente() {
             when(tipoRepo.findById("sumiu")).thenReturn(java.util.Optional.empty());
@@ -439,6 +541,83 @@ class TipoMarcacaoServiceTest {
             // O snapshot guarda o que morreu: quem for ler a trilha não tem mais as linhas.
             assertTrue(trilha.getResumo().contains("\"marcacoes\":2"));
             assertTrue(trilha.getResumo().contains("Bruno Alves"));
+        }
+
+        @Test
+        @DisplayName("excluir leva junto as declarações feitas com o tipo, todas antes dele")
+        void excluiTambemAsRetificacoes() {
+            PontoTipoMarcacao alvo = tipo("t1", "Luto", "Lut", "GLOBAL");
+            List<PontoDiaMarcacao> dias = List.of(diaMarcado(LocalDate.of(2026, 7, 9), "t1"));
+            List<PontoRetificacao> declaracoes = List.of(
+                    retificado("op-1", "OPERADOR", LocalDate.of(2026, 7, 10), "t1"),
+                    retificado("op-1", "OPERADOR", LocalDate.of(2026, 7, 11), "t1"));
+            when(tipoRepo.lockPorId("t1")).thenReturn(java.util.Optional.of(alvo));
+            when(diaRepo.findByTipoIdOrderByData("t1")).thenReturn(dias);
+            when(retificacaoRepo.findByTipoIdOrderByData("t1")).thenReturn(declaracoes);
+            when(pessoaCadastro.nome("op-1", "OPERADOR")).thenReturn("Bruno Alves");
+
+            Map<String, Object> resumo = service.excluir("t1", MASTER, CALLER_ID);
+
+            // Nenhuma dessas FKs tem cascade: o tipo é o último a sair, depois de tudo o que aponta
+            // para ele — as declarações do funcionário inclusive.
+            InOrder ordem = inOrder(diaRepo, retificacaoRepo, tipoRepo);
+            ordem.verify(diaRepo).deleteAll(dias);
+            ordem.verify(diaRepo).flush();
+            ordem.verify(retificacaoRepo).deleteAll(declaracoes);
+            ordem.verify(retificacaoRepo).flush();
+            ordem.verify(tipoRepo).delete(alvo);
+
+            assertEquals(1, resumo.get("marcacoes"));
+            assertEquals(2, resumo.get("retificacoes"));
+            assertEquals(1, resumo.get("pessoas_afetadas"));
+        }
+
+        @Test
+        @DisplayName("a trilha e a linha de log repetem os números do resumo, cada contagem no seu lugar")
+        void trilhaELogRepetemAsContagens() {
+            PontoTipoMarcacao alvo = tipo("t2", "Férias", "Fé", "INDIVIDUAL");
+            when(tipoRepo.lockPorId("t2")).thenReturn(java.util.Optional.of(alvo));
+            when(pessoaRepo.findByTipoIdOrderByData("t2")).thenReturn(List.of(
+                    pessoaMarcada("op-1", "OPERADOR", LocalDate.of(2026, 7, 6), "t2")));
+            when(retificacaoRepo.findByTipoIdOrderByData("t2")).thenReturn(List.of(
+                    retificado("tec-2", "TECNICO", LocalDate.of(2026, 7, 8), "t2"),
+                    retificado("tec-2", "TECNICO", LocalDate.of(2026, 7, 9), "t2")));
+            when(pessoaCadastro.nome("op-1", "OPERADOR")).thenReturn("Bruno Alves");
+            when(pessoaCadastro.nome("tec-2", "TECNICO")).thenReturn("Ana Prado");
+
+            List<ILoggingEvent> registrado =
+                    capturandoOLog(() -> service.excluir("t2", MASTER, CALLER_ID));
+
+            // O snapshot é o que sobra depois que as linhas somem: as duas contagens vão separadas.
+            verify(trilhaRepo).save(trilhaGravada.capture());
+            String snapshot = trilhaGravada.getValue().getResumo();
+            assertTrue(snapshot.contains("\"marcacoes\":1"), snapshot);
+            assertTrue(snapshot.contains("\"retificacoes\":2"), snapshot);
+            assertTrue(snapshot.contains("\"pessoas_afetadas\":2"), snapshot);
+
+            assertEquals(1, registrado.size());
+            String linha = registrado.get(0).getFormattedMessage();
+            assertTrue(linha.contains("1 marcação(ões), 2 retificação(ões)"), linha);
+        }
+
+        @Test
+        @DisplayName("o tipo que o funcionário declara não é excluível, e a recusa não apaga nada")
+        void tipoVisivelAoFuncionarioNaoEhExcluivel() {
+            PontoTipoMarcacao alvo = tipoDoFuncionario("t9", "Banco de horas", "Ban", "INDIVIDUAL");
+            when(tipoRepo.lockPorId("t9")).thenReturn(java.util.Optional.of(alvo));
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.excluir("t9", MASTER, CALLER_ID));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertEquals("Este tipo não pode ser excluído.", ex.getMessage());
+            verify(tipoRepo, never()).delete(any());
+            verify(diaRepo, never()).deleteAll(any());
+            verify(pessoaRepo, never()).deleteAll(any());
+            verify(retificacaoRepo, never()).deleteAll(any());
+            // A recusa vem antes do levantamento: nem as linhas são lidas, e não há o que registrar.
+            verify(retificacaoRepo, never()).findByTipoIdOrderByData(anyString());
+            verifyNoInteractions(trilhaRepo, pessoaCadastro);
         }
 
         @Test

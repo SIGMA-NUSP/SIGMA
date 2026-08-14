@@ -91,7 +91,8 @@ class ColacaoDasListasEmMemoriaIT {
     void gradeDeRetificacoes_ordenaEmPtBr() {
         semearNomesDoEspelhoDeProducao();
         GradeRetificacaoService grade = new GradeRetificacaoService(retificacaoRepo, folgaRepo,
-                diaRepo, pessoaRepo, tipoRepo, operadorRepo, tecnicoRepo, administradorRepo);
+                diaRepo, pessoaRepo, tipoRepo, paginaRepo, mock(PontoFolhaLinhaRepository.class),
+                operadorRepo, tecnicoRepo, administradorRepo);
 
         List<String> nomes = grade.montarGrade("operadores", 2026, 7).funcionarios().stream()
                 .map(GradeRetificacaoService.Funcionario::nome).toList();
@@ -108,7 +109,6 @@ class ColacaoDasListasEmMemoriaIT {
         PontoService ponto = new PontoService(loteRepo, paginaRepo, mock(PontoFolhaLinhaRepository.class),
                 operadorRepo, tecnicoRepo,
                 administradorRepo, mock(AvisoService.class), mock(SaldoAberturaService.class),
-                mock(RetificacaoService.class),
                 new PessoaCadastroLookup(operadorRepo, tecnicoRepo, administradorRepo));
         ReflectionTestUtils.setField(ponto, "filesDir", "/tmp/nusp-test-files-inexistente");
 

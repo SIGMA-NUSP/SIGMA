@@ -10,6 +10,8 @@ export interface TipoMarcacao {
   nome: string;
   badge: string;
   escopo: EscopoTipo;
+  /** Tipo que o funcionário declara na própria folha: o administrador não marca nem exclui. */
+  visivel_funcionario: boolean;
 }
 export type EscopoTipo = 'GLOBAL' | 'INDIVIDUAL';
 
@@ -20,6 +22,8 @@ interface TipoPendente { nome: string; badge: string; }
 interface PreviewExclusaoTipo {
   tipo: TipoMarcacao;
   marcacoes: number;
+  /** Dias que funcionários declararam com esse tipo na retificação da própria folha. */
+  retificacoes: number;
   pessoas_afetadas: number;
   pessoas: string[];
 }
@@ -122,6 +126,9 @@ interface PreviewExclusaoTipo {
           <ul class="consequencias">
             <li>o tipo, que deixa de aparecer nas ocorrências</li>
             <li>{{ pv.marcacoes }} marcação(ões) feita(s) com ele</li>
+            @if (pv.retificacoes) {
+              <li>{{ pv.retificacoes }} dia(s) retificado(s) por funcionários com ele</li>
+            }
             @if (pv.tipo.escopo === 'INDIVIDUAL') {
               <li>
                 {{ pv.pessoas_afetadas }} funcionário(s) afetado(s)
@@ -246,7 +253,10 @@ export class ConfigurarTiposMarcacaoComponent implements OnInit {
   erroExclusao = signal('');
   excluindo = signal(false);
 
-  tiposDoEscopo = computed(() => this.tipos().filter(t => t.escopo === this.escopo()));
+  // O tipo que o funcionário declara não é gerido por aqui: ele não se cadastra nem se exclui pela
+  // tela, e listá-lo só ofereceria uma exclusão que o servidor recusa.
+  tiposDoEscopo = computed(() =>
+    this.tipos().filter(t => t.escopo === this.escopo() && !t.visivel_funcionario));
   podeAplicar = computed(() =>
     this.operacao() === 'incluir' ? this.pendentes().length > 0
       : this.operacao() === 'excluir' ? !!this.marcadoId()

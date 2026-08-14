@@ -6,11 +6,16 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 public interface PontoRetificacaoRepository extends JpaRepository<PontoRetificacao, String> {
 
-    /** Já existe retificação para a pessoa naquele dia? (UK PESSOA_ID+PESSOA_TIPO+DATA — Q1). */
-    boolean existsByPessoaIdAndPessoaTipoAndData(String pessoaId, String pessoaTipo, LocalDate data);
+    /**
+     * A retificação daquele dia, se houver (UK PESSOA_ID+PESSOA_TIPO+DATA). Toda gravação de célula
+     * passa por aqui: a primeira edição do dia cria a linha, as seguintes a corrigem.
+     */
+    Optional<PontoRetificacao> findByPessoaIdAndPessoaTipoAndData(String pessoaId, String pessoaTipo,
+                                                                  LocalDate data);
 
     /**
      * Retificações da PESSOA dentro de um período, em ordem cronológica — a chave de LEITURA da
@@ -22,6 +27,12 @@ public interface PontoRetificacaoRepository extends JpaRepository<PontoRetificac
      */
     List<PontoRetificacao> findByPessoaIdAndPessoaTipoAndDataBetweenOrderByData(
             String pessoaId, String pessoaTipo, LocalDate inicio, LocalDate fim);
+
+    /**
+     * Retificações declaradas com um tipo do catálogo — o que morre junto quando o tipo é excluído.
+     * A FK não tem cascade: elas saem antes dele, por decisão explícita do serviço.
+     */
+    List<PontoRetificacao> findByTipoIdOrderByData(String tipoId);
 
     /** Retificações de uma categoria no range [ini, fim) — DATA sargável, sem TRUNC (gotcha 4); grade mensal (E10). */
     List<PontoRetificacao> findByPessoaTipoAndDataGreaterThanEqualAndDataLessThan(

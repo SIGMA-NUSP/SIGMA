@@ -21,24 +21,28 @@ import { ToastService } from './toast.component';
 
 /** Catálogo representativo de `GET /api/admin/ponto/tipos-marcacao` (dois escopos). */
 const CATALOGO: TipoMarcacao[] = [
-  { id: 't-1', nome: 'Feriado', badge: 'FER', escopo: 'GLOBAL' },
-  { id: 't-2', nome: 'Ponto Facultativo', badge: 'PF', escopo: 'GLOBAL' },
-  { id: 't-3', nome: 'Férias', badge: 'FÉ', escopo: 'INDIVIDUAL' },
-  { id: 't-4', nome: 'Atestado', badge: 'AT', escopo: 'INDIVIDUAL' },
+  { id: 't-1', nome: 'Feriado', badge: 'FER', escopo: 'GLOBAL', visivel_funcionario: false },
+  { id: 't-2', nome: 'Ponto Facultativo', badge: 'PF', escopo: 'GLOBAL', visivel_funcionario: false },
+  { id: 't-3', nome: 'Férias', badge: 'FÉ', escopo: 'INDIVIDUAL', visivel_funcionario: false },
+  { id: 't-4', nome: 'Atestado', badge: 'AT', escopo: 'INDIVIDUAL', visivel_funcionario: false },
+  // Declarado pelo funcionário na própria folha: não é ocorrência do administrador e não se exclui.
+  { id: 't-5', nome: 'Banco de horas', badge: 'Ban', escopo: 'INDIVIDUAL', visivel_funcionario: true },
 ];
 
 /** Preview de exclusão de um tipo INDIVIDUAL: conta marcações E funcionários atingidos. */
 const PREVIEW_INDIVIDUAL = {
-  tipo: { id: 't-3', nome: 'Férias', badge: 'FÉ', escopo: 'INDIVIDUAL' as const },
+  tipo: { id: 't-3', nome: 'Férias', badge: 'FÉ', escopo: 'INDIVIDUAL' as const, visivel_funcionario: false },
   marcacoes: 12,
+  retificacoes: 0,
   pessoas_afetadas: 2,
   pessoas: ['Ana', 'Bruno'],
 };
 
 /** Preview de um tipo GERAL: não há funcionário específico atingido. */
 const PREVIEW_GLOBAL = {
-  tipo: { id: 't-1', nome: 'Feriado', badge: 'FER', escopo: 'GLOBAL' as const },
+  tipo: { id: 't-1', nome: 'Feriado', badge: 'FER', escopo: 'GLOBAL' as const, visivel_funcionario: false },
   marcacoes: 3,
+  retificacoes: 0,
   pessoas_afetadas: 0,
   pessoas: [] as string[],
 };
@@ -126,7 +130,7 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
     it('ngOnInit busca o catálogo e guarda os tipos dos dois escopos', () => {
       const { comp } = criarCarregado();
       expect(apiGet).toHaveBeenCalledWith('/api/admin/ponto/tipos-marcacao');
-      expect(comp.tipos().map(t => t.id)).toEqual(['t-1', 't-2', 't-3', 't-4']);
+      expect(comp.tipos().map(t => t.id)).toEqual(['t-1', 't-2', 't-3', 't-4', 't-5']);
       expect(comp.carregando()).toBe(false);
       expect(comp.erroCarga()).toBe('');
     });
@@ -141,7 +145,7 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
 
       emVoo.next({ data: { tipos: structuredClone(CATALOGO) } });
       expect(comp.carregando()).toBe(false);
-      expect(comp.tipos()).toHaveLength(4);
+      expect(comp.tipos()).toHaveLength(5);
     });
 
     it('erro na carga: a orientação da tela vem na frente, com o detalhe do backend anexado', () => {
@@ -179,7 +183,7 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
       comp.carregar(); // é o que a caixa app-erro-carga dispara
 
       expect(comp.erroCarga()).toBe('');
-      expect(comp.tipos()).toHaveLength(4);
+      expect(comp.tipos()).toHaveLength(5);
       expect(apiGet).toHaveBeenCalledTimes(2);
     });
   });
@@ -205,6 +209,13 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
       const { comp } = criarCarregado();
       comp.trocarEscopo('INDIVIDUAL');
       expect(comp.tiposDoEscopo()).toEqual([]);
+    });
+
+    it('o tipo que o funcionário declara não é listado — não se cadastra nem se exclui por aqui', () => {
+      const { comp } = criarCarregado();
+      comp.trocarEscopo('INDIVIDUAL');
+      expect(comp.tipos().some(t => t.nome === 'Banco de horas')).toBe(true);
+      expect(comp.tiposDoEscopo().map(t => t.nome)).not.toContain('Banco de horas');
     });
   });
 

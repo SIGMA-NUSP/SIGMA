@@ -51,6 +51,13 @@ class MarcacaoServiceTest {
     private static final PontoTipoMarcacao LICENCA = tipoIndividual("tipo-licenca", "Licença médica", "LM");
     private static final PontoTipoMarcacao RECESSO = tipoIndividual("tipo-recesso", "Recesso", "REC");
 
+    // O tipo que o funcionário declara na própria folha ao retificar o dia: está no mesmo catálogo,
+    // mas não é do administrador. O de escopo GLOBAL prova que a recusa não vem do escopo.
+    private static final PontoTipoMarcacao BANCO_DE_HORAS =
+            doFuncionario(tipoIndividual("tipo-banco", "Banco de horas", "Ban"));
+    private static final PontoTipoMarcacao COMPENSACAO =
+            doFuncionario(tipoGlobal("tipo-compensacao", "Compensação", "Cmp"));
+
     /** A pessoa do par existe no cadastro DAQUELE tipo — pré-condição dos ramos pessoais que gravam/removem. */
     private void pessoaExiste(String pessoaId, String pessoaTipo) {
         when(pessoaCadastro.existe(pessoaId, pessoaTipo)).thenReturn(true);
@@ -71,6 +78,12 @@ class MarcacaoServiceTest {
 
     private static PontoTipoMarcacao tipoIndividual(String id, String nome, String badge) {
         return tipo(id, nome, badge, PontoTipoMarcacao.ESCOPO_INDIVIDUAL);
+    }
+
+    /** Marca o tipo como o que o funcionário escolhe ao retificar o próprio dia. */
+    private static PontoTipoMarcacao doFuncionario(PontoTipoMarcacao t) {
+        t.setVisivelFuncionario(true);
+        return t;
     }
 
     private static PontoDiaMarcacao global(LocalDate data, String tipoId) {
@@ -460,9 +473,13 @@ class MarcacaoServiceTest {
      * todos (ou o dia de todos com um tipo individual) gravaria uma marcação que nenhuma leitura do
      * módulo mostraria de volta — some da grade e do modal, sem erro nenhum para o admin. Por isso a
      * validação é 400 com mensagem específica, e nada é salvo.
+     *
+     * <p>O mesmo catálogo guarda o tipo que o FUNCIONÁRIO declara ao retificar o próprio dia. Esse
+     * não é do administrador: usá-lo como marcação faria a planilha contar como folga um dia que
+     * ninguém declarou nem aprovou. A recusa é a mesma do escopo trocado — e independe do escopo.
      */
     @Nested
-    @DisplayName("tipo do catálogo: id inexistente e escopo trocado não gravam marcação")
+    @DisplayName("tipo do catálogo: id inexistente, escopo trocado e tipo do funcionário não gravam marcação")
     class TipoDoCatalogo {
 
         @Test
@@ -529,6 +546,41 @@ class MarcacaoServiceTest {
             assertEquals("O tipo \"Feriado\" não pode ser usado como marcação pessoal.", ex.getMessage());
             verify(pessoaRepo, never()).saveAndFlush(any());
             verify(pessoaRepo, never()).findByPessoaIdAndPessoaTipoAndData(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("tipo do funcionário não vira marcação pessoal, mesmo sendo INDIVIDUAL")
+        void tipoDoFuncionarioNaoMarcaFuncionario() {
+            pessoaExiste("op-1", "OPERADOR");
+            when(tipoRepo.findById(BANCO_DE_HORAS.getId())).thenReturn(Optional.of(BANCO_DE_HORAS));
+            Map<String, Object> body = Map.of("pessoais", Map.of(
+                    "pessoa_id", "op-1", "pessoa_tipo", "OPERADOR",
+                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "tipo-banco"))));
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.aplicarLote(body, ADMIN));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            // o escopo CASA com o lado marcado: o que recusa é o tipo ser do funcionário
+            assertEquals("O tipo \"Banco de horas\" não pode ser usado como marcação pessoal.", ex.getMessage());
+            verify(pessoaRepo, never()).saveAndFlush(any());
+            verify(pessoaRepo, never()).findByPessoaIdAndPessoaTipoAndData(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("tipo do funcionário não vira marcação geral, mesmo sendo GLOBAL")
+        void tipoDoFuncionarioNaoMarcaODiaDeTodos() {
+            when(tipoRepo.findById(COMPENSACAO.getId())).thenReturn(Optional.of(COMPENSACAO));
+            Map<String, Object> body = Map.of("globais", Map.of(
+                    "aplicar", List.of(Map.of("data", "2026-07-09", "tipo_id", "tipo-compensacao"))));
+
+            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                    () -> service.aplicarLote(body, ADMIN));
+
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertEquals("O tipo \"Compensação\" não pode ser usado como marcação global.", ex.getMessage());
+            verify(diaRepo, never()).saveAndFlush(any());
+            verify(diaRepo, never()).findByData(any());
         }
 
         @Test

@@ -1184,79 +1184,122 @@ class PontoControllerTest {
         }
     }
 
-    // ══ 5b) Retificação em LOTE (o único POST do funcionário com corpo estruturado) ══
+    // ══ 5b) Retificação por célula (as gravações do funcionário na própria folha) ══
 
     /**
-     * A rota de retificação é o LOTE transacional — o único caminho de gravação da retificação:
-     * o corpo carrega todos os dias, e uma recusa por dia tem de chegar ao usuário nomeando o dia.
-     * Aqui trava-se o que é do CONTROLLER (o corpo cru chega inteiro ao service, o dono vem do token,
-     * o 201 envelopa o resumo do lote e a recusa do service vira 400 com a frase intacta).
+     * A retificação grava de célula em célula: um PUT por horário, um PUT para a ocorrência do dia e
+     * um DELETE para apagar. Aqui trava-se o que é do CONTROLLER — o corpo cru chega inteiro ao
+     * service, o dono vem do token, a data do DELETE vem do caminho e a recusa do service vira 400
+     * com a frase intacta.
      */
     @Nested
-    @DisplayName("retificação em lote — POST /api/ponto/folha/{id}/retificacoes")
-    class RetificacaoEmLote {
+    @DisplayName("retificação por célula — PUT/DELETE /api/ponto/folha/{id}/retificacoes/…")
+    class RetificacaoPorCelula {
 
-        private static final String CORPO = "{\"dias\":["
-                + "{\"data\":\"2026-07-06\",\"ent1\":\"08:00\",\"sai1\":\"12:00\",\"ent2\":null,\"sai2\":null,\"observacoes\":\"esqueci de bater\"},"
-                + "{\"data\":\"2026-07-08\",\"ent1\":\"09:00\",\"sai1\":\"15:00\",\"ent2\":null,\"sai2\":null,\"observacoes\":\"\"}]}";
+        private static final String CELULA = "{\"data\":\"2026-07-06\",\"campo\":\"ent1\",\"valor\":\"08:00\"}";
+        private static final String TIPO = "{\"data\":\"2026-07-06\",\"tipo_id\":\"tipo-1\"}";
 
         @Test
-        @DisplayName("POST — 201 com os DOIS dias num corpo só (uma chamada ao service) e o dono do token")
-        void retificacoes_201_umaChamadaComTodosOsDias() throws Exception {
-            when(retificacaoService.criarRetificacoes(eq(PAGINA_ID), eq(TokenFactory.USER_ID), any()))
-                    .thenReturn(Map.of("total", 2));
+        @DisplayName("PUT célula — 200 com o corpo cru chegando ao service e o dono do token")
+        void celula_200_corpoChegaInteiro() throws Exception {
+            when(retificacaoService.salvarCelula(eq(PAGINA_ID), eq(TokenFactory.USER_ID), any()))
+                    .thenReturn(Map.of("data", "2026-07-06", "ent1", "08:00"));
 
-            mockMvc.perform(Requests.post("/api/ponto/folha/" + PAGINA_ID + "/retificacoes")
+            mockMvc.perform(Requests.put("/api/ponto/folha/" + PAGINA_ID + "/retificacoes/celula")
                             .header("Authorization", operador)
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content(CORPO))
-                    .andExpect(status().isCreated())
+                            .content(CELULA))
+                    .andExpect(status().isOk())
                     .andExpect(jsonPath("$.ok").value(true))
-                    .andExpect(jsonPath("$.data.total").value(2));
+                    .andExpect(jsonPath("$.data.ent1").value("08:00"));
 
-            // Um POST, N dias: o corpo cru chega inteiro (a validação por dia é toda do service).
-            verify(retificacaoService).criarRetificacoes(eq(PAGINA_ID), eq(TokenFactory.USER_ID),
-                    argThat(body -> body.get("dias") instanceof List<?> dias
-                            && dias.size() == 2
-                            && dias.get(0) instanceof Map<?, ?> primeiro
-                            && "2026-07-06".equals(primeiro.get("data"))
-                            && "08:00".equals(primeiro.get("ent1"))));
+            verify(retificacaoService).salvarCelula(eq(PAGINA_ID), eq(TokenFactory.USER_ID),
+                    argThat(body -> "2026-07-06".equals(body.get("data"))
+                            && "ent1".equals(body.get("campo"))
+                            && "08:00".equals(body.get("valor"))));
         }
 
         @Test
-        @DisplayName("POST — dia recusado no lote vira 400 com a frase do service INTACTA (é ela que nomeia o dia)")
-        void retificacoes_diaRecusado_400() throws Exception {
-            when(retificacaoService.criarRetificacoes(anyString(), anyString(), any()))
-                    .thenThrow(new ServiceValidationException("O dia 08/07/2026 já foi retificado."));
+        @DisplayName("PUT célula — a recusa do service vira 400 com a frase INTACTA (é ela que nomeia o dia)")
+        void celula_recusada_400() throws Exception {
+            when(retificacaoService.salvarCelula(anyString(), anyString(), any()))
+                    .thenThrow(new ServiceValidationException("O dia 06/07/2026 não pode mais ser retificado."));
 
-            mockMvc.perform(Requests.post("/api/ponto/folha/" + PAGINA_ID + "/retificacoes")
+            mockMvc.perform(Requests.put("/api/ponto/folha/" + PAGINA_ID + "/retificacoes/celula")
                             .header("Authorization", operador)
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content(CORPO))
+                            .content(CELULA))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.ok").value(false))
-                    .andExpect(jsonPath("$.error").value("O dia 08/07/2026 já foi retificado."));
+                    .andExpect(jsonPath("$.error").value("O dia 06/07/2026 não pode mais ser retificado."));
         }
 
-        /** Corpo ausente é problema do CLIENTE: 400 do módulo (nomeando o campo), não 500 nem 400 genérico. */
+        /** Corpo ausente é problema do CLIENTE: chega ao service como null e volta 400, não 500. */
         @Test
-        @DisplayName("POST sem corpo — chega ao service como null e vira 400 nomeando o campo 'dias'")
-        void retificacoes_semCorpo_400() throws Exception {
-            when(retificacaoService.criarRetificacoes(eq(PAGINA_ID), eq(TokenFactory.USER_ID), isNull()))
-                    .thenThrow(new ServiceValidationException("Informe ao menos um dia em 'dias'."));
+        @DisplayName("PUT célula sem corpo — chega ao service como null e vira 400")
+        void celula_semCorpo_400() throws Exception {
+            when(retificacaoService.salvarCelula(eq(PAGINA_ID), eq(TokenFactory.USER_ID), isNull()))
+                    .thenThrow(new ServiceValidationException("Data obrigatória."));
 
-            mockMvc.perform(Requests.post("/api/ponto/folha/" + PAGINA_ID + "/retificacoes")
+            mockMvc.perform(Requests.put("/api/ponto/folha/" + PAGINA_ID + "/retificacoes/celula")
                             .header("Authorization", operador))
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.error").value("Informe ao menos um dia em 'dias'."));
+                    .andExpect(jsonPath("$.error").value("Data obrigatória."));
         }
 
         @Test
-        @DisplayName("POST sem token — 401 e o service não é tocado")
-        void retificacoes_semToken_401() throws Exception {
-            mockMvc.perform(Requests.post("/api/ponto/folha/" + PAGINA_ID + "/retificacoes")
+        @DisplayName("PUT tipo — o corpo da ocorrência chega ao service do jeito que veio")
+        void tipo_200_corpoChegaInteiro() throws Exception {
+            when(retificacaoService.salvarTipo(eq(PAGINA_ID), eq(TokenFactory.USER_ID), any()))
+                    .thenReturn(Map.of("data", "2026-07-06", "tipo_nome", "Banco de horas"));
+
+            mockMvc.perform(Requests.put("/api/ponto/folha/" + PAGINA_ID + "/retificacoes/tipo")
+                            .header("Authorization", operador)
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content(CORPO))
+                            .content(TIPO))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.tipo_nome").value("Banco de horas"));
+
+            verify(retificacaoService).salvarTipo(eq(PAGINA_ID), eq(TokenFactory.USER_ID),
+                    argThat(body -> "tipo-1".equals(body.get("tipo_id"))));
+        }
+
+        @Test
+        @DisplayName("DELETE — a data vem do caminho e o dono do token")
+        void limpar_200_dataDoCaminho() throws Exception {
+            when(retificacaoService.limpar(PAGINA_ID, TokenFactory.USER_ID, "2026-07-06"))
+                    .thenReturn(Map.of("data", "2026-07-06"));
+
+            mockMvc.perform(Requests.delete("/api/ponto/folha/" + PAGINA_ID + "/retificacoes/2026-07-06")
+                            .header("Authorization", operador))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.data").value("2026-07-06"));
+
+            verify(retificacaoService).limpar(PAGINA_ID, TokenFactory.USER_ID, "2026-07-06");
+        }
+
+        @Test
+        @DisplayName("DELETE de dia sem retificação — 404 com a frase do service")
+        void limpar_semRetificacao_404() throws Exception {
+            when(retificacaoService.limpar(anyString(), anyString(), anyString()))
+                    .thenThrow(new ServiceValidationException("Retificação não encontrada.",
+                            HttpStatus.NOT_FOUND));
+
+            mockMvc.perform(Requests.delete("/api/ponto/folha/" + PAGINA_ID + "/retificacoes/2026-07-06")
+                            .header("Authorization", operador))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.error").value("Retificação não encontrada."));
+        }
+
+        @Test
+        @DisplayName("sem token — 401 e o service não é tocado")
+        void semToken_401() throws Exception {
+            mockMvc.perform(Requests.put("/api/ponto/folha/" + PAGINA_ID + "/retificacoes/celula")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(CELULA))
+                    .andExpect(status().isUnauthorized());
+
+            mockMvc.perform(Requests.delete("/api/ponto/folha/" + PAGINA_ID + "/retificacoes/2026-07-06"))
                     .andExpect(status().isUnauthorized());
 
             verifyNoInteractions(retificacaoService);

@@ -49,6 +49,18 @@ public class PontoTipoMarcacao extends AuditableEntity {
     @Column(name = "ESCOPO", nullable = false, length = 10)
     private String escopo;
 
+    /** O tipo aparece na lista que o funcionário escolhe ao retificar o dia. */
+    @Column(name = "VISIVEL_FUNCIONARIO", nullable = false)
+    private Boolean visivelFuncionario = false;
+
+    /**
+     * A retificação com este tipo vale como folga do banco de horas: a célula do
+     * dia fica igual à da folga aprovada e o dia entra na contagem de folgas.
+     * O saldo não é tocado — ele continua vindo só das folhas.
+     */
+    @Column(name = "CONTA_FOLGA", nullable = false)
+    private Boolean contaFolga = false;
+
     /** Nulo nos tipos que nascem com o sistema — não houve admin que os criasse. */
     @Column(name = "CRIADO_POR_ID")
     private String criadoPorId;

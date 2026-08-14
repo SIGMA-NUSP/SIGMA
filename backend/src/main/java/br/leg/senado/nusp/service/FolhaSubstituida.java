@@ -46,7 +46,7 @@ final class FolhaSubstituida {
      * antes e publicá-la depois. Os desempates existem para que a ordem seja TOTAL: sem eles, duas
      * folhas do mesmo instante esconderiam uma à outra e o dono ficaria sem nenhuma.
      */
-    private static final Comparator<PontoLote> CHEGOU_DEPOIS = Comparator
+    static final Comparator<PontoLote> CHEGOU_DEPOIS = Comparator
             .comparing(PontoLote::getPublicadoEm, Comparator.nullsFirst(Comparator.naturalOrder()))
             .thenComparing(PontoLote::getCriadoEm, Comparator.nullsFirst(Comparator.naturalOrder()))
             .thenComparing(PontoLote::getId);

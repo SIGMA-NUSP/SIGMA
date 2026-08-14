@@ -2,11 +2,13 @@ package br.leg.senado.nusp.service;
 
 import br.leg.senado.nusp.entity.PontoDiaMarcacao;
 import br.leg.senado.nusp.entity.PontoPessoaMarcacao;
+import br.leg.senado.nusp.entity.PontoRetificacao;
 import br.leg.senado.nusp.entity.PontoTipoMarcacao;
 import br.leg.senado.nusp.entity.PontoTipoMarcacaoExclusaoLog;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
+import br.leg.senado.nusp.repository.PontoRetificacaoRepository;
 import br.leg.senado.nusp.repository.PontoTipoMarcacaoExclusaoLogRepository;
 import br.leg.senado.nusp.repository.PontoTipoMarcacaoRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -29,6 +31,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import static br.leg.senado.nusp.service.NativeQueryUtils.asItem;
 import static br.leg.senado.nusp.service.NativeQueryUtils.asList;
@@ -51,10 +54,12 @@ import static br.leg.senado.nusp.service.NativeQueryUtils.asList;
  * colapsados): "Férias", "ferias" e "  FERIAS " são o mesmo tipo. O texto
  * original é preservado e exibido como foi digitado.
  *
- * <p><b>Excluir é irreversível.</b> O tipo leva junto todas as marcações feitas
- * com ele — o preview conta antes, a transação reconta e apaga, e a trilha
+ * <p><b>Excluir é irreversível.</b> O tipo leva junto tudo o que foi feito com
+ * ele — as marcações do administrador e as retificações em que funcionários o
+ * declararam para o próprio dia. O preview conta antes, a transação reconta e
+ * apaga, e a trilha
  * ({@link PontoTipoMarcacaoExclusaoLog}) guarda o snapshot. Recriar depois um
- * tipo de mesmo nome não religa nada: as marcações já não existem.
+ * tipo de mesmo nome não religa nada: o que morreu já não existe.
  */
 @Service
 @RequiredArgsConstructor
@@ -76,6 +81,7 @@ public class TipoMarcacaoService {
     private final PontoTipoMarcacaoRepository tipoRepo;
     private final PontoDiaMarcacaoRepository diaRepo;
     private final PontoPessoaMarcacaoRepository pessoaRepo;
+    private final PontoRetificacaoRepository retificacaoRepo;
     private final PontoTipoMarcacaoExclusaoLogRepository trilhaRepo;
     private final PessoaCadastroLookup pessoaCadastro;
     private final ObjectMapper objectMapper;
@@ -219,10 +225,16 @@ public class TipoMarcacaoService {
         PontoTipoMarcacao tipo = tipoRepo.lockPorId(tipoId)
                 .orElseThrow(() -> new ServiceValidationException("Tipo de ocorrência não encontrado.",
                         HttpStatus.NOT_FOUND));
+        // O tipo que o funcionário declara na própria folha não nasce pela tela e não teria como ser
+        // recriado por ela: excluí-lo apagaria as declarações de todos e deixaria a lista deles vazia
+        // para sempre.
+        if (Boolean.TRUE.equals(tipo.getVisivelFuncionario())) {
+            throw new ServiceValidationException("Este tipo não pode ser excluído.");
+        }
 
         Marcacoes marcacoes = levantar(tipo);
-        // ⚠️ As marcações saem ANTES do tipo, e com flush: a FK não tem cascade, e apagar o tipo
-        // primeiro morreria em ORA-02292.
+        // ⚠️ Tudo o que aponta para o tipo sai ANTES dele, e com flush: nenhuma dessas FKs tem
+        // cascade, e apagar o tipo primeiro morreria em ORA-02292.
         if (!marcacoes.globais().isEmpty()) {
             diaRepo.deleteAll(marcacoes.globais());
             diaRepo.flush();
@@ -231,13 +243,18 @@ public class TipoMarcacaoService {
             pessoaRepo.deleteAll(marcacoes.pessoais());
             pessoaRepo.flush();
         }
+        if (!marcacoes.retificacoes().isEmpty()) {
+            retificacaoRepo.deleteAll(marcacoes.retificacoes());
+            retificacaoRepo.flush();
+        }
         tipoRepo.delete(tipo);
 
         Map<String, Object> resumo = relatorio(tipo, marcacoes);
         gravarTrilha(tipo, callerId, resumo);
 
-        log.info("Exclusão de tipo de ocorrência {} ({}) por {}: {} marcação(ões)",
-                tipo.getNome(), tipo.getEscopo(), callerId, marcacoes.total());
+        log.info("Exclusão de tipo de ocorrência {} ({}) por {}: {} marcação(ões), {} retificação(ões)",
+                tipo.getNome(), tipo.getEscopo(), callerId,
+                marcacoes.doAdministrador(), marcacoes.retificacoes().size());
         return resumo;
     }
 
@@ -270,25 +287,35 @@ public class TipoMarcacaoService {
     // Levantamento e relatório (o mesmo para o preview e para a exclusão)
     // ══════════════════════════════════════════════════════════════
 
-    /** As marcações daquele tipo — só a tabela do escopo dele pode tê-las. */
+    /**
+     * O que existe feito com aquele tipo: as marcações do escopo dele — só a tabela do escopo pode
+     * tê-las — e as retificações em que funcionários o declararam, que independem do escopo.
+     */
     private Marcacoes levantar(PontoTipoMarcacao tipo) {
         boolean global = PontoTipoMarcacao.ESCOPO_GLOBAL.equals(tipo.getEscopo());
         return new Marcacoes(
                 global ? diaRepo.findByTipoIdOrderByData(tipo.getId()) : List.of(),
-                global ? List.of() : pessoaRepo.findByTipoIdOrderByData(tipo.getId()));
+                global ? List.of() : pessoaRepo.findByTipoIdOrderByData(tipo.getId()),
+                retificacaoRepo.findByTipoIdOrderByData(tipo.getId()));
     }
 
-    /** O que morre: o tipo, quantas marcações e — quando individual — quem é afetado. */
+    /** O que morre: o tipo, quantos registros e quem é afetado por eles. */
     private Map<String, Object> relatorio(PontoTipoMarcacao tipo, Marcacoes marcacoes) {
-        List<String> pessoas = marcacoes.pessoais().stream()
-                .map(m -> pessoaCadastro.nome(m.getPessoaId(), m.getPessoaTipo()))
+        Stream<String> dasMarcacoes = marcacoes.pessoais().stream()
+                .map(m -> pessoaCadastro.nome(m.getPessoaId(), m.getPessoaTipo()));
+        Stream<String> dasRetificacoes = marcacoes.retificacoes().stream()
+                .map(r -> pessoaCadastro.nome(r.getPessoaId(), r.getPessoaTipo()));
+        List<String> pessoas = Stream.concat(dasMarcacoes, dasRetificacoes)
                 .distinct()
                 .sorted(NativeQueryUtils.ORDEM_TEXTO_PT_BR)
                 .toList();
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("tipo", resumoDoTipo(tipo));
-        out.put("marcacoes", marcacoes.total());
+        // Marcação é o que o administrador pôs no calendário; retificação é o que o funcionário
+        // declarou na própria folha. São duas contagens porque a tela nomeia as duas coisas.
+        out.put("marcacoes", marcacoes.doAdministrador());
+        out.put("retificacoes", marcacoes.retificacoes().size());
         out.put("pessoas_afetadas", pessoas.size());
         out.put("pessoas", pessoas);
         return out;
@@ -300,6 +327,9 @@ public class TipoMarcacaoService {
         m.put("nome", t.getNome());
         m.put("badge", t.getBadge());
         m.put("escopo", t.getEscopo());
+        // O tipo do funcionário aparece no catálogo, mas não é do administrador: a tela não o
+        // oferece como ocorrência para marcar nem como candidato à exclusão.
+        m.put("visivel_funcionario", Boolean.TRUE.equals(t.getVisivelFuncionario()));
         return m;
     }
 
@@ -371,9 +401,11 @@ public class TipoMarcacaoService {
     private record Novo(String nome, String nomeNorm, String badge, String badgeNorm, String escopo) {}
 
     /** As marcações de um tipo — um dos dois lados está sempre vazio, conforme o escopo. */
-    private record Marcacoes(List<PontoDiaMarcacao> globais, List<PontoPessoaMarcacao> pessoais) {
+    private record Marcacoes(List<PontoDiaMarcacao> globais, List<PontoPessoaMarcacao> pessoais,
+                             List<PontoRetificacao> retificacoes) {
 
-        int total() {
+        /** As que o administrador fez — um dos dois lados está sempre vazio, conforme o escopo. */
+        int doAdministrador() {
             return globais.size() + pessoais.size();
         }
     }
