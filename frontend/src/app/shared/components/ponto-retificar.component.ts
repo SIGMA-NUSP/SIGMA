@@ -26,7 +26,6 @@ const CAMPOS: { campo: CampoHora; rotulo: string }[] = [
 interface LinhaFolha {
   dia: string;
   ent1: string; sai1: string; ent2: string; sai2: string;
-  total_dia: string; banco: string;
 }
 
 interface DadosFolha {
@@ -77,8 +76,6 @@ interface LinhaDia {
   celulas: CelulaDia[];
   faixa: FaixaDia | null;
   corrigido: boolean;
-  totalDia: string;
-  banco: string;
 }
 
 /** A célula em que o menu está aberto, com o ponto da tela onde ele nasce. */
@@ -137,7 +134,6 @@ interface EmEdicao { data: string; campo: CampoHora; }
           <thead><tr>
             <th>DIA</th>
             <th>ENT. 1</th><th>SAÍ. 1</th><th>ENT. 2</th><th>SAÍ. 2</th>
-            <th>TOTALDIA</th><th>BANCO</th>
           </tr></thead>
           <tbody>
             @for (l of linhas(); track l.dia) {
@@ -181,9 +177,6 @@ interface EmEdicao { data: string; campo: CampoHora; }
                     </td>
                   }
                 }
-
-                <td class="cel-fixa">{{ l.totalDia || '—' }}</td>
-                <td class="cel-fixa">{{ l.banco || '—' }}</td>
               </tr>
             }
           </tbody>
@@ -193,8 +186,7 @@ interface EmEdicao { data: string; campo: CampoHora; }
       <!-- Celular: um card por dia, com as batidas em grade 2×2 -->
       <div class="vista-mobile">
         @for (l of linhas(); track l.dia) {
-          <div class="dia-card" [class.bloqueado]="!l.editavel" [class.editando]="editandoNoDia(l.data)"
-               [class.compacto]="!l.editavel && !l.corrigido && !l.faixa">
+          <div class="dia-card" [class.bloqueado]="!l.editavel" [class.editando]="editandoNoDia(l.data)">
             <div class="card-topo">
               <strong>{{ l.dia }}</strong>
               @if (!l.editavel) { <span class="cadeado" aria-label="Dia não editável">🔒</span> }
@@ -236,11 +228,6 @@ interface EmEdicao { data: string; campo: CampoHora; }
                 }
               </div>
             }
-
-            <div class="card-pills">
-              <span class="pill"><span class="lbl">Total dia</span>{{ l.totalDia || '—' }}</span>
-              <span class="pill"><span class="lbl">Banco</span>{{ l.banco || '—' }}</span>
-            </div>
           </div>
         }
       </div>
@@ -285,7 +272,6 @@ interface EmEdicao { data: string; campo: CampoHora; }
     .ponto-table .col-dia { white-space: nowrap; }
     .cadeado { margin-left: 6px; font-size: .8rem; opacity: .55; }
     .cel-hora, .cel-faixa { text-align: center; padding: 4px 6px; }
-    .cel-fixa { color: var(--muted); }
 
     /* A linha que não aceita edição fica visivelmente fora do jogo */
     tr.bloqueada td { background: #f1f5f9; color: #64748b; }
@@ -356,7 +342,6 @@ interface EmEdicao { data: string; campo: CampoHora; }
       }
       .dia-card.bloqueado { background: #f1f5f9; border-color: #e2e8f0; }
       .dia-card.editando { background: #eff6ff; border-color: var(--primary); }
-      .dia-card.compacto { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
       .card-topo { display: flex; align-items: center; }
       .card-topo strong { font-size: .85rem; color: var(--primary); }
       .dia-card.bloqueado .card-topo strong { color: #64748b; }
@@ -366,15 +351,6 @@ interface EmEdicao { data: string; campo: CampoHora; }
       .cel-mobile .lbl { font-size: .62rem; font-weight: 600; color: #64748b; }
       .cel-mobile .chip { width: 100%; }
       .cel-input { width: 100%; box-sizing: border-box; }
-
-      .card-pills { display: flex; gap: 8px; }
-      .card-pills .pill {
-        flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 6px;
-        background: #f1f5f9; border-radius: 6px; padding: 4px 8px;
-        font-size: .76rem; font-variant-numeric: tabular-nums; color: var(--text);
-      }
-      .dia-card.compacto .card-pills { flex: 1; }
-      .card-pills .lbl { color: #475569; }
     }
   `],
 })
@@ -456,8 +432,6 @@ export class PontoRetificarComponent implements OnInit {
       return {
         dia: l.dia, data, fimDeSemana, editavel, celulas, faixa,
         corrigido: !!correcao,
-        totalDia: l.total_dia,
-        banco: l.banco,
       };
     });
   });

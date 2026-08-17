@@ -384,8 +384,6 @@ describe('PontoRetificarComponent', () => {
       expect(l.corrigido).toBe(false);
       expect(l.celulas.map(c => c.valor)).toEqual(['08:00', '12:00', '13:00', '17:00']);
       expect(l.celulas.every(c => !c.corrigido)).toBe(true);
-      expect(l.totalDia).toBe('08:00');
-      expect(l.banco).toBe('00:00');
     });
 
     it('a correção substitui só o campo corrigido; o resto continua sendo a folha', () => {
@@ -495,17 +493,13 @@ describe('PontoRetificarComponent', () => {
     });
 
     it('render (cards): o dia bloqueado e sem nada corrigido não mostra as batidas', () => {
-      // No celular, a linha morta vira uma tira compacta: repetir quatro traços por dia
+      // No celular, a linha morta fica só com a data e o cadeado: repetir quatro traços por dia
       // empurraria os dias que importam para fora da tela.
       const fixture = renderizar();
       const cards = fixture.debugElement.queryAll(By.css('.vista-mobile .dia-card'));
 
-      const sabado = cards[SABADO].nativeElement as HTMLElement;
-      expect(sabado.classList.contains('compacto')).toBe(true);
       expect(cards[SABADO].query(By.css('.card-celulas'))).toBeNull();
 
-      const fechado = cards[FECHADO].nativeElement as HTMLElement;
-      expect(fechado.classList.contains('compacto')).toBe(false);
       expect(cards[FECHADO].queryAll(By.css('.card-celulas .chip'))
         .map(c => (c.nativeElement as HTMLElement).textContent?.trim()))
         .toEqual(['09:00', '12:30', '13:00', '18:00']);
