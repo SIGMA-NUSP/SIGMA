@@ -40,10 +40,10 @@ import jakarta.persistence.PersistenceContext;
  * grade é montada depois, do banco, sem que nada seja passado de um para o outro em memória.
  *
  * <p>São três formas de retificação e três células diferentes: a ocorrência que vale como folga do
- * banco fica igual à folga aprovada (mesmo texto, mesma contagem), a ocorrência comum aparece pelo
- * nome do tipo, e os horários saem MESCLADOS — o que ele digitou por cima do que a folha publicada
- * imprimiu naquele dia, em texto liso. Nenhuma delas leva tipo ao payload: o administrador não
- * marca ocorrência por cima de uma retificação.
+ * banco aparece pelo nome do tipo e entra na mesma contagem da folga aprovada, a ocorrência comum
+ * aparece pelo nome sem contar folga, e os horários saem MESCLADOS — o que ele digitou por cima do
+ * que a folha publicada imprimiu naquele dia, em texto liso. Nenhuma delas leva tipo ao payload: o
+ * administrador não marca ocorrência por cima de uma retificação.
  *
  * <p>Harness de {@code @SpringBootTest} (não o slice {@code @OracleIT}) para que o
  * {@code @Transactional} do serviço commite de verdade e a grade leia o que ficou gravado; sem
@@ -161,7 +161,7 @@ class GradeRetificacaoCelulaIT {
         em.flush();
     }
 
-    /** Tipo que o funcionário escolhe ao retificar o dia; {@code contaFolga} o iguala à folga aprovada. */
+    /** Tipo que o funcionário escolhe ao retificar o dia; {@code contaFolga} o põe na contagem de folgas. */
     private PontoTipoMarcacao tipoDoFuncionario(String nome, String badge, boolean contaFolga) {
         PontoTipoMarcacao tipo = CenarioFactory.novoTipoMarcacao(em, nome, badge,
                 PontoTipoMarcacao.ESCOPO_INDIVIDUAL);
@@ -236,8 +236,8 @@ class GradeRetificacaoCelulaIT {
 
         Celula cel = celula(DIA_15);
         assertEquals("banco", cel.tipo());
-        assertEquals(GradeRetificacaoService.TEXTO_BANCO_DE_HORAS, cel.texto(),
-                "o dia declarado fica igual ao da folga aprovada, e não com o nome do tipo declarado");
+        assertEquals(tipoBanco.getNome(), cel.texto(),
+                "o dia declarado mostra o nome do tipo, não o texto fixo da folga aprovada");
         assertEquals(1, folgasNaGrade());
         assertFalse(celulaDoPayload(DIA_15).containsKey("tipo_id"),
                 "retificação não leva tipo ao payload: o administrador não marca ocorrência por cima dela");

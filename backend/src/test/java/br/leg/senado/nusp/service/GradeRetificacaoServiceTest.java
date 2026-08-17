@@ -196,9 +196,9 @@ class GradeRetificacaoServiceTest {
     }
 
     /**
-     * A retificação em que o funcionário declara uma ocorrência para o dia inteiro. O tipo que vale
-     * como folga do banco fica idêntico à folga aprovada — no texto da célula e na contagem de
-     * folgas do mês; o tipo comum aparece pelo nome.
+     * A retificação em que o funcionário declara uma ocorrência para o dia inteiro. Toda declaração
+     * aparece pelo nome do tipo; a de tipo que conta folga entra na mesma contagem da folga
+     * aprovada — assim como a marcação do administrador feita com um tipo desses.
      */
     @Nested
     @DisplayName("Retificação de ocorrência declarada")
@@ -212,16 +212,32 @@ class GradeRetificacaoServiceTest {
         }
 
         @Test
-        @DisplayName("o dia declarado como folga do banco fica igual à folga aprovada e entra na contagem")
-        void declaracaoDeFolgaViraBancoDeHoras() {
+        @DisplayName("o dia declarado com tipo que conta folga mostra o nome do tipo e entra na contagem")
+        void declaracaoDeFolgaEntraNaContagem() {
             retificacoes(ocorrenciaDeclarada("op-ana", DIA_UTIL, FOLGA_BANCO.getId()));
 
             Celula cel = celula("op-ana", DIA_UTIL);
 
             assertEquals("banco", cel.tipo());
-            assertEquals(GradeRetificacaoService.TEXTO_BANCO_DE_HORAS, cel.texto(),
-                    "o texto é o da folga, não o nome do tipo declarado");
+            assertEquals(FOLGA_BANCO.getNome(), cel.texto(),
+                    "a célula mostra o nome do tipo declarado, não o texto fixo da folga aprovada");
             assertNull(cel.tipoId());
+            assertEquals(1, folgas("op-ana"));
+        }
+
+        @Test
+        @DisplayName("a marcação do administrador com tipo que conta folga entra na contagem")
+        void marcacaoDoAdminComTipoDeFolgaEntraNaContagem() {
+            when(pessoaRepo.findByPessoaTipoAndDataGreaterThanEqualAndDataLessThan("OPERADOR", INI_JUL, INI_AGO))
+                    .thenReturn(List.of(pessoal("op-ana", DIA_UTIL, FOLGA_BANCO.getId())));
+
+            Celula cel = celula("op-ana", DIA_UTIL);
+
+            // a célula continua sendo a marcação comum — clicável, com o tipo no payload —,
+            // e é o TEXTO dela que a coloca na conta de folgas, o mesmo critério da planilha
+            assertEquals("marcacao_pessoa", cel.tipo());
+            assertEquals(FOLGA_BANCO.getNome(), cel.texto());
+            assertEquals(FOLGA_BANCO.getId(), cel.tipoId());
             assertEquals(1, folgas("op-ana"));
         }
 

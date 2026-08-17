@@ -220,9 +220,7 @@ public class MarcacaoService {
         }
         PontoTipoMarcacao tipo = tipoRepo.findById(id).orElseThrow(
                 () -> new ServiceValidationException("Tipo de ocorrência não encontrado: " + id));
-        // O tipo que o funcionário declara na própria folha é dele: usá-lo como marcação faria a
-        // planilha contar como folga um dia que ninguém declarou nem aprovou.
-        if (!escopo.equals(tipo.getEscopo()) || Boolean.TRUE.equals(tipo.getVisivelFuncionario())) {
+        if (!escopo.equals(tipo.getEscopo())) {
             throw new ServiceValidationException("O tipo \"" + tipo.getNome()
                     + "\" não pode ser usado como marcação " + rotuloDoLado + ".");
         }

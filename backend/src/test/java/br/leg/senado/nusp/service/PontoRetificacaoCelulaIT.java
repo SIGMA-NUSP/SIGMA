@@ -35,6 +35,7 @@ import br.leg.senado.nusp.entity.PontoDiaMarcacao;
 import br.leg.senado.nusp.entity.PontoFolhaLinha;
 import br.leg.senado.nusp.entity.PontoLote;
 import br.leg.senado.nusp.entity.PontoLotePagina;
+import br.leg.senado.nusp.entity.PontoPessoaMarcacao;
 import br.leg.senado.nusp.entity.PontoTipoMarcacao;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.it.support.CenarioFactory;
@@ -159,6 +160,7 @@ class PontoRetificacaoCelulaIT {
             executar("DELETE FROM PNT_RETIFICACAO WHERE PESSOA_ID IN :pessoas");
             executar("DELETE FROM PNT_LOTE WHERE ID IN :lotes");          // ON DELETE CASCADE leva as páginas
             executar("DELETE FROM PNT_DIA_MARCACAO WHERE TIPO_ID IN :tipos");   // a FK do tipo não tem cascade
+            executar("DELETE FROM PNT_PESSOA_MARCACAO WHERE TIPO_ID IN :tipos");
             executar("DELETE FROM PNT_TIPO_MARCACAO WHERE ID IN :tipos");
             executar("DELETE FROM PES_OPERADOR WHERE ID IN :pessoas");
             executar("DELETE FROM PES_ADMINISTRADOR WHERE ID IN :admins");
@@ -424,6 +426,60 @@ class PontoRetificacaoCelulaIT {
                     assertThrows(ServiceValidationException.class,
                             () -> celula(paginaB, SABADO_13, "ent1", "08:00")).getMessage());
             assertEquals(0, linhasNoBanco());
+        }
+
+        @Test
+        void aMarcacaoIndividualVisivelApareceNaFolhaEACorrecaoAssumeODia() {
+            marcarPeloAdmin(DIA_15);
+
+            assertEquals(tipoBanco.getNome(), marcacaoPessoalDoDia(paginaB, DIA_15));
+
+            celula(paginaB, DIA_15, "ent1", "08:00");
+            assertEquals("08:00", noBanco(DIA_15)[0],
+                    "a marcação individual não fecha o dia: quem discorda dela retifica por cima");
+            assertEquals(0, marcacoesPessoaisNoBanco(DIA_15),
+                    "o gesto do funcionário assume o dia: a marcação do administrador sai junto");
+        }
+
+        @Test
+        void aMarcacaoIndividualVisivelSeLimpaComoUmaCorrecao() {
+            marcarPeloAdmin(DIA_15);
+
+            service.limpar(paginaB.getId(), operador.getId(), DIA_15.toString());
+
+            assertEquals(0, marcacoesPessoaisNoBanco(DIA_15));
+            assertEquals(0, linhasNoBanco(), "limpar a marcação não cria retificação nenhuma");
+            assertNull(marcacaoPessoalDoDia(paginaB, DIA_15));
+        }
+
+        private void marcarPeloAdmin(LocalDate data) {
+            tx.executeWithoutResult(status -> {
+                PontoPessoaMarcacao m = new PontoPessoaMarcacao();
+                m.setPessoaId(operador.getId());
+                m.setPessoaTipo("OPERADOR");
+                m.setData(data);
+                m.setTipoId(tipoBanco.getId());
+                m.setCriadoPorId(admin.getId());
+                em.persist(m);
+            });
+        }
+
+        private long marcacoesPessoaisNoBanco(LocalDate data) {
+            return tx.execute(status -> ((Number) em.createNativeQuery(
+                            "SELECT COUNT(*) FROM PNT_PESSOA_MARCACAO WHERE PESSOA_ID = :pessoa AND DATA = :data")
+                    .setParameter("pessoa", operador.getId())
+                    .setParameter("data", data)
+                    .getSingleResult()).longValue());
+        }
+
+        @SuppressWarnings("unchecked")
+        private Object marcacaoPessoalDoDia(PontoLotePagina pagina, LocalDate data) {
+            List<Map<String, Object>> dias = (List<Map<String, Object>>) listar(pagina).get("dias");
+            return dias.stream()
+                    .filter(d -> data.toString().equals(d.get("data")))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("o dia " + data + " não veio na folha"))
+                    .get("marcacao_pessoal");
         }
     }
 

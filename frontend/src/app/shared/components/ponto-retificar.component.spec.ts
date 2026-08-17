@@ -408,7 +408,7 @@ describe('PontoRetificarComponent', () => {
       const comp = criarCarregado();
       const l = linha(comp, FERIADO);
 
-      expect(l.faixa).toEqual({ texto: 'Feriado', declarada: false });
+      expect(l.faixa).toEqual({ texto: 'Feriado', declarada: false, clicavel: false });
       expect(l.editavel).toBe(false);
     });
 
@@ -419,7 +419,7 @@ describe('PontoRetificarComponent', () => {
       const comp = criarCarregado();
       const l = linha(comp, ABERTO);
 
-      expect(l.faixa).toEqual({ texto: 'Banco de horas', declarada: true });
+      expect(l.faixa).toEqual({ texto: 'Banco de horas', declarada: true, clicavel: true });
       expect(l.editavel).toBe(true);
       expect(l.celulas.every(c => !c.corrigido)).toBe(true);   // ou horários, ou ocorrência
     });
@@ -430,8 +430,32 @@ describe('PontoRetificarComponent', () => {
       });
       const comp = criarCarregado();
 
-      expect(linha(comp, FERIADO).faixa).toEqual({ texto: 'Atestado', declarada: true });
+      expect(linha(comp, FERIADO).faixa).toEqual({ texto: 'Atestado', declarada: true, clicavel: true });
       expect(linha(comp, FERIADO).editavel).toBe(false);       // o dia marcado segue fechado à edição
+    });
+
+    it('a ocorrência individual marcada pela administração vira faixa, e o dia segue editável', () => {
+      const dias = structuredClone(JANELA.dias);
+      (dias[ABERTO] as any).marcacao_pessoal = 'Banco de horas';
+      janelaCom({ dias });
+      const comp = criarCarregado();
+      const l = linha(comp, ABERTO);
+
+      expect(l.faixa).toEqual({ texto: 'Banco de horas', declarada: false, clicavel: true });
+      expect(l.editavel).toBe(true);
+      expect(l.corrigido).toBe(false);
+    });
+
+    it('horário corrigido num dia com marcação individual: a faixa sai e as batidas aparecem', () => {
+      const dias = structuredClone(JANELA.dias);
+      (dias[ABERTO] as any).marcacao_pessoal = 'Banco de horas';
+      janelaCom({ dias, retificacoes: [{ id: 'ret-3', data: '2026-08-03', ent1: '08:05' }] });
+      const comp = criarCarregado();
+      const l = linha(comp, ABERTO);
+
+      expect(l.faixa).toBeNull();
+      expect(celula(comp, ABERTO, 'ent1')).toMatchObject({ valor: '08:05', corrigido: true });
+      expect(l.editavel).toBe(true);
     });
 
     it('horário corrigido num dia marcado: a faixa sai e as batidas aparecem', () => {
@@ -517,7 +541,7 @@ describe('PontoRetificarComponent', () => {
       comp.abrirMenu(linha(comp, ABERTO), celula(comp, ABERTO, 'ent1'), ev);
 
       expect(comp.menu()).toMatchObject({
-        data: '2026-08-03', campo: 'ent1', titulo: '03/08 · Ent. 1', temCorrecao: false,
+        data: '2026-08-03', campo: 'ent1', titulo: '03/08 · Ent. 1', podeLimpar: false,
       });
       expect(ev.stopPropagation).toHaveBeenCalled();   // senão o clique fecharia o que acabou de abrir
     });
@@ -533,11 +557,22 @@ describe('PontoRetificarComponent', () => {
       const comp = criarCarregado();
 
       abrir(comp, ABERTO);
-      expect(comp.menu()?.temCorrecao).toBe(false);
+      expect(comp.menu()?.podeLimpar).toBe(false);
 
       comp.fecharMenu();
       abrir(comp, CORRIGIDO);
-      expect(comp.menu()?.temCorrecao).toBe(true);
+      expect(comp.menu()?.podeLimpar).toBe(true);
+    });
+
+    it('o dia com marcação da administração também oferece o limpar', () => {
+      const dias = structuredClone(JANELA.dias);
+      (dias[ABERTO] as any).marcacao_pessoal = 'Banco de horas';
+      janelaCom({ dias });
+      const comp = criarCarregado();
+
+      comp.abrirMenuDoDia(linha(comp, ABERTO), clique());
+
+      expect(comp.menu()?.podeLimpar).toBe(true);
     });
 
     it('Esc e clique no documento fecham o menu', () => {
@@ -596,7 +631,7 @@ describe('PontoRetificarComponent', () => {
       comp.abrirMenuDoDia(linha(comp, ABERTO), clique());
 
       expect(comp.menu()).toMatchObject({
-        data: '2026-08-03', campo: 'ent1', titulo: '03/08 · Dia', temCorrecao: true,
+        data: '2026-08-03', campo: 'ent1', titulo: '03/08 · Dia', podeLimpar: true,
       });
     });
 
@@ -644,6 +679,43 @@ describe('PontoRetificarComponent', () => {
 
       expect(tituloMenu(fixture)).toBe('03/08 · Dia');
       expect(itensMenu(fixture)).toContain('Limpar retificação');
+    });
+
+    it('render: a faixa da marcação individual é um botão tracejado que abre o menu do dia', () => {
+      const dias = structuredClone(JANELA.dias);
+      (dias[ABERTO] as any).marcacao_pessoal = 'Banco de horas';
+      janelaCom({ dias });
+      const fixture = renderizar();
+
+      const faixa = fixture.debugElement
+        .queryAll(By.css('.vista-desktop tbody tr'))[ABERTO]
+        .query(By.css('td.cel-faixa button'));
+      expect(faixa).not.toBeNull();
+      expect((faixa.nativeElement as HTMLElement).classList.contains('chip-editavel')).toBe(true);
+      expect((faixa.nativeElement as HTMLElement).classList.contains('chip-editado')).toBe(false);
+
+      (faixa.nativeElement as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      expect(tituloMenu(fixture)).toBe('03/08 · Dia');
+      // a marcação se limpa como uma correção: é uma declaração feita por outra mão
+      expect(itensMenu(fixture)).toEqual(['Editar horário', 'Banco de horas', 'Atestado', 'Limpar retificação']);
+    });
+
+    it('render: "Editar horário" num dia coberto pela faixa troca a faixa pelas células, com o campo aberto', () => {
+      janelaCom({
+        retificacoes: [{ id: 'ret-3', data: '2026-08-03', tipo_id: 'tp-banco', tipo_nome: 'Banco de horas' }],
+      });
+      const fixture = renderizar();
+      const linhaDo = () => fixture.debugElement.queryAll(By.css('.vista-desktop tbody tr'))[ABERTO];
+
+      (linhaDo().query(By.css('td.cel-faixa button')).nativeElement as HTMLButtonElement).click();
+      fixture.detectChanges();
+      (fixture.debugElement.queryAll(By.css('.popover .pop-item'))[0].nativeElement as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      expect(linhaDo().query(By.css('td.cel-faixa'))).toBeNull();
+      expect(linhaDo().query(By.css('td.cel-hora input.cel-input'))).not.toBeNull();
     });
 
     it('render: um clique REAL no documento fecha o menu; o que o abriu, não', () => {
@@ -941,7 +1013,7 @@ describe('PontoRetificarComponent', () => {
 
       expect(apiPut).toHaveBeenCalledWith(URL_TIPO, { data: '2026-08-03', tipo_id: 'tp-atestado' });
       expect(comp.menu()).toBeNull();
-      expect(linha(comp, ABERTO).faixa).toEqual({ texto: 'Atestado', declarada: true });
+      expect(linha(comp, ABERTO).faixa).toEqual({ texto: 'Atestado', declarada: true, clicavel: true });
       expect(linha(comp, ABERTO).corrigido).toBe(true);
     });
 
@@ -951,7 +1023,7 @@ describe('PontoRetificarComponent', () => {
 
       comp.declarar(comp.tipos()[0]);
 
-      expect(linha(comp, CORRIGIDO).faixa).toEqual({ texto: 'Banco de horas', declarada: true });
+      expect(linha(comp, CORRIGIDO).faixa).toEqual({ texto: 'Banco de horas', declarada: true, clicavel: true });
       expect(linha(comp, CORRIGIDO).celulas.every(c => !c.corrigido)).toBe(true);
     });
 
@@ -1021,6 +1093,36 @@ describe('PontoRetificarComponent', () => {
       comp.limpar();
 
       expect(apiDelete).not.toHaveBeenCalled();
+    });
+
+    it('limpar a marcação da administração faz a faixa sumir de vez', () => {
+      const dias = structuredClone(JANELA.dias);
+      (dias[ABERTO] as any).marcacao_pessoal = 'Banco de horas';
+      janelaCom({ dias });
+      const comp = criarCarregado();
+      comp.abrirMenuDoDia(linha(comp, ABERTO), clique());
+
+      comp.limpar();
+
+      expect(apiDelete).toHaveBeenCalledWith('/api/ponto/folha/pag-1/retificacoes/2026-08-03');
+      expect(linha(comp, ABERTO).faixa).toBeNull();
+      expect(linha(comp, ABERTO).marcadoPeloAdmin).toBe(false);
+    });
+
+    it('corrigir por cima da marcação e limpar depois não a traz de volta', () => {
+      // o gesto assumiu o dia no servidor: a marcação foi removida junto com a gravação
+      const dias = structuredClone(JANELA.dias);
+      (dias[ABERTO] as any).marcacao_pessoal = 'Banco de horas';
+      janelaCom({ dias });
+      const comp = criarCarregado();
+
+      editar(comp, ABERTO, 'ent1');
+      comp.aoDigitar(linha(comp, ABERTO), celula(comp, ABERTO, 'ent1'), '08:05');
+      abrir(comp, ABERTO);
+      comp.limpar();
+
+      expect(linha(comp, ABERTO).faixa).toBeNull();
+      expect(linha(comp, ABERTO).corrigido).toBe(false);
     });
 
     it('render: "Limpar retificação" apaga a marca de editada da célula', () => {

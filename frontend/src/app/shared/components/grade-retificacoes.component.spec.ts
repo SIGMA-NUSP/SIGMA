@@ -96,13 +96,13 @@ describe('GradeRetificacoesComponent', () => {
    * tipos aparecem na lista do popover, logo abaixo do "Nenhuma".
    */
   const TIPOS: TipoMarcacao[] = [
-    { id: 'tp-feriado', nome: 'Feriado', badge: 'Fer', escopo: 'GLOBAL', visivel_funcionario: false },
-    { id: 'tp-facultativo', nome: 'Ponto Facultativo', badge: 'PF', escopo: 'GLOBAL', visivel_funcionario: false },
-    { id: 'tp-disposicao', nome: 'À Disposição', badge: 'Disp', escopo: 'INDIVIDUAL', visivel_funcionario: false },
-    { id: 'tp-atestado', nome: 'Atestado', badge: 'Atest', escopo: 'INDIVIDUAL', visivel_funcionario: false },
-    { id: 'tp-ferias', nome: 'Férias', badge: 'Fér', escopo: 'INDIVIDUAL', visivel_funcionario: false },
-    // O tipo que o funcionário declara não entra na lista de ocorrências do administrador.
-    { id: 'tp-banco', nome: 'Banco de horas', badge: 'Ban', escopo: 'INDIVIDUAL', visivel_funcionario: true },
+    { id: 'tp-feriado', nome: 'Feriado', badge: 'Fer', escopo: 'GLOBAL', visivel_funcionario: false, conta_folga: false },
+    { id: 'tp-facultativo', nome: 'Ponto Facultativo', badge: 'PF', escopo: 'GLOBAL', visivel_funcionario: false, conta_folga: false },
+    { id: 'tp-disposicao', nome: 'À Disposição', badge: 'Disp', escopo: 'INDIVIDUAL', visivel_funcionario: false, conta_folga: false },
+    { id: 'tp-atestado', nome: 'Atestado', badge: 'Atest', escopo: 'INDIVIDUAL', visivel_funcionario: false, conta_folga: false },
+    { id: 'tp-ferias', nome: 'Férias', badge: 'Fér', escopo: 'INDIVIDUAL', visivel_funcionario: false, conta_folga: false },
+    // O funcionário também o declara; para o administrador é um tipo individual como qualquer outro.
+    { id: 'tp-banco', nome: 'Banco de horas', badge: 'Ban', escopo: 'INDIVIDUAL', visivel_funcionario: true, conta_folga: true },
   ];
 
   /** Resposta de erro com corpo do backend. */
@@ -474,7 +474,7 @@ describe('GradeRetificacoesComponent', () => {
       abrirCelula(comp, 'op-3', 1);   // célula vazia
 
       expect(comp.alvo()).toMatchObject({ escopo: 'pessoa', pessoaId: 'op-3', dia: 1, atual: null });
-      expect(rotulos(comp)).toEqual(['Nenhuma', 'À Disposição', 'Atestado', 'Férias']);
+      expect(rotulos(comp)).toEqual(['Nenhuma', 'À Disposição', 'Atestado', 'Férias', 'Banco de horas']);
     });
 
     it('a célula com ocorrência individual abre com o tipo dela selecionado', () => {
@@ -549,7 +549,7 @@ describe('GradeRetificacoesComponent', () => {
     });
 
     it('sem tipo cadastrado no escopo, não há opção nenhuma (nem o "Nenhuma" sozinho)', () => {
-      respostas.tipos = () => of({ data: { tipos: [{ id: 'tp-feriado', nome: 'Feriado', badge: 'F', escopo: 'GLOBAL', visivel_funcionario: false }] } });
+      respostas.tipos = () => of({ data: { tipos: [{ id: 'tp-feriado', nome: 'Feriado', badge: 'F', escopo: 'GLOBAL', visivel_funcionario: false, conta_folga: false }] } });
       const comp = criarCarregado();
 
       abrirCelula(comp, 'op-3', 1);            // escopo INDIVIDUAL, catálogo só com GLOBAL
@@ -568,12 +568,11 @@ describe('GradeRetificacoesComponent', () => {
       expect(comp.alvo()).toBeNull();
     });
 
-    it('o tipo que o funcionário declara fica fora das opções, ainda que seja individual', () => {
+    it('o tipo que o funcionário declara também entra nas opções — o administrador o marca normalmente', () => {
       const comp = criarCarregado();
       abrirCelula(comp, 'op-3', 1);
 
-      expect(comp.tipos().some(t => t.nome === 'Banco de horas')).toBe(true);
-      expect(rotulos(comp)).not.toContain('Banco de horas');
+      expect(rotulos(comp)).toContain('Banco de horas');
     });
   });
 
@@ -1011,7 +1010,7 @@ describe('GradeRetificacoesComponent', () => {
       fixture.detectChanges();
 
       expect(popover(fixture)).not.toBeNull();
-      expect(itens(fixture)).toEqual(['Nenhuma', 'À Disposição', 'Atestado', 'Férias']);
+      expect(itens(fixture)).toEqual(['Nenhuma', 'À Disposição', 'Atestado', 'Férias', 'Banco de horas']);
     });
 
     it('a opção já marcada aparece destacada na lista', () => {

@@ -10,13 +10,15 @@ export interface TipoMarcacao {
   nome: string;
   badge: string;
   escopo: EscopoTipo;
-  /** Tipo que o funcionário declara na própria folha: o administrador não marca nem exclui. */
+  /** O funcionário também pode declarar este tipo ao retificar a própria folha. */
   visivel_funcionario: boolean;
+  /** O dia com este tipo entra na contagem de folgas da grade e do XLSX. */
+  conta_folga: boolean;
 }
 export type EscopoTipo = 'GLOBAL' | 'INDIVIDUAL';
 
 /** Tipo ainda não salvo, aguardando o Aplicar. */
-interface TipoPendente { nome: string; badge: string; }
+interface TipoPendente { nome: string; badge: string; visivel_funcionario: boolean; conta_folga: boolean; }
 
 /** O que a exclusão de um tipo vai apagar, contado no banco. */
 interface PreviewExclusaoTipo {
@@ -82,6 +84,15 @@ interface PreviewExclusaoTipo {
                       [disabled]="salvando() || !nomeNovo().trim() || !badgeNovo().trim()"
                       title="Adicionar à lista">+</button>
             </div>
+            <!-- Marcas só de tipo individual: declarar é gesto de um funcionário, e folga também -->
+            @if (escopo() === 'INDIVIDUAL') {
+              <div class="flags">
+                <label class="opcao"><input type="checkbox" [checked]="visivelNovo()"
+                              (change)="visivelNovo.set($any($event.target).checked)"><span>Visível para os funcionários</span></label>
+                <label class="opcao"><input type="checkbox" [checked]="contaFolgaNovo()"
+                              (change)="contaFolgaNovo.set($any($event.target).checked)"><span>Conta como folga</span></label>
+              </div>
+            }
           }
 
           <div class="lista">
@@ -91,10 +102,15 @@ interface PreviewExclusaoTipo {
             @for (t of tiposDoEscopo(); track t.id) {
               <button type="button" class="chip" [class.excluir]="marcadoId() === t.id"
                       [class.inerte]="operacao() !== 'excluir'"
-                      (click)="marcarParaExcluir(t)">{{ t.nome }} <span class="badge">{{ t.badge }}</span></button>
+                      (click)="marcarParaExcluir(t)">{{ t.nome }} <span class="badge">{{ t.badge }}</span>
+                @if (t.visivel_funcionario) { <span class="tag">Funcionários</span> }
+                @if (t.conta_folga) { <span class="tag">Folga</span> }
+              </button>
             }
             @for (p of pendentes(); track $index) {
               <span class="chip pendente">{{ p.nome }} <span class="badge">{{ p.badge }}</span>
+                @if (p.visivel_funcionario) { <span class="tag">Funcionários</span> }
+                @if (p.conta_folga) { <span class="tag">Folga</span> }
                 <button type="button" class="btn-remover" (click)="removerPendente($index)"
                         [attr.aria-label]="'Retirar ' + p.nome">✕</button>
               </span>
@@ -165,9 +181,11 @@ interface PreviewExclusaoTipo {
     }
     /* O círculo tem tamanho próprio: as linhas de formulário globais esticam todo input a 100%,
        e um radio esticado desenha a bolinha no meio do rótulo. */
-    .opcao input[type="radio"] {
+    .opcao input[type="radio"], .opcao input[type="checkbox"] {
       flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--primary);
     }
+
+    .flags { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 0 0 10px; }
 
     .novo { display: flex; align-items: center; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
     .novo .rot { margin-bottom: 0; }
@@ -199,6 +217,12 @@ interface PreviewExclusaoTipo {
     }
     .chip.excluir .badge { background: rgba(255, 255, 255, .25); color: #fff; }
     .chip.pendente .badge { background: #ecfdf5; color: var(--color-green); }
+    /* As marcas do tipo (visível aos funcionários / conta folga), para o master ler na lista. */
+    .tag {
+      font-size: .68rem; line-height: 1; padding: 3px 6px; border-radius: 999px;
+      background: #eff6ff; color: #1d4ed8;
+    }
+    .chip.excluir .tag { background: rgba(255, 255, 255, .25); color: #fff; }
     .btn-remover {
       background: none; border: none; cursor: pointer; padding: 0;
       color: inherit; font-size: 1rem; line-height: 1;
@@ -244,6 +268,8 @@ export class ConfigurarTiposMarcacaoComponent implements OnInit {
   operacao = signal<'' | 'incluir' | 'excluir'>('');
   nomeNovo = signal('');
   badgeNovo = signal('');
+  visivelNovo = signal(false);
+  contaFolgaNovo = signal(false);
   pendentes = signal<TipoPendente[]>([]);
   marcadoId = signal('');
   erro = signal('');
@@ -253,10 +279,7 @@ export class ConfigurarTiposMarcacaoComponent implements OnInit {
   erroExclusao = signal('');
   excluindo = signal(false);
 
-  // O tipo que o funcionário declara não é gerido por aqui: ele não se cadastra nem se exclui pela
-  // tela, e listá-lo só ofereceria uma exclusão que o servidor recusa.
-  tiposDoEscopo = computed(() =>
-    this.tipos().filter(t => t.escopo === this.escopo() && !t.visivel_funcionario));
+  tiposDoEscopo = computed(() => this.tipos().filter(t => t.escopo === this.escopo()));
   podeAplicar = computed(() =>
     this.operacao() === 'incluir' ? this.pendentes().length > 0
       : this.operacao() === 'excluir' ? !!this.marcadoId()
@@ -299,6 +322,8 @@ export class ConfigurarTiposMarcacaoComponent implements OnInit {
     this.marcadoId.set('');
     this.nomeNovo.set('');
     this.badgeNovo.set('');
+    this.visivelNovo.set(false);
+    this.contaFolgaNovo.set(false);
     this.erro.set('');
   }
 
@@ -332,7 +357,11 @@ export class ConfigurarTiposMarcacaoComponent implements OnInit {
       return;
     }
 
-    this.pendentes.update(lista => [...lista, { nome, badge }]);
+    this.pendentes.update(lista => [...lista, {
+      nome, badge,
+      visivel_funcionario: this.escopo() === 'INDIVIDUAL' && this.visivelNovo(),
+      conta_folga: this.escopo() === 'INDIVIDUAL' && this.contaFolgaNovo(),
+    }]);
     this.nomeNovo.set('');
     this.badgeNovo.set('');
     this.erro.set('');
@@ -359,7 +388,8 @@ export class ConfigurarTiposMarcacaoComponent implements OnInit {
     // O lote é congelado aqui: é ele que vai ao servidor e é dele que o aviso de sucesso fala,
     // ainda que a lista da tela mude enquanto a requisição está em voo.
     const lote = this.pendentes();
-    const body = { tipos: lote.map(p => ({ nome: p.nome, badge: p.badge, escopo })) };
+    const body = { tipos: lote.map(p => ({ nome: p.nome, badge: p.badge, escopo,
+      visivel_funcionario: p.visivel_funcionario, conta_folga: p.conta_folga })) };
     this.salvando.set(true);
     this.erro.set('');
     this.api.post<any>('/api/admin/ponto/tipos-marcacao', body).subscribe({

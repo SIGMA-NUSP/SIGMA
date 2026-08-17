@@ -45,9 +45,12 @@ import static br.leg.senado.nusp.service.NativeQueryUtils.asList;
  * mesma permissão que exclui publicações de folha; esconder o botão não é
  * segurança — quem chamar o endpoint mesmo assim leva 403.
  *
- * <p><b>O que um tipo faz.</b> Nada no cálculo do saldo. O efeito é uniforme:
- * a célula daquele dia passa a exibir o nome do tipo na grade e no XLSX, e o dia
- * deixa de aceitar solicitação de folga, com o nome do tipo como motivo.
+ * <p><b>O que um tipo faz.</b> Nada no cálculo do saldo. A célula daquele dia
+ * passa a exibir o nome do tipo na grade e no XLSX, e o dia deixa de aceitar
+ * solicitação de folga, com o nome do tipo como motivo. Um tipo INDIVIDUAL pode
+ * ainda ser visível para os funcionários (entra na lista que eles declaram ao
+ * retificar a própria folha) e contar como folga do banco na grade — as duas
+ * marcas são independentes e escolhidas no cadastro.
  *
  * <p><b>Unicidade.</b> Nome e badge são únicos em TODO o catálogo — entre
  * escopos, inclusive — pela forma normalizada (maiúsculas, sem acentos, espaços
@@ -179,6 +182,8 @@ public class TipoMarcacaoService {
             t.setBadge(novo.badge());
             t.setBadgeNorm(novo.badgeNorm());
             t.setEscopo(novo.escopo());
+            t.setVisivelFuncionario(novo.visivelFuncionario());
+            t.setContaFolga(novo.contaFolga());
             t.setCriadoPorId(callerId);
             entidades.add(t);
         }
@@ -225,12 +230,6 @@ public class TipoMarcacaoService {
         PontoTipoMarcacao tipo = tipoRepo.lockPorId(tipoId)
                 .orElseThrow(() -> new ServiceValidationException("Tipo de ocorrência não encontrado.",
                         HttpStatus.NOT_FOUND));
-        // O tipo que o funcionário declara na própria folha não nasce pela tela e não teria como ser
-        // recriado por ela: excluí-lo apagaria as declarações de todos e deixaria a lista deles vazia
-        // para sempre.
-        if (Boolean.TRUE.equals(tipo.getVisivelFuncionario())) {
-            throw new ServiceValidationException("Este tipo não pode ser excluído.");
-        }
 
         Marcacoes marcacoes = levantar(tipo);
         // ⚠️ Tudo o que aponta para o tipo sai ANTES dele, e com flush: nenhuma dessas FKs tem
@@ -327,9 +326,8 @@ public class TipoMarcacaoService {
         m.put("nome", t.getNome());
         m.put("badge", t.getBadge());
         m.put("escopo", t.getEscopo());
-        // O tipo do funcionário aparece no catálogo, mas não é do administrador: a tela não o
-        // oferece como ocorrência para marcar nem como candidato à exclusão.
         m.put("visivel_funcionario", Boolean.TRUE.equals(t.getVisivelFuncionario()));
+        m.put("conta_folga", Boolean.TRUE.equals(t.getContaFolga()));
         return m;
     }
 
@@ -369,7 +367,20 @@ public class TipoMarcacaoService {
         if (NOME_RESERVADO.equals(nomeNorm)) {
             throw new ServiceValidationException("Nome \"" + nome + "\" reservado pelo sistema.");
         }
-        return new Novo(nome, nomeNorm, badge, badgeNorm, escopoValido(texto(item.get("escopo"))));
+        String escopo = escopoValido(texto(item.get("escopo")));
+        boolean visivelFuncionario = bool(item.get("visivel_funcionario"));
+        boolean contaFolga = bool(item.get("conta_folga"));
+        // Declarar é gesto individual por natureza, e a folga do banco também: um tipo de todos
+        // não entra na lista do funcionário nem na contagem de folgas.
+        if (PontoTipoMarcacao.ESCOPO_GLOBAL.equals(escopo) && (visivelFuncionario || contaFolga)) {
+            throw new ServiceValidationException(
+                    "Somente tipos individuais podem ser visíveis para os funcionários ou contar como folga.");
+        }
+        return new Novo(nome, nomeNorm, badge, badgeNorm, escopo, visivelFuncionario, contaFolga);
+    }
+
+    private static boolean bool(Object v) {
+        return v instanceof Boolean b ? b : Boolean.parseBoolean(texto(v));
     }
 
     /** Espaços colapsados no texto exibido — "P.  Facultativo" e "P. Facultativo" são o mesmo nome. */
@@ -398,7 +409,8 @@ public class TipoMarcacaoService {
     }
 
     /** Um tipo pedido no cadastro, já validado e normalizado. */
-    private record Novo(String nome, String nomeNorm, String badge, String badgeNorm, String escopo) {}
+    private record Novo(String nome, String nomeNorm, String badge, String badgeNorm, String escopo,
+                        boolean visivelFuncionario, boolean contaFolga) {}
 
     /** As marcações de um tipo — um dos dois lados está sempre vazio, conforme o escopo. */
     private record Marcacoes(List<PontoDiaMarcacao> globais, List<PontoPessoaMarcacao> pessoais,

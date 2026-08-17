@@ -85,11 +85,12 @@ public class PontoXlsxService {
                 cell.setCellStyle(cabecalho);
             }
 
-            // ── Linha 2: "Folgas" + fórmula COUNTIF do mês real (Q28) ──
+            // ── Linha 2: "Folgas" + fórmula do mês real: um COUNTIF por texto que vale folga ──
             //
-            // O critério é o texto EXATO da célula de folga. Um curinga por inicial contaria junto
-            // qualquer tipo de ocorrência cujo nome começasse com a mesma letra — e os tipos são
-            // cadastrados pelo admin, sem como impedir a coincidência.
+            // A lista de textos vem da grade — a mesma da contagem exibida na tela. O critério é o
+            // texto EXATO de cada célula. Um curinga por inicial contaria junto qualquer tipo de
+            // ocorrência cujo nome começasse com a mesma letra — e os tipos são cadastrados pelo
+            // admin, sem como impedir a coincidência.
             XSSFRow r1 = sheet.createRow(1);
             XSSFCell a2 = r1.createCell(0);
             a2.setCellValue("Folgas");
@@ -98,8 +99,14 @@ public class PontoXlsxService {
             for (int c = 0; c < nFunc; c++) {
                 XSSFCell cell = r1.createCell(c + 1);
                 String col = CellReference.convertNumToColString(c + 1);   // B, C, …
-                cell.setCellFormula("COUNTIF(" + col + "3:" + col + ultimaLinhaDados
-                        + ",\"" + GradeRetificacaoService.TEXTO_BANCO_DE_HORAS + "\")");
+                String range = col + "3:" + col + ultimaLinhaDados;
+                StringBuilder formula = new StringBuilder();
+                for (String texto : g.textosFolga()) {
+                    if (formula.length() > 0) formula.append('+');
+                    formula.append("COUNTIF(").append(range).append(",\"")
+                            .append(texto.replace("\"", "\"\"")).append("\")");
+                }
+                cell.setCellFormula(formula.toString());
                 cell.setCellStyle(folgasCel);
             }
 

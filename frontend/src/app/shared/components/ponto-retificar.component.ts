@@ -41,6 +41,8 @@ interface DiaJanela {
   data: string;                     // YYYY-MM-DD
   aberto: boolean;
   marcacao_global?: string | null;
+  /** A ocorrência que a administração marcou só para esta pessoa — vem apenas nos tipos visíveis. */
+  marcacao_pessoal?: string | null;
 }
 
 /** A correção já gravada de um dia. Os horários e o tipo são excludentes. */
@@ -64,8 +66,11 @@ interface CelulaDia {
   corrigido: boolean;
 }
 
-/** A ocorrência que ocupa o dia inteiro: a que ele declarou (verde) ou a que o administrador marcou. */
-interface FaixaDia { texto: string; declarada: boolean; }
+/**
+ * A ocorrência que ocupa o dia inteiro: a que ele declarou (verde), a individual que a
+ * administração marcou (tracejada — dá para retificar por cima) ou a geral (fixa, dia bloqueado).
+ */
+interface FaixaDia { texto: string; declarada: boolean; clicavel: boolean; }
 
 /** Uma linha da tela: o que a folha trouxe, o que ele corrigiu e o que o dia aceita. */
 interface LinhaDia {
@@ -76,6 +81,8 @@ interface LinhaDia {
   celulas: CelulaDia[];
   faixa: FaixaDia | null;
   corrigido: boolean;
+  /** O dia tem ocorrência individual marcada pela administração — limpável como uma correção. */
+  marcadoPeloAdmin: boolean;
 }
 
 /** A célula em que o menu está aberto, com o ponto da tela onde ele nasce. */
@@ -83,7 +90,7 @@ interface AlvoCelula extends AncoraPopover {
   data: string;
   campo: CampoHora;
   titulo: string;
-  temCorrecao: boolean;
+  podeLimpar: boolean;
 }
 
 /** A célula sendo digitada agora — uma por vez em toda a tela. */
@@ -104,6 +111,10 @@ interface EmEdicao { data: string; campo: CampoHora; }
  * marcou para todos também não, e o resto depende da janela de publicação das folhas — que fecha
  * sozinha conforme novas folhas chegam. Sem essa resposta, NADA é editável: uma tela que deixasse
  * digitar e recusasse na gravação seria pior do que uma tela travada.
+ *
+ * <p><b>A ocorrência individual marcada pela administração</b> (quando o tipo é dos que o
+ * funcionário declara) aparece como faixa do dia inteiro, tracejada: o dia continua editável, e
+ * corrigir um horário ou declarar outra ocorrência é o caminho de quem discorda da marcação.
  */
 @Component({
   selector: 'app-ponto-retificar',
@@ -143,10 +154,12 @@ interface EmEdicao { data: string; campo: CampoHora; }
                   @if (!l.editavel) { <span class="cadeado" title="Dia não editável" aria-label="Dia não editável">🔒</span> }
                 </td>
 
-                @if (l.faixa; as f) {
+                <!-- Em edição, a faixa cede o lugar às células: é nelas que o campo de horário abre -->
+                @if (!editandoNoDia(l.data) && l.faixa; as f) {
                   <td colspan="4" class="cel-faixa">
-                    @if (f.declarada && l.editavel) {
-                      <button type="button" class="chip chip-editado"
+                    @if (f.clicavel && l.editavel) {
+                      <button type="button" class="chip" [class.chip-editado]="f.declarada"
+                              [class.chip-editavel]="!f.declarada"
                               [disabled]="salvandoNoDia(l.data)"
                               (click)="abrirMenuDoDia(l, $event)">{{ f.texto }}</button>
                     } @else {
@@ -192,10 +205,12 @@ interface EmEdicao { data: string; campo: CampoHora; }
               @if (!l.editavel) { <span class="cadeado" aria-label="Dia não editável">🔒</span> }
             </div>
 
-            @if (l.faixa; as f) {
+            @if (!editandoNoDia(l.data) && l.faixa; as f) {
               <div class="card-faixa">
-                @if (f.declarada && l.editavel) {
-                  <button type="button" class="chip chip-editado" [disabled]="salvandoNoDia(l.data)"
+                @if (f.clicavel && l.editavel) {
+                  <button type="button" class="chip" [class.chip-editado]="f.declarada"
+                          [class.chip-editavel]="!f.declarada"
+                          [disabled]="salvandoNoDia(l.data)"
                           (click)="abrirMenuDoDia(l, $event)">{{ f.texto }}</button>
                 } @else {
                   <span class="chip" [class.chip-editado]="f.declarada" [class.chip-fixo]="!f.declarada">{{ f.texto }}</span>
@@ -251,7 +266,7 @@ interface EmEdicao { data: string; campo: CampoHora; }
             {{ t.nome }}
           </button>
         }
-        @if (m.temCorrecao) {
+        @if (m.podeLimpar) {
           <button type="button" class="pop-item pop-limpar" [disabled]="salvandoNoDia(m.data)" (click)="limpar()">
             Limpar retificação
           </button>
@@ -410,6 +425,7 @@ export class PontoRetificarComponent implements OnInit {
       const correcao = correcoes[data];
       const fimDeSemana = ehFimDeSemana(data);
       const marcacao = dia?.marcacao_global ?? null;
+      const marcacaoPessoal = dia?.marcacao_pessoal ?? null;
       const editavel = podeEditar && !!dia?.aberto && !fimDeSemana && !marcacao;
 
       const celulas = CAMPOS.map(({ campo, rotulo }) => {
@@ -422,16 +438,21 @@ export class PontoRetificarComponent implements OnInit {
         };
       });
 
-      // A ocorrência declarada ocupa o dia inteiro. A marcação do administrador também, mas só
+      // A ocorrência declarada ocupa o dia inteiro. As marcações do administrador também, mas só
       // enquanto ele não tiver corrigido horário nenhum ali: a correção vence a marcação na grade,
       // e escondê-la aqui faria a tela contar uma história diferente da que a chefia enxerga.
+      // A geral bloqueia o dia; a individual não — quem discorda dela retifica por cima.
+      const semCorrecao = !celulas.some(c => c.corrigido);
       const faixa: FaixaDia | null = correcao?.tipo_nome
-        ? { texto: correcao.tipo_nome, declarada: true }
-        : marcacao && !celulas.some(c => c.corrigido) ? { texto: marcacao, declarada: false } : null;
+        ? { texto: correcao.tipo_nome, declarada: true, clicavel: true }
+        : marcacao && semCorrecao ? { texto: marcacao, declarada: false, clicavel: false }
+          : marcacaoPessoal && semCorrecao
+            ? { texto: marcacaoPessoal, declarada: false, clicavel: true } : null;
 
       return {
         dia: l.dia, data, fimDeSemana, editavel, celulas, faixa,
         corrigido: !!correcao,
+        marcadoPeloAdmin: !!marcacaoPessoal,
       };
     });
   });
@@ -529,7 +550,8 @@ export class PontoRetificarComponent implements OnInit {
       data: l.data,
       campo: c.campo,
       titulo: `${diaCurto(l.data)} · ${c.rotulo}`,
-      temCorrecao: l.corrigido,
+      // a marcação da administração se limpa como uma correção — é uma declaração por outra mão
+      podeLimpar: l.corrigido || l.marcadoPeloAdmin,
       ...ancoraDoClique(ev),
     });
   }
@@ -576,7 +598,7 @@ export class PontoRetificarComponent implements OnInit {
     this.gravar(m.data, () => this.api.put<any>(`${this.rota()}/tipo`, { data: m.data, tipo_id: t.id }));
   }
 
-  /** Apaga a correção do dia: ele volta a valer exatamente o que a folha trouxe. */
+  /** Apaga a correção do dia — e a marcação da administração, se era ela que o ocupava. */
   limpar(): void {
     const m = this.menu();
     if (!m) return;
@@ -588,6 +610,7 @@ export class PontoRetificarComponent implements OnInit {
         delete resto[data];
         return resto;
       });
+      this.retirarMarcacaoLocal(data);
     });
   }
 
@@ -636,6 +659,16 @@ export class PontoRetificarComponent implements OnInit {
     this.emVoo(data, req, (res: any) => {
       const salva: RetifSalva = res?.data;
       if (salva?.data) this.correcoes.update(m => ({ ...m, [salva.data]: salva }));
+      this.retirarMarcacaoLocal(data);
+    });
+  }
+
+  /** O gesto assumiu o dia no servidor: a marcação da administração não existe mais lá. */
+  private retirarMarcacaoLocal(data: string): void {
+    this.janela.update(dias => {
+      const dia = dias[data];
+      if (!dia?.marcacao_pessoal) return dias;
+      return { ...dias, [data]: { ...dia, marcacao_pessoal: null } };
     });
   }
 

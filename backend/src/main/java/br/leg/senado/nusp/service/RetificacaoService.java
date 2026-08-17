@@ -3,6 +3,7 @@ package br.leg.senado.nusp.service;
 import br.leg.senado.nusp.entity.PontoDiaMarcacao;
 import br.leg.senado.nusp.entity.PontoLote;
 import br.leg.senado.nusp.entity.PontoLotePagina;
+import br.leg.senado.nusp.entity.PontoPessoaMarcacao;
 import br.leg.senado.nusp.entity.PontoRetificacao;
 import br.leg.senado.nusp.entity.PontoTipoMarcacao;
 import br.leg.senado.nusp.exception.ServiceValidationException;
@@ -10,6 +11,7 @@ import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoFolhaLinhaRepository;
 import br.leg.senado.nusp.repository.PontoLotePaginaRepository;
 import br.leg.senado.nusp.repository.PontoLoteRepository;
+import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoRetificacaoRepository;
 import br.leg.senado.nusp.repository.PontoTipoMarcacaoRepository;
 import lombok.RequiredArgsConstructor;
@@ -66,6 +68,7 @@ public class RetificacaoService {
     private final PontoLoteRepository loteRepo;
     private final PontoRetificacaoRepository retificacaoRepo;
     private final PontoDiaMarcacaoRepository diaMarcacaoRepo;
+    private final PontoPessoaMarcacaoRepository pessoaMarcacaoRepo;
     private final PontoTipoMarcacaoRepository tipoRepo;
     private final PontoFolhaLinhaRepository folhaLinhaRepo;
 
@@ -79,7 +82,10 @@ public class RetificacaoService {
      *
      * <p>Os dias cobrem o período da folha consultada, e o {@code aberto} de cada um responde só
      * pela janela de publicação — sábado, domingo e a marcação global chegam separados, porque a
-     * tela os desenha de outro jeito (dia bloqueado que exibe o nome da ocorrência).
+     * tela os desenha de outro jeito (dia bloqueado que exibe o nome da ocorrência). A marcação
+     * INDIVIDUAL viaja quando o tipo dela é visível ao funcionário: a tela mostra o dia como a
+     * administração o marcou, sem bloquear a correção — retificar por cima é o caminho de quem
+     * discorda.
      *
      * <p>A chave de LEITURA das retificações é a mesma da gravação — pessoa+tipo+dia —, recortada
      * pelo período da folha consultada e NÃO pela página que ancorou cada uma: duas folhas
@@ -94,12 +100,15 @@ public class RetificacaoService {
         Map<String, PontoTipoMarcacao> catalogo = catalogoPorId();
 
         Map<LocalDate, String> globais = marcacoesGlobais(lote.getDataInicio(), lote.getDataFim(), catalogo);
+        Map<LocalDate, String> pessoais = marcacoesPessoais(solicitanteId, pessoaTipo,
+                lote.getDataInicio(), lote.getDataFim(), catalogo);
         List<Map<String, Object>> dias = new ArrayList<>();
         for (LocalDate d = lote.getDataInicio(); !d.isAfter(lote.getDataFim()); d = d.plusDays(1)) {
             Map<String, Object> dia = new LinkedHashMap<>();
             dia.put("data", d.toString());
             dia.put("aberto", fa.janela().aberto(d));
             dia.put("marcacao_global", globais.get(d));
+            dia.put("marcacao_pessoal", pessoais.get(d));
             dias.add(dia);
         }
 
@@ -125,7 +134,8 @@ public class RetificacaoService {
      * {@code ent1|sai1|ent2|sai2} e {@code valor} em HH:MM.
      *
      * <p>Os demais horários já retificados do dia permanecem; a declaração de ocorrência, se
-     * havia, sai — o dia passa a ser de horários.
+     * havia, sai — o dia passa a ser de horários. A ocorrência individual que o administrador
+     * marcou com tipo visível sai junto: o gesto do funcionário assume o dia.
      *
      * <p>A ordem do dia é conferida sobre o par EFETIVO: o que está sendo gravado, o que a pessoa
      * já havia retificado e, no que sobrar, o que a folha imprimiu.
@@ -147,12 +157,14 @@ public class RetificacaoService {
         aplicar(r, campo, valor);
         exigirOrdem(r, fa, data);
 
+        assumirODia(solicitanteId, fa.pagina().getPessoaTipo(), data);
         return gravar(r, null);
     }
 
     /**
      * Declara uma ocorrência do catálogo para o dia inteiro: {@code {"data", "tipo_id"}}. Os quatro
-     * horários do dia são zerados — a célula passa a ser o texto do tipo.
+     * horários do dia são zerados — a célula passa a ser o texto do tipo — e a ocorrência que o
+     * administrador tiver marcado com tipo visível sai: a declaração assume o dia.
      *
      * <p>Só entra tipo marcado como visível ao funcionário; o resto do catálogo é do
      * administrador, e pedi-lo por id não o torna disponível.
@@ -174,12 +186,15 @@ public class RetificacaoService {
         r.setSai2(null);
         r.setTipoId(tipo.getId());
 
+        assumirODia(solicitanteId, fa.pagina().getPessoaTipo(), data);
         return gravar(r, tipo);
     }
 
     /**
      * Apaga a retificação do dia — o equivalente a esvaziar a célula da planilha: o dia volta a
-     * valer o que a folha oficial trouxe, sem deixar registro de que houve correção.
+     * valer o que a folha oficial trouxe, sem deixar registro de que houve correção. A ocorrência
+     * individual que o administrador marcou com tipo visível sai junto — e sozinha ela também se
+     * limpa: para o funcionário, aquela marcação é uma declaração feita por outra mão.
      *
      * <p>Apagar cobra menos que escrever: basta a janela estar aberta. O que impede de ESCREVER
      * num dia — o fim de semana, a ocorrência que o administrador marcou para todos — pode ter
@@ -191,14 +206,36 @@ public class RetificacaoService {
         LocalDate data = parseData(dataTexto == null ? "" : dataTexto.strip());
         exigirJanelaAberta(fa, data);
 
-        PontoRetificacao r = retificacaoDoDia(solicitanteId, fa.pagina().getPessoaTipo(), data)
-                .orElseThrow(() -> new ServiceValidationException("Retificação não encontrada.",
-                        HttpStatus.NOT_FOUND));
-        retificacaoRepo.delete(r);
+        String pessoaTipo = fa.pagina().getPessoaTipo();
+        Optional<PontoRetificacao> r = retificacaoDoDia(solicitanteId, pessoaTipo, data);
+        Optional<PontoPessoaMarcacao> marcacao = marcacaoVisivelDoDia(solicitanteId, pessoaTipo, data);
+        if (r.isEmpty() && marcacao.isEmpty()) {
+            throw new ServiceValidationException("Retificação não encontrada.", HttpStatus.NOT_FOUND);
+        }
+        r.ifPresent(retificacaoRepo::delete);
+        marcacao.ifPresent(pessoaMarcacaoRepo::delete);
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("data", data.toString());
         return out;
+    }
+
+    /**
+     * O gesto do funcionário assume o dia: a ocorrência individual marcada com tipo visível sai
+     * junto. Mantê-la por baixo faria o dia reaparecer marcado depois de uma limpeza e seguir
+     * recusando solicitação de folga. A de tipo não visível fica — ela nem aparece na folha dele.
+     */
+    private void assumirODia(String pessoaId, String pessoaTipo, LocalDate data) {
+        marcacaoVisivelDoDia(pessoaId, pessoaTipo, data).ifPresent(pessoaMarcacaoRepo::delete);
+    }
+
+    /** A marcação individual do dia cujo tipo o funcionário enxerga — a única que os gestos dele alcançam. */
+    private Optional<PontoPessoaMarcacao> marcacaoVisivelDoDia(String pessoaId, String pessoaTipo,
+                                                               LocalDate data) {
+        return pessoaMarcacaoRepo.findByPessoaIdAndPessoaTipoAndData(pessoaId, pessoaTipo, data)
+                .filter(m -> tipoRepo.findById(m.getTipoId())
+                        .map(t -> Boolean.TRUE.equals(t.getVisivelFuncionario()))
+                        .orElse(false));
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -287,6 +324,25 @@ public class RetificacaoService {
                 .findByDataGreaterThanEqualAndDataLessThanOrderByData(inicio, fim.plusDays(1))) {
             PontoTipoMarcacao tipo = catalogo.get(m.getTipoId());
             if (tipo != null) out.put(m.getData(), tipo.getNome());
+        }
+        return out;
+    }
+
+    /**
+     * As ocorrências individuais da pessoa no período, só as de tipo visível ao funcionário — as
+     * demais são assunto interno da administração e não viajam à tela dele.
+     */
+    private Map<LocalDate, String> marcacoesPessoais(String pessoaId, String pessoaTipo,
+                                                     LocalDate inicio, LocalDate fim,
+                                                     Map<String, PontoTipoMarcacao> catalogo) {
+        Map<LocalDate, String> out = new HashMap<>();
+        for (PontoPessoaMarcacao m : pessoaMarcacaoRepo
+                .findByPessoaIdAndPessoaTipoAndDataGreaterThanEqualAndDataLessThan(
+                        pessoaId, pessoaTipo, inicio, fim.plusDays(1))) {
+            PontoTipoMarcacao tipo = catalogo.get(m.getTipoId());
+            if (tipo != null && Boolean.TRUE.equals(tipo.getVisivelFuncionario())) {
+                out.put(m.getData(), tipo.getNome());
+            }
         }
         return out;
     }

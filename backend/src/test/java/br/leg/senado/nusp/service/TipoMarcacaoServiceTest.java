@@ -91,7 +91,7 @@ class TipoMarcacaoServiceTest {
         return t;
     }
 
-    /** O tipo que o funcionário escolhe ao retificar o próprio dia — está no catálogo, mas não é do admin. */
+    /** O tipo que o funcionário também escolhe ao retificar o próprio dia, além do uso normal do admin. */
     private static PontoTipoMarcacao tipoDoFuncionario(String id, String nome, String badge, String escopo) {
         PontoTipoMarcacao t = tipo(id, nome, badge, escopo);
         t.setVisivelFuncionario(true);
@@ -213,12 +213,12 @@ class TipoMarcacaoServiceTest {
             assertEquals(List.of("Feriado", "Férias", "Recesso"),
                     tipos.stream().map(t -> t.get("nome")).toList());
             assertEquals(Map.of("id", "t1", "nome", "Feriado", "badge", "Fer", "escopo", "GLOBAL",
-                            "visivel_funcionario", false),
+                            "visivel_funcionario", false, "conta_folga", false),
                     tipos.get(0));
         }
 
         @Test
-        @DisplayName("o resumo diz quais tipos são do funcionário — os que a tela não oferece ao administrador")
+        @DisplayName("o resumo diz quais tipos o funcionário também declara ao retificar a folha")
         void resumoMarcaOTipoDoFuncionario() {
             when(tipoRepo.findAll()).thenReturn(List.of(
                     tipo("t1", "Feriado", "Fer", "GLOBAL"),
@@ -396,6 +396,38 @@ class TipoMarcacaoServiceTest {
                             MASTER, CALLER_ID));
 
             assertEquals("Não foi possível concluir a operação.", ex.getMessage());
+        }
+
+        @Test
+        @DisplayName("as marcas de visível ao funcionário e de contar folga são gravadas no tipo individual")
+        void cadastraTipoComAsMarcasDoFuncionario() {
+            when(tipoRepo.findByNomeNormInOrBadgeNormIn(anyCollection(), anyCollection()))
+                    .thenReturn(List.of());
+
+            service.criar(Map.of("tipos", List.of(Map.of(
+                    "nome", "Compensação", "badge", "Cmp", "escopo", "INDIVIDUAL",
+                    "visivel_funcionario", true, "conta_folga", true))), MASTER, CALLER_ID);
+
+            verify(tipoRepo).saveAllAndFlush(tiposSalvos.capture());
+            PontoTipoMarcacao salvo = tiposSalvos.getValue().get(0);
+            assertEquals(Boolean.TRUE, salvo.getVisivelFuncionario());
+            assertEquals(Boolean.TRUE, salvo.getContaFolga());
+        }
+
+        @Test
+        @DisplayName("tipo de todos não leva as marcas do funcionário — declarar e folgar do banco são gestos individuais")
+        void tipoGlobalNaoAceitaAsMarcas() {
+            for (Map<String, Object> item : List.of(
+                    Map.<String, Object>of("nome", "Luto", "badge", "Lut", "escopo", "GLOBAL",
+                            "visivel_funcionario", true),
+                    Map.<String, Object>of("nome", "Luto", "badge", "Lut", "escopo", "GLOBAL",
+                            "conta_folga", true))) {
+                ServiceValidationException ex = assertThrows(ServiceValidationException.class,
+                        () -> service.criar(Map.of("tipos", List.of(item)), MASTER, CALLER_ID));
+                assertEquals("Somente tipos individuais podem ser visíveis para os funcionários"
+                        + " ou contar como folga.", ex.getMessage());
+            }
+            verify(tipoRepo, never()).saveAllAndFlush(any());
         }
 
         private String erroDoCadastro(Map<String, Object> item) {
@@ -601,23 +633,22 @@ class TipoMarcacaoServiceTest {
         }
 
         @Test
-        @DisplayName("o tipo que o funcionário declara não é excluível, e a recusa não apaga nada")
-        void tipoVisivelAoFuncionarioNaoEhExcluivel() {
+        @DisplayName("o tipo que o funcionário declara é excluível como qualquer outro, levando as declarações junto")
+        void tipoVisivelAoFuncionarioEhExcluivel() {
             PontoTipoMarcacao alvo = tipoDoFuncionario("t9", "Banco de horas", "Ban", "INDIVIDUAL");
+            List<PontoRetificacao> declaracoes =
+                    List.of(retificado("op-1", "OPERADOR", LocalDate.of(2026, 7, 10), "t9"));
             when(tipoRepo.lockPorId("t9")).thenReturn(java.util.Optional.of(alvo));
+            when(pessoaRepo.findByTipoIdOrderByData("t9")).thenReturn(List.of());
+            when(retificacaoRepo.findByTipoIdOrderByData("t9")).thenReturn(declaracoes);
+            when(pessoaCadastro.nome("op-1", "OPERADOR")).thenReturn("Bruno Alves");
 
-            ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                    () -> service.excluir("t9", MASTER, CALLER_ID));
+            Map<String, Object> resumo = service.excluir("t9", MASTER, CALLER_ID);
 
-            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-            assertEquals("Este tipo não pode ser excluído.", ex.getMessage());
-            verify(tipoRepo, never()).delete(any());
-            verify(diaRepo, never()).deleteAll(any());
-            verify(pessoaRepo, never()).deleteAll(any());
-            verify(retificacaoRepo, never()).deleteAll(any());
-            // A recusa vem antes do levantamento: nem as linhas são lidas, e não há o que registrar.
-            verify(retificacaoRepo, never()).findByTipoIdOrderByData(anyString());
-            verifyNoInteractions(trilhaRepo, pessoaCadastro);
+            assertEquals(1, resumo.get("retificacoes"));
+            verify(retificacaoRepo).deleteAll(declaracoes);
+            verify(tipoRepo).delete(alvo);
+            verify(trilhaRepo).save(any());
         }
 
         @Test

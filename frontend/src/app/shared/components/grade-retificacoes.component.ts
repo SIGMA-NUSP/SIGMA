@@ -348,13 +348,10 @@ export class GradeRetificacoesComponent implements OnInit {
    */
   private seqContexto = 0;
 
-  /**
-   * Escopo do catálogo correspondente ao que está sendo marcado. O tipo que o funcionário declara
-   * na própria folha fica de fora: marcá-lo aqui contaria como folga um dia que ninguém declarou.
-   */
+  /** Escopo do catálogo correspondente ao que está sendo marcado. */
   private tiposDoEscopo = computed(() => {
     const escopo = this.alvo()?.escopo === 'dia' ? 'GLOBAL' : 'INDIVIDUAL';
-    return this.tipos().filter(t => t.escopo === escopo && !t.visivel_funcionario);
+    return this.tipos().filter(t => t.escopo === escopo);
   });
 
   /** Opções do popover: "Nenhuma" (que desmarca) primeiro, depois os tipos do escopo. */

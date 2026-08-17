@@ -21,17 +21,18 @@ import { ToastService } from './toast.component';
 
 /** Catálogo representativo de `GET /api/admin/ponto/tipos-marcacao` (dois escopos). */
 const CATALOGO: TipoMarcacao[] = [
-  { id: 't-1', nome: 'Feriado', badge: 'FER', escopo: 'GLOBAL', visivel_funcionario: false },
-  { id: 't-2', nome: 'Ponto Facultativo', badge: 'PF', escopo: 'GLOBAL', visivel_funcionario: false },
-  { id: 't-3', nome: 'Férias', badge: 'FÉ', escopo: 'INDIVIDUAL', visivel_funcionario: false },
-  { id: 't-4', nome: 'Atestado', badge: 'AT', escopo: 'INDIVIDUAL', visivel_funcionario: false },
-  // Declarado pelo funcionário na própria folha: não é ocorrência do administrador e não se exclui.
-  { id: 't-5', nome: 'Banco de horas', badge: 'Ban', escopo: 'INDIVIDUAL', visivel_funcionario: true },
+  { id: 't-1', nome: 'Feriado', badge: 'FER', escopo: 'GLOBAL', visivel_funcionario: false, conta_folga: false },
+  { id: 't-2', nome: 'Ponto Facultativo', badge: 'PF', escopo: 'GLOBAL', visivel_funcionario: false, conta_folga: false },
+  { id: 't-3', nome: 'Férias', badge: 'FÉ', escopo: 'INDIVIDUAL', visivel_funcionario: false, conta_folga: false },
+  { id: 't-4', nome: 'Atestado', badge: 'AT', escopo: 'INDIVIDUAL', visivel_funcionario: false, conta_folga: false },
+  // O funcionário também o declara na própria folha; para o admin é um tipo como qualquer outro.
+  { id: 't-5', nome: 'Banco de horas', badge: 'Ban', escopo: 'INDIVIDUAL', visivel_funcionario: true, conta_folga: true },
 ];
 
 /** Preview de exclusão de um tipo INDIVIDUAL: conta marcações E funcionários atingidos. */
 const PREVIEW_INDIVIDUAL = {
-  tipo: { id: 't-3', nome: 'Férias', badge: 'FÉ', escopo: 'INDIVIDUAL' as const, visivel_funcionario: false },
+  tipo: { id: 't-3', nome: 'Férias', badge: 'FÉ', escopo: 'INDIVIDUAL' as const,
+    visivel_funcionario: false, conta_folga: false },
   marcacoes: 12,
   retificacoes: 0,
   pessoas_afetadas: 2,
@@ -40,7 +41,8 @@ const PREVIEW_INDIVIDUAL = {
 
 /** Preview de um tipo GERAL: não há funcionário específico atingido. */
 const PREVIEW_GLOBAL = {
-  tipo: { id: 't-1', nome: 'Feriado', badge: 'FER', escopo: 'GLOBAL' as const, visivel_funcionario: false },
+  tipo: { id: 't-1', nome: 'Feriado', badge: 'FER', escopo: 'GLOBAL' as const,
+    visivel_funcionario: false, conta_folga: false },
   marcacoes: 3,
   retificacoes: 0,
   pessoas_afetadas: 0,
@@ -201,7 +203,7 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
     it('Individual lista só os tipos INDIVIDUAL', () => {
       const { comp } = criarCarregado();
       comp.trocarEscopo('INDIVIDUAL');
-      expect(comp.tiposDoEscopo().map(t => t.nome)).toEqual(['Férias', 'Atestado']);
+      expect(comp.tiposDoEscopo().map(t => t.nome)).toEqual(['Férias', 'Atestado', 'Banco de horas']);
     });
 
     it('escopo sem nenhum tipo cadastrado devolve lista vazia', () => {
@@ -211,11 +213,10 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
       expect(comp.tiposDoEscopo()).toEqual([]);
     });
 
-    it('o tipo que o funcionário declara não é listado — não se cadastra nem se exclui por aqui', () => {
+    it('o tipo que o funcionário declara aparece na lista como qualquer outro do escopo', () => {
       const { comp } = criarCarregado();
       comp.trocarEscopo('INDIVIDUAL');
-      expect(comp.tipos().some(t => t.nome === 'Banco de horas')).toBe(true);
-      expect(comp.tiposDoEscopo().map(t => t.nome)).not.toContain('Banco de horas');
+      expect(comp.tiposDoEscopo().map(t => t.nome)).toContain('Banco de horas');
     });
   });
 
@@ -308,7 +309,8 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
       const { comp } = criarIncluindo();
       digitarPendente(comp, 'Recesso', 'REC');
 
-      expect(comp.pendentes()).toEqual([{ nome: 'Recesso', badge: 'REC' }]);
+      expect(comp.pendentes()).toEqual([
+        { nome: 'Recesso', badge: 'REC', visivel_funcionario: false, conta_folga: false }]);
       expect(comp.nomeNovo()).toBe('');
       expect(comp.badgeNovo()).toBe('');
       expect(comp.erro()).toBe('');
@@ -337,7 +339,8 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
     it('espaços em excesso no nome são colapsados antes de guardar', () => {
       const { comp } = criarIncluindo();
       digitarPendente(comp, '  Recesso   Branco  ', ' RB ');
-      expect(comp.pendentes()).toEqual([{ nome: 'Recesso Branco', badge: 'RB' }]);
+      expect(comp.pendentes()).toEqual([
+        { nome: 'Recesso Branco', badge: 'RB', visivel_funcionario: false, conta_folga: false }]);
     });
 
     it('nome com mais de 20 caracteres é recusado com mensagem e nada entra na lista', () => {
@@ -427,7 +430,8 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
       digitarPendente(comp, 'Recesso', 'REC');
 
       expect(comp.erro()).toBe('');
-      expect(comp.pendentes()).toEqual([{ nome: 'Recesso', badge: 'REC' }]);
+      expect(comp.pendentes()).toEqual([
+        { nome: 'Recesso', badge: 'REC', visivel_funcionario: false, conta_folga: false }]);
     });
 
     it('remover um pendente tira só ele da lista', () => {
@@ -449,6 +453,37 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
       expect(comp.pendentes()).toEqual([]);
       expect(comp.podeAplicar()).toBe(false);
     });
+
+    it('as marcas escolhidas nos checkboxes acompanham o pendente do escopo Individual', () => {
+      const { comp } = criarIncluindo('INDIVIDUAL');
+      comp.visivelNovo.set(true);
+      comp.contaFolgaNovo.set(true);
+      digitarPendente(comp, 'Compensação', 'CMP');
+
+      expect(comp.pendentes()).toEqual([
+        { nome: 'Compensação', badge: 'CMP', visivel_funcionario: true, conta_folga: true }]);
+    });
+
+    it('no escopo Geral as marcas saem sempre desligadas — os checkboxes nem aparecem lá', () => {
+      const { comp } = criarIncluindo('GLOBAL');
+      comp.visivelNovo.set(true);
+      comp.contaFolgaNovo.set(true);
+      digitarPendente(comp, 'Luto', 'LUT');
+
+      expect(comp.pendentes()).toEqual([
+        { nome: 'Luto', badge: 'LUT', visivel_funcionario: false, conta_folga: false }]);
+    });
+
+    it('trocar de escopo zera também os checkboxes das marcas', () => {
+      const { comp } = criarIncluindo('INDIVIDUAL');
+      comp.visivelNovo.set(true);
+      comp.contaFolgaNovo.set(true);
+
+      comp.trocarEscopo('GLOBAL');
+
+      expect(comp.visivelNovo()).toBe(false);
+      expect(comp.contaFolgaNovo()).toBe(false);
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════
@@ -463,7 +498,8 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
       comp.aplicar();
 
       expect(apiPost).toHaveBeenCalledWith('/api/admin/ponto/tipos-marcacao', {
-        tipos: [{ nome: 'Recesso', badge: 'REC', escopo: 'GLOBAL' }],
+        tipos: [{ nome: 'Recesso', badge: 'REC', escopo: 'GLOBAL',
+          visivel_funcionario: false, conta_folga: false }],
       });
       expect(toastSuccess).toHaveBeenCalledWith('Tipo cadastrado.');
       expect(alterou).toHaveBeenCalledTimes(1);
@@ -482,11 +518,28 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
 
       expect(apiPost).toHaveBeenCalledWith('/api/admin/ponto/tipos-marcacao', {
         tipos: [
-          { nome: 'Licença', badge: 'LIC', escopo: 'INDIVIDUAL' },
-          { nome: 'Curso', badge: 'CUR', escopo: 'INDIVIDUAL' },
+          { nome: 'Licença', badge: 'LIC', escopo: 'INDIVIDUAL',
+            visivel_funcionario: false, conta_folga: false },
+          { nome: 'Curso', badge: 'CUR', escopo: 'INDIVIDUAL',
+            visivel_funcionario: false, conta_folga: false },
         ],
       });
       expect(toastSuccess).toHaveBeenCalledWith('Tipos cadastrados.'); // plural com 2+
+    });
+
+    it('as marcas escolhidas para o tipo individual vão no corpo do POST', () => {
+      const { comp } = criarCarregado();
+      comp.trocarEscopo('INDIVIDUAL');
+      comp.trocarOperacao('incluir');
+      comp.visivelNovo.set(true);
+      digitarPendente(comp, 'Compensação', 'CMP');
+
+      comp.aplicar();
+
+      expect(apiPost).toHaveBeenCalledWith('/api/admin/ponto/tipos-marcacao', {
+        tipos: [{ nome: 'Compensação', badge: 'CMP', escopo: 'INDIVIDUAL',
+          visivel_funcionario: true, conta_folga: false }],
+      });
     });
 
     it('erro do servidor: a mensagem fica na tela e o rascunho NÃO é perdido', () => {
@@ -596,6 +649,15 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
       comp.marcarParaExcluir(comp.tipos()[0]);
 
       expect(comp.marcadoId()).toBe('');
+    });
+
+    it('o tipo que o funcionário declara também se marca para excluir', () => {
+      const { comp } = criarCarregado();
+      comp.trocarEscopo('INDIVIDUAL');
+      marcar(comp, 't-5');
+
+      expect(comp.marcadoId()).toBe('t-5');
+      expect(comp.podeAplicar()).toBe(true);
     });
   });
 
@@ -905,7 +967,19 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
       radio(fixture, 'escopo', 'INDIVIDUAL').click();
       fixture.detectChanges();
 
-      expect(chips(fixture)).toEqual(['Férias FÉ', 'Atestado AT']);
+      // as tags do chip dizem as marcas do tipo: visível aos funcionários e/ou conta folga
+      expect(chips(fixture)).toEqual(['Férias FÉ', 'Atestado AT', 'Banco de horas BanFuncionáriosFolga']);
+    });
+
+    it('os checkboxes das marcas só aparecem no modo Incluir do escopo Individual', () => {
+      const fixture = renderizar();
+      radio(fixture, 'operacao', 'incluir').click();
+      fixture.detectChanges();
+      expect(fixture.debugElement.query(By.css('.flags'))).toBeNull(); // escopo Geral
+
+      radio(fixture, 'escopo', 'INDIVIDUAL').click();
+      fixture.detectChanges();
+      expect(fixture.debugElement.queryAll(By.css('.flags input[type="checkbox"]'))).toHaveLength(2);
     });
 
     it('escopo sem tipos mostra "Nenhum tipo cadastrado"', () => {
@@ -1046,7 +1120,8 @@ describe('ConfigurarTiposMarcacaoComponent', () => {
       btnAplicar(fixture)!.click();
 
       expect(apiPost).toHaveBeenCalledWith('/api/admin/ponto/tipos-marcacao', {
-        tipos: [{ nome: 'Recesso', badge: 'REC', escopo: 'GLOBAL' }],
+        tipos: [{ nome: 'Recesso', badge: 'REC', escopo: 'GLOBAL',
+          visivel_funcionario: false, conta_folga: false }],
       });
     });
 

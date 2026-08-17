@@ -50,8 +50,9 @@ import java.util.stream.Stream;
  * <p>A retificação chega de duas formas. Em horários, o funcionário corrige as
  * células que quiser, e a grade mostra o dia EFETIVO — o que ele digitou sobre o
  * que a folha imprimiu, sem distinguir a origem. Em ocorrência declarada, o dia
- * inteiro vira o nome do tipo; o tipo que vale como folga do banco fica idêntico
- * à folga aprovada, no texto e na contagem.
+ * inteiro vira o nome do tipo; o tipo que vale como folga do banco entra na
+ * mesma contagem da folga aprovada — assim como a marcação do administrador
+ * feita com um tipo desses.
  *
  * {@link #montarGrade} devolve a estrutura tipada (fonte única) consumida por
  * {@link #montar} (payload JSON da grade) e pela exportação XLSX — a
@@ -61,10 +62,10 @@ import java.util.stream.Stream;
 @RequiredArgsConstructor
 public class GradeRetificacaoService {
 
-    /** Texto da célula de folga aprovada — o XLSX conta as folgas do mês por ele. */
+    /** Texto da célula de folga aprovada — um dos textos que a contagem "Folgas" soma. */
     public static final String TEXTO_BANCO_DE_HORAS = "Banco de horas";
 
-    /** Célula do dia que veio como folga do banco — é o que a contagem "Folgas" soma. */
+    /** Célula do dia que veio como folga do banco: a aprovada ou a declarada pelo funcionário. */
     private static final String CELULA_BANCO = "banco";
 
     /**
@@ -104,10 +105,14 @@ public class GradeRetificacaoService {
                       String marcacaoGlobal, String marcacaoGlobalId) {}
     /** Um funcionário da categoria + os dias de folga do mês: as aprovadas e as que ele declarou. */
     public record Funcionario(String id, String nome, int folgas) {}
-    /** Grade completa do mês para uma categoria. `celulas` = pessoaId → dia → célula (só as preenchidas). */
+    /**
+     * Grade completa do mês para uma categoria. `celulas` = pessoaId → dia → célula (só as
+     * preenchidas). `textosFolga` = os textos de célula que a contagem "Folgas" soma — a mesma
+     * lista com que o XLSX monta a fórmula, para a grade e o arquivo nunca divergirem.
+     */
     public record Grade(String categoria, int ano, int mes, int diasNoMes,
                         List<Funcionario> funcionarios, List<Dia> dias,
-                        Map<String, Map<Integer, Celula>> celulas) {}
+                        Map<String, Map<Integer, Celula>> celulas, List<String> textosFolga) {}
 
     /** Payload JSON da grade (E10). */
     @Transactional(readOnly = true)
@@ -186,11 +191,20 @@ public class GradeRetificacaoService {
 
         // ── funcionários (com contagem de folgas) + células resolvidas por precedência ──
         //
-        // Folga aprovada e "Banco de horas" declarado são a mesma coisa na planilha: o dia sai da
-        // escala, e o dia que tem os dois conta uma vez. A conta é a das CÉLULAS de banco, a mesma
-        // que a planilha faz procurando o texto na coluna — assim a grade e o arquivo exportado
-        // nunca dizem números diferentes. Dia em que a folga aprovada foi coberta por horários
+        // A conta das folgas é pelo TEXTO da célula: o da folga aprovada e os nomes dos tipos que
+        // contam folga — de onde quer que a célula venha (folga aprovada, declaração do funcionário
+        // ou marcação do administrador). É a mesma lista com que a planilha monta os COUNTIF, então
+        // a grade e o arquivo exportado nunca dizem números diferentes; o dia que reúne mais de uma
+        // origem conta uma vez, porque é uma célula só. Dia em que a folga foi coberta por horários
         // corrigidos não conta: a pessoa trabalhou.
+        List<String> textosFolga = Stream.concat(
+                        Stream.of(TEXTO_BANCO_DE_HORAS),
+                        catalogo.values().stream()
+                                .filter(t -> Boolean.TRUE.equals(t.getContaFolga()))
+                                .map(PontoTipoMarcacao::getNome))
+                .distinct()
+                .sorted(NativeQueryUtils.ORDEM_TEXTO_PT_BR)
+                .toList();
         List<Funcionario> funcionarios = new ArrayList<>();
         Map<String, Map<Integer, Celula>> celulas = new LinkedHashMap<>();
         for (Func f : funcs) {
@@ -201,13 +215,13 @@ public class GradeRetificacaoService {
                         folgaIdx, pessoaIdx, globalIdx);
                 if (cel == null) continue;   // vazias são omitidas
                 linha.put(d, cel);
-                if (CELULA_BANCO.equals(cel.tipo())) folgasDoMes++;
+                if (textosFolga.contains(cel.texto())) folgasDoMes++;
             }
             funcionarios.add(new Funcionario(f.id(), f.nome(), folgasDoMes));
             if (!linha.isEmpty()) celulas.put(f.id(), linha);
         }
 
-        return new Grade(cat, ano, mes, diasNoMes, funcionarios, dias, celulas);
+        return new Grade(cat, ano, mes, diasNoMes, funcionarios, dias, celulas, textosFolga);
     }
 
     /**
@@ -239,7 +253,7 @@ public class GradeRetificacaoService {
 
     /**
      * A célula de um dia retificado. A ocorrência declarada pelo funcionário aparece pelo nome, e
-     * a que vale como folga do banco fica igual à folga aprovada — mesmo texto, mesma contagem. Os
+     * a que vale como folga do banco entra na mesma contagem da folga aprovada. Os
      * horários aparecem como o dia ficou: o que ele corrigiu por cima do que a folha imprimiu, em
      * texto liso, sem dizer de onde veio cada um.
      *
@@ -258,9 +272,8 @@ public class GradeRetificacaoService {
         if (r.getTipoId() != null) {
             PontoTipoMarcacao tipo = catalogo.get(r.getTipoId());
             if (tipo == null) return null;
-            return Boolean.TRUE.equals(tipo.getContaFolga())
-                    ? new Celula(CELULA_BANCO, TEXTO_BANCO_DE_HORAS, temObs, obs, null)
-                    : new Celula("ocorrencia", tipo.getNome(), temObs, obs, null);
+            return new Celula(Boolean.TRUE.equals(tipo.getContaFolga()) ? CELULA_BANCO : "ocorrencia",
+                    tipo.getNome(), temObs, obs, null);
         }
 
         String texto = horariosEmOrdem(HorariosDoDia.daRetificacao(r).sobre(daFolha));

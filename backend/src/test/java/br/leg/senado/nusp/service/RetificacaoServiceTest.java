@@ -3,6 +3,7 @@ package br.leg.senado.nusp.service;
 import br.leg.senado.nusp.entity.PontoDiaMarcacao;
 import br.leg.senado.nusp.entity.PontoLote;
 import br.leg.senado.nusp.entity.PontoLotePagina;
+import br.leg.senado.nusp.entity.PontoPessoaMarcacao;
 import br.leg.senado.nusp.entity.PontoRetificacao;
 import br.leg.senado.nusp.entity.PontoTipoMarcacao;
 import br.leg.senado.nusp.exception.ServiceValidationException;
@@ -10,6 +11,7 @@ import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoFolhaLinhaRepository;
 import br.leg.senado.nusp.repository.PontoLotePaginaRepository;
 import br.leg.senado.nusp.repository.PontoLoteRepository;
+import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoRetificacaoRepository;
 import br.leg.senado.nusp.repository.PontoTipoMarcacaoRepository;
 import org.junit.jupiter.api.Nested;
@@ -61,6 +63,7 @@ class RetificacaoServiceTest {
     @Mock private PontoLoteRepository loteRepo;
     @Mock private PontoRetificacaoRepository retificacaoRepo;
     @Mock private PontoDiaMarcacaoRepository diaMarcacaoRepo;
+    @Mock private PontoPessoaMarcacaoRepository pessoaMarcacaoRepo;
     @Mock private PontoTipoMarcacaoRepository tipoRepo;
     @Mock private PontoFolhaLinhaRepository folhaLinhaRepo;
 
@@ -174,6 +177,19 @@ class RetificacaoServiceTest {
         marcacao.setData(data);
         marcacao.setTipoId(tipo.getId());
         lenient().when(diaMarcacaoRepo.findByData(data)).thenReturn(Optional.of(marcacao));
+    }
+
+    /** A ocorrência individual que o administrador marcou para o dono naquele dia. */
+    private PontoPessoaMarcacao mockMarcacaoPessoal(LocalDate data, PontoTipoMarcacao tipo) {
+        mockCatalogo(tipo);
+        PontoPessoaMarcacao m = new PontoPessoaMarcacao();
+        m.setPessoaId(DONO);
+        m.setPessoaTipo("OPERADOR");
+        m.setData(data);
+        m.setTipoId(tipo.getId());
+        lenient().when(pessoaMarcacaoRepo.findByPessoaIdAndPessoaTipoAndData(DONO, "OPERADOR", data))
+                .thenReturn(Optional.of(m));
+        return m;
     }
 
     /** A retificação que já existe naquele dia. */
@@ -365,6 +381,47 @@ class RetificacaoServiceTest {
         }
 
         @Test
+        void aMarcacaoIndividualDeTipoVisivelVemComONomeESemFecharODia() {
+            mockFolha();
+            PontoTipoMarcacao banco = tipo(TIPO_BANCO, "Banco de horas", true, true);
+            mockCatalogo(banco);
+            when(pessoaMarcacaoRepo.findByPessoaIdAndPessoaTipoAndDataGreaterThanEqualAndDataLessThan(
+                    DONO, "OPERADOR", INICIO, FIM.plusDays(1)))
+                    .thenReturn(List.of(marcacaoPessoal(DIA, banco.getId())));
+
+            List<Map<String, Object>> dias = lista(service.listarRetificacoes(PAG, DONO), "dias");
+
+            assertEquals("Banco de horas", dias.get(14).get("marcacao_pessoal"));
+            assertNull(dias.get(13).get("marcacao_pessoal"));
+            // a marcação individual não fecha o dia: retificar por cima é o caminho de quem discorda
+            assertEquals(true, dias.get(14).get("aberto"));
+        }
+
+        @Test
+        void aMarcacaoIndividualDeTipoNaoVisivelNaoViaja() {
+            mockFolha();
+            PontoTipoMarcacao ferias = tipo("t-ferias", "Férias", false, false);
+            mockCatalogo(ferias);
+            when(pessoaMarcacaoRepo.findByPessoaIdAndPessoaTipoAndDataGreaterThanEqualAndDataLessThan(
+                    DONO, "OPERADOR", INICIO, FIM.plusDays(1)))
+                    .thenReturn(List.of(marcacaoPessoal(DIA, ferias.getId())));
+
+            List<Map<String, Object>> dias = lista(service.listarRetificacoes(PAG, DONO), "dias");
+
+            assertNull(dias.get(14).get("marcacao_pessoal"),
+                    "ocorrência interna da administração não aparece na folha do funcionário");
+        }
+
+        private PontoPessoaMarcacao marcacaoPessoal(LocalDate data, String tipoId) {
+            PontoPessoaMarcacao m = new PontoPessoaMarcacao();
+            m.setPessoaId(DONO);
+            m.setPessoaTipo("OPERADOR");
+            m.setData(data);
+            m.setTipoId(tipoId);
+            return m;
+        }
+
+        @Test
         void soOsTiposVisiveisAoFuncionarioViajam() {
             mockFolha();
             mockCatalogo(tipo(TIPO_BANCO, "Banco de horas", true, true),
@@ -528,6 +585,28 @@ class RetificacaoServiceTest {
             PontoRetificacao salva = capturarSalva();
             assertNull(salva.getTipoId());
             assertEquals("08:00", salva.getEnt1());
+        }
+
+        @Test
+        void digitarHorarioAssumeODiaMarcadoPeloAdministrador() {
+            mockFolha();
+            PontoPessoaMarcacao marcacao = mockMarcacaoPessoal(DIA, tipo(TIPO_BANCO, "Banco de horas", true, true));
+
+            service.salvarCelula(PAG, DONO, corpoCelula(DIA, "ent1", "08:00"));
+
+            // a marcação visível é a declaração feita por outra mão: o gesto do dono a substitui
+            verify(pessoaMarcacaoRepo).delete(marcacao);
+            assertEquals("08:00", capturarSalva().getEnt1());
+        }
+
+        @Test
+        void aMarcacaoDeTipoNaoVisivelFicaForaDoAlcanceDoFuncionario() {
+            mockFolha();
+            mockMarcacaoPessoal(DIA, tipo("t-ferias", "Férias", false, false));
+
+            service.salvarCelula(PAG, DONO, corpoCelula(DIA, "ent1", "08:00"));
+
+            verify(pessoaMarcacaoRepo, never()).delete(any());
         }
 
         @Test
@@ -713,6 +792,17 @@ class RetificacaoServiceTest {
         }
 
         @Test
+        void declararAssumeODiaMarcadoPeloAdministrador() {
+            mockFolha();
+            PontoPessoaMarcacao marcacao = mockMarcacaoPessoal(DIA, tipo(TIPO_BANCO, "Banco de horas", true, true));
+
+            service.salvarTipo(PAG, DONO, corpoTipo(DIA, TIPO_BANCO));
+
+            verify(pessoaMarcacaoRepo).delete(marcacao);
+            assertEquals(TIPO_BANCO, capturarSalva().getTipoId());
+        }
+
+        @Test
         void tipoQueNaoEhVisivelAoFuncionarioRecusa() {
             mockFolha();
             mockCatalogo(tipo("t-atestado", "Atestado", false, false));
@@ -794,6 +884,45 @@ class RetificacaoServiceTest {
 
             assertEquals(HttpStatus.NOT_FOUND, e.getStatus());
             verify(retificacaoRepo, never()).delete(any());
+        }
+
+        @Test
+        void limparApagaTambemAMarcacaoDoAdministrador() {
+            mockFolha();
+            PontoRetificacao r = mockRetificacaoDoDia(DIA, "08:00", null, null, null);
+            PontoPessoaMarcacao marcacao =
+                    mockMarcacaoPessoal(DIA, tipo(TIPO_BANCO, "Banco de horas", true, true));
+
+            service.limpar(PAG, DONO, DIA.toString());
+
+            verify(retificacaoRepo).delete(r);
+            verify(pessoaMarcacaoRepo).delete(marcacao);
+        }
+
+        @Test
+        void aMarcacaoVisivelSozinhaTambemSeLimpa() {
+            mockFolha();
+            PontoPessoaMarcacao marcacao =
+                    mockMarcacaoPessoal(DIA, tipo(TIPO_BANCO, "Banco de horas", true, true));
+
+            Map<String, Object> resposta = service.limpar(PAG, DONO, DIA.toString());
+
+            verify(pessoaMarcacaoRepo).delete(marcacao);
+            verify(retificacaoRepo, never()).delete(any());
+            assertEquals("2026-06-15", resposta.get("data"));
+        }
+
+        @Test
+        void aMarcacaoDeTipoNaoVisivelNaoSeLimpa() {
+            mockFolha();
+            mockMarcacaoPessoal(DIA, tipo("t-ferias", "Férias", false, false));
+
+            ServiceValidationException e = assertThrows(ServiceValidationException.class,
+                    () -> service.limpar(PAG, DONO, DIA.toString()));
+
+            // para o funcionário o dia está vazio: a ocorrência interna da administração fica de pé
+            assertEquals(HttpStatus.NOT_FOUND, e.getStatus());
+            verify(pessoaMarcacaoRepo, never()).delete(any());
         }
 
         @Test

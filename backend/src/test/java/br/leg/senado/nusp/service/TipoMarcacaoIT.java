@@ -100,7 +100,7 @@ class TipoMarcacaoIT {
         return m;
     }
 
-    /** Tipo que o funcionário escolhe ao retificar o próprio dia. */
+    /** Tipo que o funcionário também escolhe ao retificar o próprio dia. */
     private PontoTipoMarcacao tipoDoFuncionario(String nome, String badge) {
         PontoTipoMarcacao tipo = CenarioFactory.novoTipoMarcacao(
                 emReal(), nome, badge, PontoTipoMarcacao.ESCOPO_INDIVIDUAL);
@@ -318,8 +318,8 @@ class TipoMarcacaoIT {
     }
 
     @Test
-    @DisplayName("o tipo que o funcionário declara na própria folha não sai do catálogo")
-    void tipoVisivelAoFuncionarioNaoEExcluido() {
+    @DisplayName("o tipo que o funcionário declara na própria folha é excluível como qualquer outro")
+    void tipoVisivelAoFuncionarioEExcluido() {
         PontoTipoMarcacao tipo = tipoDoFuncionario("Banco", "Bnc");
         Operador op = CenarioFactory.novoOperador(emReal());
         declarar(folhaDe(op), op, LocalDate.of(2026, 7, 7), tipo);
@@ -328,15 +328,15 @@ class TipoMarcacaoIT {
         assertEquals(true, tipoDoRelatorio(preview).get("visivel_funcionario"));
         assertEquals(1, preview.get("retificacoes"));
 
-        ServiceValidationException ex = assertThrows(ServiceValidationException.class,
-                () -> service.excluir(tipo.getId(), MASTER, admin.getId()));
+        Map<String, Object> resumo = service.excluir(tipo.getId(), MASTER, admin.getId());
+        em.flush();
+        em.clear();
 
-        assertEquals("Este tipo não pode ser excluído.", ex.getMessage());
-        assertTrue(tipoRepo.findById(tipo.getId()).isPresent());
-        assertEquals(1, retificacaoRepo.findByTipoIdOrderByData(tipo.getId()).size(),
-                "a recusa não pode ter apagado a declaração de ninguém");
-        assertTrue(trilhaRepo.findByTipoIdOrderByExcluidoEmDesc(tipo.getId()).isEmpty(),
-                "exclusão que não aconteceu não deixa trilha");
+        assertEquals(1, resumo.get("retificacoes"));
+        assertFalse(tipoRepo.findById(tipo.getId()).isPresent());
+        assertTrue(retificacaoRepo.findByTipoIdOrderByData(tipo.getId()).isEmpty(),
+                "a declaração morre junto com o tipo que a nomeia");
+        assertEquals(1, trilhaRepo.findByTipoIdOrderByExcluidoEmDesc(tipo.getId()).size());
     }
 
     @Test
