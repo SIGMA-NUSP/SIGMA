@@ -33,9 +33,12 @@ import br.leg.senado.nusp.it.support.CenarioFactory;
 import br.leg.senado.nusp.it.support.OracleIT;
 import br.leg.senado.nusp.repository.AdministradorRepository;
 import br.leg.senado.nusp.repository.OperadorRepository;
+import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoFolhaLinhaRepository;
 import br.leg.senado.nusp.repository.PontoLotePaginaRepository;
 import br.leg.senado.nusp.repository.PontoLoteRepository;
+import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
+import br.leg.senado.nusp.repository.PontoRetificacaoRepository;
 import br.leg.senado.nusp.repository.TecnicoRepository;
 import jakarta.persistence.EntityManager;
 
@@ -66,6 +69,15 @@ class PontoPublicacaoGuardaIT {
     private PontoFolhaLinhaRepository folhaLinhaRepo;
 
     @Autowired
+    private PontoRetificacaoRepository retificacaoRepo;
+
+    @Autowired
+    private PontoDiaMarcacaoRepository diaMarcacaoRepo;
+
+    @Autowired
+    private PontoPessoaMarcacaoRepository pessoaMarcacaoRepo;
+
+    @Autowired
     private OperadorRepository operadorRepo;
 
     @Autowired
@@ -89,8 +101,9 @@ class PontoPublicacaoGuardaIT {
     void setUp() {
         // O lookup de existência é montado sobre os MESMOS repositórios reais: a checagem do
         // vínculo continua batendo no Oracle, não num mock.
-        service = new PontoService(loteRepo, paginaRepo, folhaLinhaRepo, operadorRepo, tecnicoRepo,
-                administradorRepo,
+        service = new PontoService(loteRepo, paginaRepo, folhaLinhaRepo,
+                retificacaoRepo, diaMarcacaoRepo, pessoaMarcacaoRepo,
+                operadorRepo, tecnicoRepo, administradorRepo,
                 avisoService, saldoAberturaService,
                 new PessoaCadastroLookup(operadorRepo, tecnicoRepo, administradorRepo));
         // Diretório inexistente de propósito: a extração do BANCO falha com WARN e não aborta nada.

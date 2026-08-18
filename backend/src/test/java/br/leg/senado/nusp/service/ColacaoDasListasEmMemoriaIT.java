@@ -107,6 +107,8 @@ class ColacaoDasListasEmMemoriaIT {
     void seletorDePessoas_ordenaEmPtBr() {
         semearNomesDoEspelhoDeProducao();
         PontoService ponto = new PontoService(loteRepo, paginaRepo, mock(PontoFolhaLinhaRepository.class),
+                mock(PontoRetificacaoRepository.class), mock(PontoDiaMarcacaoRepository.class),
+                mock(PontoPessoaMarcacaoRepository.class),
                 operadorRepo, tecnicoRepo,
                 administradorRepo, mock(AvisoService.class), mock(SaldoAberturaService.class),
                 new PessoaCadastroLookup(operadorRepo, tecnicoRepo, administradorRepo));

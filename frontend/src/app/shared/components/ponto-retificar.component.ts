@@ -108,9 +108,9 @@ interface EmEdicao { data: string; campo: CampoHora; }
  * ("Banco de horas"), que substitui os horários, e apaga a correção do dia, devolvendo-o à folha.
  *
  * <p><b>O que o dia aceita</b> vem do servidor: sábado e domingo nunca, o dia que o administrador
- * marcou para todos também não, e o resto depende da janela de publicação das folhas — que fecha
- * sozinha conforme novas folhas chegam. Sem essa resposta, NADA é editável: uma tela que deixasse
- * digitar e recusasse na gravação seria pior do que uma tela travada.
+ * marcou para todos também não, e o resto fica aberto até a folha mensal definitiva do período ser
+ * publicada. Sem essa resposta, NADA é editável: uma tela que deixasse digitar e recusasse na
+ * gravação seria pior do que uma tela travada.
  *
  * <p><b>A ocorrência individual marcada pela administração</b> (quando o tipo é dos que o
  * funcionário declara) aparece como faixa do dia inteiro, tracejada: o dia continua editável, e

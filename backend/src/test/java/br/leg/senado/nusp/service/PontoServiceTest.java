@@ -3,15 +3,21 @@ package br.leg.senado.nusp.service;
 import br.leg.senado.nusp.enums.PapelPessoa;
 import br.leg.senado.nusp.enums.SubtipoAviso;
 import br.leg.senado.nusp.entity.Operador;
+import br.leg.senado.nusp.entity.PontoDiaMarcacao;
 import br.leg.senado.nusp.entity.PontoFolhaLinha;
 import br.leg.senado.nusp.entity.PontoLote;
 import br.leg.senado.nusp.entity.PontoLotePagina;
+import br.leg.senado.nusp.entity.PontoPessoaMarcacao;
+import br.leg.senado.nusp.entity.PontoRetificacao;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.repository.AdministradorRepository;
 import br.leg.senado.nusp.repository.OperadorRepository;
+import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoFolhaLinhaRepository;
 import br.leg.senado.nusp.repository.PontoLotePaginaRepository;
 import br.leg.senado.nusp.repository.PontoLoteRepository;
+import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
+import br.leg.senado.nusp.repository.PontoRetificacaoRepository;
 import br.leg.senado.nusp.repository.TecnicoRepository;
 import com.lowagie.text.Document;
 import com.lowagie.text.Paragraph;
@@ -79,6 +85,9 @@ class PontoServiceTest {
     @Mock private PontoLoteRepository loteRepo;
     @Mock private PontoLotePaginaRepository paginaRepo;
     @Mock private PontoFolhaLinhaRepository folhaLinhaRepo;
+    @Mock private PontoRetificacaoRepository retificacaoRepo;
+    @Mock private PontoDiaMarcacaoRepository diaMarcacaoRepo;
+    @Mock private PontoPessoaMarcacaoRepository pessoaMarcacaoRepo;
     @Mock private OperadorRepository operadorRepo;
     @Mock private TecnicoRepository tecnicoRepo;
     @Mock private AdministradorRepository administradorRepo;
@@ -918,6 +927,175 @@ class PontoServiceTest {
             assertEquals(List.of(OP), avisadosDaFolha());
         }
 
+        // ── o dia já resolvido não é cobrado ──
+
+        /** Retificação de horários da pessoa num dia — o que ela mesma já corrigiu na folha. */
+        private static PontoRetificacao retificacao(String pessoaId, LocalDate data,
+                                                    String ent1, String sai1, String ent2, String sai2) {
+            PontoRetificacao r = new PontoRetificacao();
+            r.setPessoaId(pessoaId);
+            r.setPessoaTipo("OPERADOR");
+            r.setData(data);
+            r.setEnt1(ent1);
+            r.setSai1(sai1);
+            r.setEnt2(ent2);
+            r.setSai2(sai2);
+            return r;
+        }
+
+        /** Retificação que declara uma ocorrência para o dia inteiro, sem horários. */
+        private static PontoRetificacao declaracao(String pessoaId, LocalDate data) {
+            PontoRetificacao r = retificacao(pessoaId, data, null, null, null, null);
+            r.setTipoId("tipo-banco");
+            return r;
+        }
+
+        private void retificacoesNoPeriodo(PontoRetificacao... retificacoes) {
+            when(retificacaoRepo.findByPessoaTipoAndDataGreaterThanEqualAndDataLessThan(
+                    eq("OPERADOR"), any(), any())).thenReturn(Arrays.asList(retificacoes));
+        }
+
+        private void marcacaoGlobalEm(LocalDate data) {
+            PontoDiaMarcacao m = new PontoDiaMarcacao();
+            m.setData(data);
+            m.setTipoId("tipo-falta");
+            when(diaMarcacaoRepo.findByDataGreaterThanEqualAndDataLessThanOrderByData(any(), any()))
+                    .thenReturn(List.of(m));
+        }
+
+        private void marcacaoIndividualEm(String pessoaId, LocalDate data) {
+            PontoPessoaMarcacao m = new PontoPessoaMarcacao();
+            m.setPessoaId(pessoaId);
+            m.setPessoaTipo("OPERADOR");
+            m.setData(data);
+            m.setTipoId("tipo-falta");
+            when(pessoaMarcacaoRepo.findByPessoaTipoAndDataGreaterThanEqualAndDataLessThan(
+                    eq("OPERADOR"), any(), any())).thenReturn(List.of(m));
+        }
+
+        @Test
+        @DisplayName("a retificação que fecha o par cala o alerta do dia — quem corrigiu não é cobrado de novo")
+        void retificacaoQueFechaOParNaoAlerta() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(dia("pag-1", "08:00", "12:00", "13:00"));
+            retificacoesNoPeriodo(retificacao(OP, DIA_PADRAO, null, null, null, "17:00"));
+
+            service.publicar(LOTE, true, false, "master.teste");
+
+            nenhumAlerta();
+            assertEquals(List.of(OP), avisadosDaFolha());
+        }
+
+        @Test
+        @DisplayName("a ocorrência declarada pelo funcionário também cala o alerta do dia")
+        void ocorrenciaDeclaradaNaoAlerta() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(dia("pag-1", "08:00"));
+            retificacoesNoPeriodo(declaracao(OP, DIA_PADRAO));
+
+            service.publicar(LOTE, true, false, "master.teste");
+
+            nenhumAlerta();
+            assertEquals(List.of(OP), avisadosDaFolha());
+        }
+
+        @Test
+        @DisplayName("a retificação pela metade não cala nada: o par efetivo segue ímpar")
+        void retificacaoPelaMetadeContinuaAlertando() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(dia("pag-1", "08:00", "12:00", "13:00"));
+            // A pessoa só trocou uma batida que já existia — a saída que falta continua faltando.
+            retificacoesNoPeriodo(retificacao(OP, DIA_PADRAO, "07:00", null, null, null));
+
+            service.publicar(LOTE, true, false, "master.teste");
+
+            assertEquals(List.of(OP), alertados());
+        }
+
+        @Test
+        @DisplayName("a retificação de OUTRO dia não desconta o dia incompleto")
+        void retificacaoDeOutroDiaNaoDesconta() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(dia("pag-1", "08:00"));
+            retificacoesNoPeriodo(retificacao(OP, DIA_PADRAO.plusDays(1), null, null, null, "17:00"));
+
+            service.publicar(LOTE, true, false, "master.teste");
+
+            assertEquals(List.of(OP), alertados());
+        }
+
+        @Test
+        @DisplayName("dia com ocorrência marcada para todos não é cobrado — a pessoa nem pode retificá-lo")
+        void marcacaoGlobalNoDiaNaoAlerta() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(dia("pag-1", "08:00"));
+            marcacaoGlobalEm(DIA_PADRAO);
+
+            service.publicar(LOTE, true, false, "master.teste");
+
+            nenhumAlerta();
+            assertEquals(List.of(OP), avisadosDaFolha());
+        }
+
+        @Test
+        @DisplayName("dia com ocorrência marcada para a pessoa não é cobrado")
+        void marcacaoIndividualNoDiaNaoAlerta() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(dia("pag-1", "08:00"));
+            marcacaoIndividualEm(OP, DIA_PADRAO);
+
+            service.publicar(LOTE, true, false, "master.teste");
+
+            nenhumAlerta();
+            assertEquals(List.of(OP), avisadosDaFolha());
+        }
+
+        @Test
+        @DisplayName("com dois dias pela metade e um resolvido, o alerta cita só o que restou")
+        void soOsDiasNaoResolvidosSaoCitados() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(
+                    diaEm("pag-1", LocalDate.of(2026, 6, 2), "08:00"),
+                    diaEm("pag-1", LocalDate.of(2026, 6, 4), "08:00", "12:00", "13:00"));
+            retificacoesNoPeriodo(retificacao(OP, LocalDate.of(2026, 6, 2), null, "12:00", null, null));
+
+            service.publicar(LOTE, true, false, "master.teste");
+
+            assertEquals(List.of("O dia 04/06 da sua folha está sem registro de entrada ou de saída."),
+                    diasQueCadaUmLe());
+        }
+
+        @Test
+        @DisplayName("o dia sem data legível não tem como estar resolvido: segue sendo cobrado")
+        void diaSemDataNaoTemComoEstarResolvido() {
+            loteSemanalDe(OP);
+            folhasComAsLinhas(diaSemData("pag-1", "03/06/26 - qua", "08:00"));
+            retificacoesNoPeriodo(retificacao(OP, DIA_PADRAO, null, "12:00", null, null));
+
+            service.publicar(LOTE, true, false, "master.teste");
+
+            assertEquals(List.of(OP), alertados());
+        }
+
+        @Test
+        @DisplayName("a resolução alcança até o dia impresso fora do período declarado do lote")
+        void diaImpressoForaDoPeriodoTambemDesconta() {
+            loteSemanalDe(OP);
+            // O período é digitado no envio, sem conferência contra o PDF: a folha pode imprimir
+            // além dele, e a consulta das retificações precisa esticar até o dia impresso.
+            folhasComAsLinhas(diaEm("pag-1", LocalDate.of(2026, 6, 8), "08:00"));
+            when(retificacaoRepo.findByPessoaTipoAndDataGreaterThanEqualAndDataLessThan(
+                    "OPERADOR", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 9)))
+                    .thenReturn(List.of(retificacao(OP, LocalDate.of(2026, 6, 8), null, "12:00", null, null)));
+
+            service.publicar(LOTE, true, false, "master.teste");
+
+            nenhumAlerta();
+            assertEquals(List.of(OP), avisadosDaFolha());
+        }
+
+        // ── quem recebe o quê ──
+
         @Test
         @DisplayName("o alerta endereça o papel de cada pessoa: técnico e administrador também têm folha")
         void alertaEnderecaOPapelDaPessoa() {
@@ -1043,8 +1221,8 @@ class PontoServiceTest {
 
             service.publicar(LOTE, false, false, "master.teste");
 
-            // O alerta existe para provocar a correção enquanto o prazo corre: publicar em silêncio
-            // não pode calar justamente o aviso que pede uma providência.
+            // O alerta existe para provocar a correção enquanto o dia aceita retificação: publicar
+            // em silêncio não pode calar justamente o aviso que pede uma providência.
             assertEquals(List.of(OP), alertados());
             nenhumAvisoDeFolha();
         }

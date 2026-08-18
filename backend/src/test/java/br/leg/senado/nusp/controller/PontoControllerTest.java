@@ -1223,7 +1223,7 @@ class PontoControllerTest {
         @DisplayName("PUT célula — a recusa do service vira 400 com a frase INTACTA (é ela que nomeia o dia)")
         void celula_recusada_400() throws Exception {
             when(retificacaoService.salvarCelula(anyString(), anyString(), any()))
-                    .thenThrow(new ServiceValidationException("O dia 06/07/2026 não pode mais ser retificado."));
+                    .thenThrow(new ServiceValidationException("O dia 06/07/2026 não é dia útil."));
 
             mockMvc.perform(Requests.put("/api/ponto/folha/" + PAGINA_ID + "/retificacoes/celula")
                             .header("Authorization", operador)
@@ -1231,7 +1231,7 @@ class PontoControllerTest {
                             .content(CELULA))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.ok").value(false))
-                    .andExpect(jsonPath("$.error").value("O dia 06/07/2026 não pode mais ser retificado."));
+                    .andExpect(jsonPath("$.error").value("O dia 06/07/2026 não é dia útil."));
         }
 
         /** Corpo ausente é problema do CLIENTE: chega ao service como null e volta 400, não 500. */

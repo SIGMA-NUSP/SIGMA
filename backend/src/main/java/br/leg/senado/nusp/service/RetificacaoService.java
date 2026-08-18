@@ -266,6 +266,9 @@ public class RetificacaoService {
     /**
      * O dia ainda está na janela de retificação, e pertence à folha aberta. É o mínimo exigido de
      * qualquer mexida — criar, alterar ou apagar.
+     *
+     * <p>Dentro do período de uma folha vigente, o único fechamento possível é a mensal definitiva
+     * já publicada — a mensagem pode afirmá-la.
      */
     private void exigirJanelaAberta(FolhaAlvo fa, LocalDate data) {
         PontoLote lote = fa.lote();
@@ -273,13 +276,9 @@ public class RetificacaoService {
             throw new ServiceValidationException("O dia " + ReportConfig.fmtDate(data)
                     + " está fora do período da folha.");
         }
-        JanelaRetificacao.Motivo motivo = fa.janela().motivo(data);
-        if (motivo == null) return;
-        if (motivo == JanelaRetificacao.Motivo.DEFINITIVA_PUBLICADA) {
+        if (!fa.janela().aberto(data)) {
             throw new ServiceValidationException("Não é possível retificar. Folha definitiva já publicada.");
         }
-        throw new ServiceValidationException("O dia " + ReportConfig.fmtDate(data)
-                + " não pode mais ser retificado.");
     }
 
     /**

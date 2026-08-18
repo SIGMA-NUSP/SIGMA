@@ -2,18 +2,24 @@ package br.leg.senado.nusp.service;
 
 import br.leg.senado.nusp.entity.Administrador;
 import br.leg.senado.nusp.entity.Operador;
+import br.leg.senado.nusp.entity.PontoDiaMarcacao;
 import br.leg.senado.nusp.entity.PontoFolhaLinha;
 import br.leg.senado.nusp.entity.PontoLote;
 import br.leg.senado.nusp.entity.PontoLotePagina;
+import br.leg.senado.nusp.entity.PontoPessoaMarcacao;
+import br.leg.senado.nusp.entity.PontoRetificacao;
 import br.leg.senado.nusp.entity.Tecnico;
 import br.leg.senado.nusp.enums.PapelPessoa;
 import br.leg.senado.nusp.enums.SubtipoAviso;
 import br.leg.senado.nusp.exception.ServiceValidationException;
 import br.leg.senado.nusp.repository.AdministradorRepository;
 import br.leg.senado.nusp.repository.OperadorRepository;
+import br.leg.senado.nusp.repository.PontoDiaMarcacaoRepository;
 import br.leg.senado.nusp.repository.PontoFolhaLinhaRepository;
 import br.leg.senado.nusp.repository.PontoLotePaginaRepository;
 import br.leg.senado.nusp.repository.PontoLoteRepository;
+import br.leg.senado.nusp.repository.PontoPessoaMarcacaoRepository;
+import br.leg.senado.nusp.repository.PontoRetificacaoRepository;
 import br.leg.senado.nusp.repository.TecnicoRepository;
 import br.leg.senado.nusp.service.SaldoAberturaService.ChavePessoa;
 import com.lowagie.text.Document;
@@ -57,6 +63,9 @@ public class PontoService {
     private final PontoLoteRepository loteRepo;
     private final PontoLotePaginaRepository paginaRepo;
     private final PontoFolhaLinhaRepository folhaLinhaRepo;
+    private final PontoRetificacaoRepository retificacaoRepo;
+    private final PontoDiaMarcacaoRepository diaMarcacaoRepo;
+    private final PontoPessoaMarcacaoRepository pessoaMarcacaoRepo;
     private final OperadorRepository operadorRepo;
     private final TecnicoRepository tecnicoRepo;
     private final AdministradorRepository administradorRepo;
@@ -723,7 +732,7 @@ public class PontoService {
      * cada pessoa recebe um aviso só.
      *
      * <p>O alerta do dia incompleto <b>não depende do "Emitir aviso"</b> do administrador: ele existe
-     * para provocar a correção enquanto o prazo de retificação corre, e por isso sai mesmo na
+     * para provocar a correção enquanto o dia ainda aceita retificação, e por isso sai mesmo na
      * publicação feita em silêncio. Publicação silenciosa e nenhum dia incompleto: ninguém é avisado.
      *
      * <p>Os dois cadastros nascem marcados com o lote (ORIGEM_LOTE_ID): é por essa proveniência, e só
@@ -802,32 +811,122 @@ public class PontoService {
      * se ninguém corrigir. Dia sem batida nenhuma e dia com o par completo não são cobrados, e a
      * regra vale igual para qualquer jornada. Folha sem nenhum dia assim fica fora do mapa.
      *
-     * <p>A conferência é sobre a folha COMO ELA FOI PUBLICADA, lida da tabela que a publicação
-     * acabou de gravar — nunca sobre o PDF de novo, nem sobre as retificações: o aviso existe
-     * justamente para provocá-las.
+     * <p>A base da conferência é a folha COMO ELA FOI PUBLICADA, lida da tabela que a publicação
+     * acabou de gravar — nunca o PDF de novo. Mas o dia que já foi <b>resolvido</b> não é cobrado:
+     * ocorrência marcada pela administração (para todos ou para a pessoa), ocorrência que o próprio
+     * funcionário declarou, ou retificação que fechou o par de batidas. As semanais são cumulativas
+     * e reimprimem os dias das anteriores — sem esse desconto, quem já corrigiu seria cobrado de
+     * novo a cada publicação. A retificação pela metade (o par efetivo segue ímpar) não desconta
+     * nada: o alerta existe justamente para provocar o resto da correção.
      *
      * <p>A folha mensal DEFINITIVA fica de fora: ela fecha o mês e não aceita mais retificação, e
      * avisar seria pedir o que já não pode ser feito.
      */
     private Map<String, List<DiaIncompleto>> folhasComDiaIncompleto(PontoLote lote, List<PontoLotePagina> paginas) {
         if (PontoLote.CATEGORIA_DEFINITIVA.equals(lote.getCategoria())) return Map.of();
-        List<String> paginaIds = paginas.stream()
-                .filter(p -> p.getPessoaId() != null)
-                .map(PontoLotePagina::getId)
-                .toList();
-        if (paginaIds.isEmpty()) return Map.of();
+        Map<String, PontoLotePagina> porPagina = new LinkedHashMap<>();
+        for (PontoLotePagina p : paginas) {
+            if (p.getPessoaId() != null) porPagina.put(p.getId(), p);
+        }
+        if (porPagina.isEmpty()) return Map.of();
+
+        List<Object[]> linhas = folhaLinhaRepo.findCelulasDasFolhas(porPagina.keySet());
+        DiasResolvidos resolvidos = diasResolvidos(lote, porPagina.values(), linhas);
 
         Map<String, List<DiaIncompleto>> incompletas = new LinkedHashMap<>();
-        for (Object[] linha : folhaLinhaRepo.findCelulasDasFolhas(paginaIds)) {
+        for (Object[] linha : linhas) {
             String paginaId = (String) linha[0];
             String ocorrencia = (String) linha[1];
             // Dia de status (Feriado, Falta, FERNC…) não tem batida a contar.
             if (ocorrencia != null) continue;
             if (batidasDoDia(linha) % 2 == 0) continue;
+            LocalDate data = (LocalDate) linha[2];
+            if (resolvidos.resolvido(porPagina.get(paginaId), data, linha)) continue;
             incompletas.computeIfAbsent(paginaId, k -> new ArrayList<>())
-                    .add(new DiaIncompleto((LocalDate) linha[2], rotuloDoDia((LocalDate) linha[2], (String) linha[3])));
+                    .add(new DiaIncompleto(data, rotuloDoDia(data, (String) linha[3])));
         }
         return incompletas;
+    }
+
+    /** Pessoa e dia — a chave pela qual marcações e retificações respondem por um dia da folha. */
+    private record PessoaDia(String pessoaId, String pessoaTipo, LocalDate data) {}
+
+    /**
+     * O que já responde por um dia antes de o alerta cobrá-lo: as ocorrências marcadas pela
+     * administração e as retificações do período do lote, indexadas para consulta dia a dia.
+     */
+    private record DiasResolvidos(Set<LocalDate> marcadosParaTodos,
+                                  Set<PessoaDia> marcadosParaPessoa,
+                                  Map<PessoaDia, PontoRetificacao> retificacoes) {
+
+        /**
+         * O dia ímpar já está resolvido? Sim quando há ocorrência marcada (global ou da pessoa),
+         * quando o funcionário declarou uma ocorrência para o dia, ou quando as batidas retificadas
+         * sobre as impressas fecham um número PAR — a mesma mescla que o administrador vê na grade.
+         * O dia sem data legível não tem retificação possível: segue sendo cobrado.
+         */
+        boolean resolvido(PontoLotePagina pagina, LocalDate data, Object[] linha) {
+            if (data == null) return false;
+            if (marcadosParaTodos.contains(data)) return true;
+            PessoaDia chave = new PessoaDia(pagina.getPessoaId(), pagina.getPessoaTipo(), data);
+            if (marcadosParaPessoa.contains(chave)) return true;
+            PontoRetificacao r = retificacoes.get(chave);
+            if (r == null) return false;
+            if (r.getTipoId() != null) return true;
+            HorariosDoDia efetivo = HorariosDoDia.daRetificacao(r).sobre(HorariosDoDia.daFolha(
+                    (String) linha[PRIMEIRA_CELULA], (String) linha[PRIMEIRA_CELULA + 1],
+                    (String) linha[PRIMEIRA_CELULA + 2], (String) linha[PRIMEIRA_CELULA + 3]));
+            int presentes = 0;
+            for (String v : efetivo.valores()) {
+                if (v != null) presentes++;
+            }
+            return presentes % 2 == 0;
+        }
+    }
+
+    /**
+     * Marcações e retificações do período das folhas, uma consulta por papel presente nas páginas.
+     *
+     * <p>O recorte de datas é o período declarado do lote ESTICADO até cobrir toda data que as
+     * folhas de fato imprimiram: o período é digitado no envio e não é conferido contra o PDF, e o
+     * dia impresso fora dele também entra no alerta — a resolução dele (marcada ou retificada a
+     * partir de outra folha) precisa ser vista.
+     */
+    private DiasResolvidos diasResolvidos(PontoLote lote, Collection<PontoLotePagina> paginas,
+                                          List<Object[]> linhas) {
+        LocalDate inicio = lote.getDataInicio();
+        LocalDate fim = lote.getDataFim();
+        for (Object[] linha : linhas) {
+            LocalDate data = (LocalDate) linha[2];
+            if (data == null) continue;
+            if (data.isBefore(inicio)) inicio = data;
+            if (data.isAfter(fim)) fim = data;
+        }
+        LocalDate fimExclusivo = fim.plusDays(1);
+
+        Set<LocalDate> globais = new HashSet<>();
+        for (PontoDiaMarcacao m : diaMarcacaoRepo
+                .findByDataGreaterThanEqualAndDataLessThanOrderByData(inicio, fimExclusivo)) {
+            globais.add(m.getData());
+        }
+
+        Set<String> tipos = paginas.stream()
+                .map(PontoLotePagina::getPessoaTipo)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Set<PessoaDia> pessoais = new HashSet<>();
+        Map<PessoaDia, PontoRetificacao> retificacoes = new HashMap<>();
+        for (String tipo : tipos) {
+            for (PontoPessoaMarcacao m : pessoaMarcacaoRepo
+                    .findByPessoaTipoAndDataGreaterThanEqualAndDataLessThan(tipo, inicio, fimExclusivo)) {
+                pessoais.add(new PessoaDia(m.getPessoaId(), m.getPessoaTipo(), m.getData()));
+            }
+            for (PontoRetificacao r : retificacaoRepo
+                    .findByPessoaTipoAndDataGreaterThanEqualAndDataLessThan(tipo, inicio, fimExclusivo)) {
+                retificacoes.put(new PessoaDia(r.getPessoaId(), r.getPessoaTipo(), r.getData()), r);
+            }
+        }
+        return new DiasResolvidos(globais, pessoais, retificacoes);
     }
 
     /**

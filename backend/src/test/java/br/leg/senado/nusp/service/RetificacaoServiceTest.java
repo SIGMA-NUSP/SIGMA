@@ -350,7 +350,17 @@ class RetificacaoServiceTest {
 
         @Test
         void diaFechadoPelaJanelaVemFechado() {
-            // A folha da tela é a semanal antiga; a semana seguinte, publicada depois, fechou-a.
+            // A folha da tela é a semanal do meio do mês; a definitiva do mês já foi publicada.
+            mockSemanalComDefinitivaDoMes();
+
+            List<Map<String, Object>> dias = lista(service.listarRetificacoes(PAG, DONO), "dias");
+
+            assertEquals(5, dias.size());
+            assertTrue(dias.stream().noneMatch(d -> Boolean.TRUE.equals(d.get("aberto"))));
+        }
+
+        @Test
+        void aFolhaAntigaVemTodaAbertaMesmoComASeguintePublicada() {
             mockFolha(DONO, "OPERADOR",
                     lote(LOTE, "SEMANAL", null, LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 7),
                             PUBLICADA_EM.minusDays(7)),
@@ -360,7 +370,7 @@ class RetificacaoServiceTest {
             List<Map<String, Object>> dias = lista(service.listarRetificacoes(PAG, DONO), "dias");
 
             assertEquals(7, dias.size());
-            assertTrue(dias.stream().noneMatch(d -> Boolean.TRUE.equals(d.get("aberto"))));
+            assertTrue(dias.stream().allMatch(d -> Boolean.TRUE.equals(d.get("aberto"))));
         }
 
         @Test
@@ -670,15 +680,16 @@ class RetificacaoServiceTest {
         }
 
         @Test
-        void diaFechadoPorFolhaMaisNovaRecusa() {
+        void aFolhaAntigaSegueAceitandoGravacaoDepoisDaSeguinte() {
             mockFolha(DONO, "OPERADOR",
                     lote(LOTE, "SEMANAL", null, LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 7),
                             PUBLICADA_EM.minusDays(7)),
                     outraFolha("lote-2", "SEMANAL", null, LocalDate.of(2026, 6, 1),
                             LocalDate.of(2026, 6, 14), PUBLICADA_EM));
 
-            assertEquals("O dia 01/06/2026 não pode mais ser retificado.",
-                    recusaAoSalvar(corpoCelula(LocalDate.of(2026, 6, 1), "ent1", "08:00")).getMessage());
+            service.salvarCelula(PAG, DONO, corpoCelula(LocalDate.of(2026, 6, 1), "ent1", "08:00"));
+
+            assertEquals("08:00", capturarSalva().getEnt1());
         }
 
         @Test

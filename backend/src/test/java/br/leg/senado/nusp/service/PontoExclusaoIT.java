@@ -650,14 +650,13 @@ class PontoExclusaoIT {
 
     // ══════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("interação com a janela de retificação — excluir a folha LIBERTA o dia")
+    @DisplayName("interação com a retificação ancorada — excluir a folha leva a correção junto")
     class InteracaoComAJanela {
 
         /**
          * A retificação é única por (pessoa, dia) — UK — e aparece em TODAS as folhas da pessoa que
-         * cobrem o dia. Excluir a folha que a ancorou mata a retificação; e como a janela é a ordem
-         * das folhas publicadas, a folha que sobra volta a ser a primeira a mostrar aquele dia — que
-         * assim volta a aceitar edição.
+         * cobrem o dia. Excluir a folha que a ancorou mata a retificação; o dia em si segue aberto
+         * (só a definitiva fecha), e a correção recomeça do zero por qualquer folha que o cubra.
          */
         @Test
         @DisplayName("morta a retificação com a folha A, o dia some da listagem de B e volta a GRAVAR por ela")
@@ -670,21 +669,18 @@ class PontoExclusaoIT {
             PontoLotePagina folhaB = tx.execute(status ->
                     CenarioFactory.novaPaginaLote(em, loteB, 1, ana.getId(), "OPERADOR"));
 
-            // A entra sozinha e o dia é novidade dela; B, publicada depois, fecha o que A já mostrara.
             pontoService.publicar(loteA.getId(), false, false, "master.teste");
             retificar(folhaA, ana, dia);
             pontoService.publicar(loteB.getId(), false, false, "master.teste");
 
             assertEquals(List.of("2026-06-05"), diasListadosNaFolha(folhaB, ana),
                     "o dia retificado por A aparece na folha B (a chave é pessoa+dia)");
-            assertThrows(ServiceValidationException.class, () -> retificar(folhaB, ana, dia),
-                    "e o dia, já mostrado por A, não aceita mais edição");
 
             service.excluirLote(loteA.getId(), MASTER, admin.getId());
 
             assertTrue(diasListadosNaFolha(folhaB, ana).isEmpty(),
                     "morta a folha que ancorava a retificação, o dia deixa de aparecer retificado");
-            retificar(folhaB, ana, dia);   // sem A, o dia passa a ser novidade de B
+            retificar(folhaB, ana, dia);   // o dia segue aberto — a correção recomeça pela folha B
             assertEquals(List.of("2026-06-05"), diasListadosNaFolha(folhaB, ana));
         }
 

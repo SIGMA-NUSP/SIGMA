@@ -54,8 +54,8 @@ import jakarta.persistence.PersistenceContext;
  * <p>Harness de {@code @SpringBootTest} (não o slice {@code @OracleIT}) para que o
  * {@code @Transactional} do service commite de verdade; sem rollback automático, a limpeza é
  * manual. O cenário: uma pessoa com DUAS folhas semanais cumulativas — A (01–12/jun, publicada
- * antes) e B (01–19/jun, publicada depois). Só os dias que B trouxe de novo (13–19) estão abertos:
- * o dia que veio em duas folhas já é dia que a pessoa teve como conferir.
+ * antes) e B (01–19/jun, publicada depois). Todos os dias das duas seguem abertos: acumular folhas
+ * não fecha dia nenhum — só a mensal definitiva fecha.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @ActiveProfiles("test")
@@ -77,7 +77,7 @@ class PontoRetificacaoCelulaIT {
     private static final LocalDate DIA_15 = LocalDate.of(2026, 6, 15);
     /** Terça-feira idem. */
     private static final LocalDate DIA_16 = LocalDate.of(2026, 6, 16);
-    /** Sexta-feira dentro de A e de B: fechada, porque as duas a mostraram. */
+    /** Sexta-feira dentro de A e de B: aberta — vir em duas folhas não fecha o dia. */
     private static final LocalDate DIA_05 = LocalDate.of(2026, 6, 5);
     /** Sábado que só B trouxe: dentro da janela, mas fora do dia útil. */
     private static final LocalDate SABADO_13 = LocalDate.of(2026, 6, 13);
@@ -137,9 +137,8 @@ class PontoRetificacaoCelulaIT {
             loteIds.add(loteB.getId());
             paginaB = CenarioFactory.novaPaginaLote(em, loteB, 1, operador.getId(), "OPERADOR");
 
-            // A publicação de A recua uma hora: quem fecha o dia é a quantidade de folhas que o
-            // cobrem, mas a ordem entre elas decide qual folha REPRESENTA o dia (de onde saem os
-            // horários impressos) e qual reenvio substitui qual.
+            // A publicação de A recua uma hora: a ordem entre as folhas decide qual delas
+            // REPRESENTA o dia (de onde saem os horários impressos) e qual reenvio substitui qual.
             CenarioFactory.fixarTimestamp(em, "PNT_LOTE", "PUBLICADO_EM", loteA.getId(), 3600);
 
             // O catálogo do schema de teste nasce vazio — o tipo que o funcionário declara é semeado aqui.
@@ -487,27 +486,31 @@ class PontoRetificacaoCelulaIT {
     class Janela {
 
         @Test
-        void oDiaQueAFolhaAnteriorJaMostrouEstaFechado() {
-            assertEquals("O dia 05/06/2026 não pode mais ser retificado.",
-                    assertThrows(ServiceValidationException.class,
-                            () -> celula(paginaB, DIA_05, "ent1", "08:00")).getMessage());
-            assertEquals(0, linhasNoBanco());
+        void oDiaQueVeioEmDuasFolhasSegueAberto() {
+            celula(paginaB, DIA_05, "ent1", "08:00");
+
+            assertEquals("08:00", noBanco(DIA_05)[0]);
+            assertTrue(diaAberto(paginaB, DIA_05));
         }
 
         @Test
-        void aFolhaAntigaMostraOsDiasDelaFechados() {
-            assertTrue(diaAberto(paginaB, DIA_15));
-            assertEquals(false, diaAberto(paginaA, DIA_05));
+        void aFolhaAntigaSegueAceitandoRetificacao() {
+            assertTrue(diaAberto(paginaA, DIA_05));
+
+            celula(paginaA, DIA_05, "ent1", "08:00");
+
+            assertEquals("08:00", noBanco(DIA_05)[0]);
         }
 
         @Test
-        void aPreviaDoMesDevolveOsDiasVelhos() {
+        void aPreviaConviveComAsSemanaisSemFecharNada() {
             PontoLotePagina previa = publicarMensal(PontoLote.CATEGORIA_PREVIA);
 
             celula(previa, DIA_05, "ent1", "08:00");
 
             assertEquals("08:00", noBanco(DIA_05)[0]);
-            assertTrue(diaAberto(paginaA, DIA_05), "o dia reabre em qualquer folha que o cubra");
+            assertTrue(diaAberto(paginaA, DIA_05));
+            assertTrue(diaAberto(paginaB, DIA_15));
         }
 
         @Test
@@ -546,17 +549,17 @@ class PontoRetificacaoCelulaIT {
         }
 
         @Test
-        void aSemanaAntigaReenviadaNaoFechaODiaDaFolhaMaisRecente() {
+        void aSemanaAntigaReenviadaNaoMudaOAbertoEFechado() {
             recuarPublicacao(paginaB, 1800);
             // A semana antiga volta corrigida: é a última publicação da pessoa, mas cobre o mesmo
-            // período de antes — quem decide o dia é a cobertura, não a data de publicação.
+            // período de antes — e acumular publicações não fecha dia nenhum.
             publicarSemanal(A_INICIO, A_FIM);
 
             celula(paginaB, DIA_15, "ent1", "08:00");
 
             assertEquals("08:00", noBanco(DIA_15)[0]);
             assertTrue(diaAberto(paginaB, DIA_15));
-            assertEquals(false, diaAberto(paginaB, DIA_05), "o dia que duas folhas trazem segue fechado");
+            assertTrue(diaAberto(paginaB, DIA_05));
         }
 
         @Test

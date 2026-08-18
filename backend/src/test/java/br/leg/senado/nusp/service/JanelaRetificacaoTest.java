@@ -18,12 +18,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * publicado para ela.
  *
  * <p>Sem mocks — a classe é uma conta sobre as folhas publicadas, e é essa conta que interessa
- * provar: o dia fica aberto enquanto for novidade (uma folha só o cobre), a prévia devolve o mês
- * inteiro à edição e a definitiva encerra os dias que imprimiu, para sempre.
+ * provar: o dia fica aberto enquanto alguma folha vigente o cobre, semanais e prévias se acumulam
+ * sem fechar nada, e só a definitiva encerra os dias que imprimiu — para sempre.
  *
- * <p>É a COBERTURA que decide, não a data de publicação: reenviar a folha de uma semana antiga não
- * mexe nos dias que só uma folha posterior trouxe. A data de publicação só é usada para escolher qual
- * folha representa o dia.
+ * <p>É a COBERTURA que decide, não a data de publicação: reenviar ou acumular folhas sobre o mesmo
+ * dia não o fecha. A data de publicação só é usada para escolher qual folha representa o dia.
  */
 class JanelaRetificacaoTest {
 
@@ -105,20 +104,19 @@ class JanelaRetificacaoTest {
     }
 
     @Test
-    void semanalNovaFechaOsDiasDaAnterior() {
+    void semanalNovaNaoFechaOsDiasDaAnterior() {
         JanelaRetificacao janela = janela(semanal("a", 1, 9, T1), semanal("b", 1, 16, T2));
 
-        assertEquals(List.of(10, 11, 12, 13, 14, 15, 16), abertos(janela, 1, 16));
-        assertEquals(JanelaRetificacao.Motivo.PERIODO_ANTERIOR, janela.motivo(dia(5)));
+        assertEquals(List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
+                abertos(janela, 1, 16));
     }
 
     @Test
-    void soOsDiasNovosDaUltimaSemanalFicamAbertos() {
+    void todosOsDiasDasSemanaisAcumuladasSeguemAbertos() {
         JanelaRetificacao janela = janela(semanal("a", 1, 9, T1), semanal("b", 1, 16, T2),
                 semanal("c", 1, 23, T3));
 
-        assertEquals(List.of(17, 18, 19, 20, 21, 22, 23), abertos(janela, 1, 23));
-        assertEquals(JanelaRetificacao.Motivo.PERIODO_ANTERIOR, janela.motivo(dia(12)));
+        assertEquals(23, abertos(janela, 1, 23).size());
     }
 
     @Test
@@ -137,40 +135,17 @@ class JanelaRetificacaoTest {
         assertEquals(List.of(), janela.paginasDoDia(dia(5)));
     }
 
-    @Test
-    void asPaginasDoMesmoLoteContamComoUmaFolhaSo() {
-        Object[] primeira = semanal("a", 1, 9, T1);
-        Object[] segunda = semanal("a", 1, 9, T1);
-        ((PontoLotePagina) segunda[0]).setId("pag-a-2");
-
-        JanelaRetificacao janela = janela(primeira, segunda);
-
-        assertEquals(List.of(1, 2, 3, 4, 5, 6, 7, 8, 9), abertos(janela, 1, 9));
-    }
-
     // ══ Reenvio do mesmo período ══════════════════════════════════
 
     @Test
-    void aSemanalReenviadaOcupaOLugarDaAnteriorSemContarDuasVezes() {
+    void aSemanalReenviadaNaoMudaOAbertoEFechado() {
         Object[] primeiraSemana = semanal("a", 1, 9, T1);
         Object[] segundaSemana = semanal("b", 1, 16, T2);
-        assertEquals(List.of(10, 11, 12, 13, 14, 15, 16), abertos(janela(primeiraSemana, segundaSemana), 1, 16));
+        assertEquals(16, abertos(janela(primeiraSemana, segundaSemana), 1, 16).size());
 
         JanelaRetificacao depois = janela(primeiraSemana, segundaSemana, semanal("b2", 1, 16, T4));
 
-        assertEquals(List.of(10, 11, 12, 13, 14, 15, 16), abertos(depois, 1, 16));
-    }
-
-    @Test
-    void oReenvioDaSemanaAntigaNaoFechaOsDiasQueSoAFolhaSeguinteTrouxe() {
-        Object[] ateODia09 = semanal("a", 1, 9, T1);
-        Object[] ateODia16 = semanal("b", 1, 16, T2);
-        Object[] ateODia23 = semanal("c", 1, 23, T3);
-
-        JanelaRetificacao janela = janela(ateODia09, ateODia16, ateODia23, semanal("b2", 1, 16, T4));
-
-        assertTrue(janela.aberto(dia(20)), "o dia 20 só veio na folha até o dia 23 — segue sendo novidade");
-        assertEquals(List.of(17, 18, 19, 20, 21, 22, 23), abertos(janela, 1, 23));
+        assertEquals(16, abertos(depois, 1, 16).size());
     }
 
     @Test
@@ -186,12 +161,8 @@ class JanelaRetificacaoTest {
     // ══ Mensal prévia e definitiva ════════════════════════════════
 
     @Test
-    void previaAbreOMesInclusiveOsDiasQueAsSemanaisJaTinhamFechado() {
-        Object[] ateODia09 = semanal("a", 1, 9, T1);
-        Object[] ateODia16 = semanal("b", 1, 16, T2);
-        assertEquals(JanelaRetificacao.Motivo.PERIODO_ANTERIOR, janela(ateODia09, ateODia16).motivo(dia(5)));
-
-        JanelaRetificacao janela = janela(ateODia09, ateODia16,
+    void aPreviaNaoFechaNadaEEstendeOAbertoAoMesInteiro() {
+        JanelaRetificacao janela = janela(semanal("a", 1, 9, T1), semanal("b", 1, 16, T2),
                 mensal("prev", PontoLote.CATEGORIA_PREVIA, T3));
 
         assertEquals(31, abertos(janela, 1, 31).size());
@@ -288,8 +259,7 @@ class JanelaRetificacaoTest {
     void folhaSemDataDePublicacaoNaoMudaOAbertoEFechado() {
         JanelaRetificacao janela = janela(semanal("a", 1, 9, null), semanal("b", 1, 16, T2));
 
-        assertEquals(List.of(10, 11, 12, 13, 14, 15, 16), abertos(janela, 1, 16));
-        assertEquals(JanelaRetificacao.Motivo.PERIODO_ANTERIOR, janela.motivo(dia(5)));
+        assertEquals(16, abertos(janela, 1, 16).size());
         assertEquals(List.of("pag-b"), janela.paginasDoDia(dia(5)));
     }
 }

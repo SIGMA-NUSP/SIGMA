@@ -5,34 +5,26 @@ import br.leg.senado.nusp.entity.PontoLotePagina;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 /**
  * Quais dias de uma pessoa ainda aceitam retificação.
  *
- * <p>Não há prazo em dias: quem abre e fecha um dia é a <b>publicação das folhas</b>. A pergunta é
- * feita por dia e por pessoa — nunca pela folha que está aberta na tela —, sobre as folhas que ainda
- * valem para o dono (publicadas, não ocultas e não substituídas), e vale igual para criar, alterar e
- * apagar.
+ * <p>Não há prazo em dias: quem fecha um dia é a <b>folha mensal definitiva</b>, e só ela. A
+ * pergunta é feita por dia e por pessoa — nunca pela folha que está aberta na tela —, sobre as
+ * folhas que ainda valem para o dono (publicadas, não ocultas e não substituídas), e vale igual
+ * para criar, alterar e apagar.
  *
- * <p>A regra, na ordem em que decide:
+ * <p>Um dia está aberto enquanto alguma folha vigente o cobre e nenhuma mensal definitiva o tiver
+ * coberto. Semanais e prévias podem se acumular sobre o mesmo dia à vontade — reimprimi-lo não o
+ * fecha; ele segue editável até a definitiva do período. E a definitiva encerra de uma vez por
+ * todas: nada a desfaz — nem uma semanal publicada depois, nem a correção da própria definitiva.
+ * Por isso as definitivas contam mesmo depois de substituídas: o que foi fechado uma vez fica
+ * fechado.
  *
- * <ol>
- *   <li><b>Folha mensal definitiva</b> cobrindo o dia: o dia está encerrado, e nada mais o reabre —
- *       nem uma semanal publicada depois, nem a correção da própria definitiva. Por isso as
- *       definitivas contam mesmo depois de substituídas: o que foi fechado uma vez fica fechado.</li>
- *   <li><b>Folha mensal prévia</b> cobrindo o dia: aberto. A prévia devolve o mês inteiro à edição,
- *       inclusive os dias que semanais já publicadas haviam fechado.</li>
- *   <li>Fora isso, o dia está aberto enquanto for <b>novidade</b>: exatamente uma folha o cobre. As
- *       semanais são cumulativas (01–09, 01–16, 01–23…), então a folha seguinte reimprime os dias da
- *       anterior — e um dia que já veio duas vezes é um dia que a pessoa já teve como conferir.</li>
- * </ol>
- *
- * <p>É a cobertura que decide, não a data de publicação: a folha reenviada com o período corrigido
- * substitui a anterior e devolve o período dela à condição de novidade, sem mexer no que outras
- * folhas trouxeram. Dia que nenhuma folha vigente cobre não tem o que retificar.
+ * <p>É a cobertura que decide, não a data de publicação — e dia que nenhuma folha vigente cobre
+ * não tem o que retificar.
  */
 final class JanelaRetificacao {
 
@@ -40,8 +32,6 @@ final class JanelaRetificacao {
     enum Motivo {
         /** Uma folha mensal definitiva já cobriu o dia. */
         DEFINITIVA_PUBLICADA,
-        /** O dia já veio em mais de uma folha — deixou de ser novidade. */
-        PERIODO_ANTERIOR,
         /** Nenhuma folha que ainda vale para a pessoa cobre o dia. */
         SEM_FOLHA
     }
@@ -92,10 +82,7 @@ final class JanelaRetificacao {
     /** Por que o dia está fechado; {@code null} quando ele aceita retificação. */
     Motivo motivo(LocalDate dia) {
         if (encerradoPorDefinitiva(dia)) return Motivo.DEFINITIVA_PUBLICADA;
-        if (cobertoPorPrevia(dia)) return null;
-        int folhas = quantasCobrem(dia);
-        if (folhas == 0) return Motivo.SEM_FOLHA;
-        return folhas == 1 ? null : Motivo.PERIODO_ANTERIOR;
+        return algumaCobre(dia) ? null : Motivo.SEM_FOLHA;
     }
 
     /**
@@ -138,23 +125,11 @@ final class JanelaRetificacao {
         return false;
     }
 
-    private boolean cobertoPorPrevia(LocalDate dia) {
+    private boolean algumaCobre(LocalDate dia) {
         for (Folha f : vigentes) {
-            PontoLote l = f.lote();
-            if (TIPO_MENSAL.equals(l.getTipo())
-                    && PontoLote.CATEGORIA_PREVIA.equals(l.getCategoria())
-                    && cobre(l, dia)) return true;
+            if (cobre(f.lote(), dia)) return true;
         }
         return false;
-    }
-
-    /** Quantas folhas vigentes imprimiram o dia — as páginas do MESMO lote contam uma vez só. */
-    private int quantasCobrem(LocalDate dia) {
-        Set<String> lotes = new HashSet<>();
-        for (Folha f : vigentes) {
-            if (cobre(f.lote(), dia)) lotes.add(f.lote().getId());
-        }
-        return lotes.size();
     }
 
     private static boolean definitiva(PontoLote lote) {

@@ -33,6 +33,7 @@ import br.leg.senado.nusp.entity.Administrador;
 import br.leg.senado.nusp.entity.Operador;
 import br.leg.senado.nusp.entity.PontoLote;
 import br.leg.senado.nusp.entity.PontoLotePagina;
+import br.leg.senado.nusp.entity.PontoRetificacao;
 import br.leg.senado.nusp.enums.PapelPessoa;
 import br.leg.senado.nusp.enums.TipoAviso;
 import br.leg.senado.nusp.it.support.CenarioFactory;
@@ -116,6 +117,7 @@ class PontoAvisoIncompletoIT {
     private Operador bruno;
     private Operador carla;
     private PontoLote lote;
+    private PontoLotePagina paginaAna;
 
     /**
      * Um lote de três folhas em que só a de Ana tem dia pela metade. São TRÊS pessoas para DOIS
@@ -134,7 +136,7 @@ class PontoAvisoIncompletoIT {
             carla = novaPessoa("Carla do Registro");
         });
         lote = loteEmRevisao();
-        folhaDe(1, ana, CARTAO_COM_DIA_PELA_METADE);
+        paginaAna = folhaDe(1, ana, CARTAO_COM_DIA_PELA_METADE);
         folhaDe(2, bruno, CARTAO_EM_DIA);
         folhaDe(3, carla, CARTAO_EM_DIA);
     }
@@ -151,6 +153,8 @@ class PontoAvisoIncompletoIT {
                     + "(SELECT ID FROM FRM_AVISO_CADASTRO WHERE CRIADO_POR_ID IN :admins)");
             executar("DELETE FROM FRM_AVISO_CADASTRO WHERE CRIADO_POR_ID IN :admins");
             executar("DELETE FROM PNT_BANCO_SALDO WHERE PESSOA_ID IN :pessoas");
+            // A FK da retificação com a página não tem cascade: ela sai antes do lote.
+            executar("DELETE FROM PNT_RETIFICACAO WHERE PESSOA_ID IN :pessoas");
             // O cascade encadeado leva as páginas com o lote e as linhas da folha com as páginas.
             executar("DELETE FROM PNT_LOTE WHERE ID IN :lotes");
             executar("DELETE FROM PES_OPERADOR WHERE ID IN :pessoas");
@@ -196,10 +200,24 @@ class PontoAvisoIncompletoIT {
     }
 
     /** Página vinculada à pessoa COM o PDF já em disco — é ele que a publicação vai ler e parsear. */
-    private void folhaDe(int numeroPagina, Operador pessoa, List<String> cartao) {
+    private PontoLotePagina folhaDe(int numeroPagina, Operador pessoa, List<String> cartao) {
         PontoLotePagina pagina = tx.execute(status ->
                 CenarioFactory.novaPaginaLote(em, lote, numeroPagina, pessoa.getId(), "OPERADOR"));
         gravarPdf(pagina.getArquivoPagina(), cartao);
+        return pagina;
+    }
+
+    /** Ana completa a batida que faltava do dia 14/07 — a correção nasce antes da publicação. */
+    private void completarODiaDeAna() {
+        tx.executeWithoutResult(status -> {
+            PontoRetificacao r = new PontoRetificacao();
+            r.setPessoaId(ana.getId());
+            r.setPessoaTipo("OPERADOR");
+            r.setPaginaId(paginaAna.getId());
+            r.setData(LocalDate.of(2026, 7, 14));
+            r.setSai2("17:00");
+            em.persist(r);
+        });
     }
 
     /** Grava em disco o PDF de uma página, uma linha impressa por parágrafo — como o upload deixaria. */
@@ -358,6 +376,19 @@ class PontoAvisoIncompletoIT {
         assertEquals(List.of(ana.getNomeCompleto()), destinatariosDe(SUBTIPO_ALERTA));
         assertEquals(List.of(O_DIA_DE_ANA), complementosDe(SUBTIPO_ALERTA),
                 "o pedido de correção continua nomeando os dias");
+    }
+
+    @Test
+    @DisplayName("o dia já retificado não é cobrado: quem corrigiu antes da publicação recebe só o aviso da folha")
+    void retificacaoFeitaAntesCalaOAlerta() {
+        completarODiaDeAna();
+
+        pontoService.publicar(lote.getId(), true, false, "master.teste");
+
+        assertEquals(List.of(SUBTIPO_FOLHA), subtiposDaPublicacao(),
+                "com o dia resolvido não nasce alerta nenhum — a folha nova não cobra quem já corrigiu");
+        assertEquals(List.of(ana.getNomeCompleto(), bruno.getNomeCompleto(), carla.getNomeCompleto()),
+                destinatariosDe(SUBTIPO_FOLHA), "quem corrigiu volta ao grupo de quem está em dia");
     }
 
     @Test
