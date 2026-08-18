@@ -121,7 +121,8 @@ public class PasswordResetService {
     }
 
     /**
-     * Redefine a senha usando o token.
+     * Redefine a senha usando o token e limpa a flag SENHA_PROVISORIA:
+     * a senha escolhida pelo próprio usuário é definitiva, venha de onde vier a troca.
      * @return true se o reset foi bem-sucedido.
      */
     @Transactional
@@ -155,7 +156,7 @@ public class PasswordResetService {
             throw new IllegalStateException("Papel desconhecido no token de reset: " + userType);
         }
         return entityManager.createNativeQuery(
-                "UPDATE " + table + " SET PASSWORD_HASH = :hash, ATUALIZADO_EM = SYSTIMESTAMP WHERE ID = :id")
+                "UPDATE " + table + " SET PASSWORD_HASH = :hash, SENHA_PROVISORIA = 0, ATUALIZADO_EM = SYSTIMESTAMP WHERE ID = :id")
                 .setParameter("hash", hash)
                 .setParameter("id", userId)
                 .executeUpdate();

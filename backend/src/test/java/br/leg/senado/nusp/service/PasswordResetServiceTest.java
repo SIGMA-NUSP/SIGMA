@@ -244,6 +244,27 @@ class PasswordResetServiceTest {
         }
 
         @Test
+        @DisplayName("o UPDATE do hash limpa SENHA_PROVISORIA — a senha do reset é definitiva")
+        void sucesso_limpaSenhaProvisoria() {
+            // Sem isso, quem redefinia pelo "Esqueci a senha" continuava marcado como senha
+            // provisória e era obrigado a trocar a senha DE NOVO no primeiro login.
+            PasswordResetToken resetToken = valido("operador");
+            when(tokenRepository.findByToken("tok-123")).thenReturn(Optional.of(resetToken));
+            when(passwordEncoder.encode("NovaSenha@1")).thenReturn("hash-novo");
+            Query hashQ = fluente(1);
+            Query invalidaQ = fluente(0);
+            Query revogaQ = fluente(0);
+            when(entityManager.createNativeQuery(contains("PASSWORD_HASH"))).thenReturn(hashQ);
+            when(entityManager.createNativeQuery(contains("PES_PASSWORD_RESET"))).thenReturn(invalidaQ);
+            when(entityManager.createNativeQuery(contains("PES_AUTH_SESSION"))).thenReturn(revogaQ);
+
+            assertTrue(service.resetPassword("tok-123", "NovaSenha@1"));
+
+            verify(entityManager).createNativeQuery(argThat(sql ->
+                    sql.contains("PASSWORD_HASH") && sql.contains("SENHA_PROVISORIA = 0")));
+        }
+
+        @Test
         @DisplayName("papel desconhecido no token aborta com exceção: nenhuma tabela é tocada")
         void papelDesconhecido_abortaSemGravar() {
             // O fallback silencioso em PES_OPERADOR era a armadilha: um USER_TYPE que o
