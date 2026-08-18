@@ -225,6 +225,40 @@ public class GradeRetificacaoService {
     }
 
     /**
+     * Grade do mês com as três categorias de funcionários juntas, em ordem alfabética
+     * única — a visão que vai para o arquivo exportado. Servidores públicos continuam
+     * de fora, como em cada categoria isolada: eles não têm folha de ponto nem banco.
+     * Os dias e os textos que valem folga não dependem da categoria, então qualquer
+     * uma das grades serve de base para eles.
+     */
+    @Transactional(readOnly = true)
+    public Grade montarGradeGeral(int ano, int mes) {
+        List<Grade> grades = List.of(
+                montarGrade("operadores", ano, mes),
+                montarGrade("tecnicos", ano, mes),
+                montarGrade("administradores", ano, mes));
+
+        List<Funcionario> funcionarios = new ArrayList<>();
+        Map<String, Map<Integer, Celula>> porPessoa = new HashMap<>();
+        for (Grade g : grades) {
+            funcionarios.addAll(g.funcionarios());
+            porPessoa.putAll(g.celulas());
+        }
+        funcionarios.sort(Comparator.comparing(
+                f -> f.nome() == null ? "" : f.nome(), NativeQueryUtils.ORDEM_TEXTO_PT_BR));
+
+        Map<String, Map<Integer, Celula>> celulas = new LinkedHashMap<>();
+        for (Funcionario f : funcionarios) {
+            Map<Integer, Celula> linha = porPessoa.get(f.id());
+            if (linha != null) celulas.put(f.id(), linha);
+        }
+
+        Grade base = grades.get(0);
+        return new Grade("geral", ano, mes, base.diasNoMes(), funcionarios, base.dias(), celulas,
+                base.textosFolga());
+    }
+
+    /**
      * Precedência de exibição: retificação → banco → ocorrência geral do dia →
      * ocorrência do funcionário → vazia (null).
      *

@@ -1036,29 +1036,26 @@ class PontoControllerTest {
         }
 
         /**
-         * O nome do arquivo é a única lógica do controller aqui: {@code ponto_{categoria minúscula}_{AAMM}}
-         * (Q31). Os headers do XLSX saem do {@code reportService.respondXlsx} — MOCKADO —, então assertá-los
-         * seria assertar o stub: o que se trava é a interação (bytes do PontoXlsxService + nome calculado) e
-         * o pass-through da resposta que o ReportService devolveu.
+         * O XLSX é sempre a tabela geral (as três categorias juntas), com nome fixo de arquivo.
+         * Os headers saem do {@code reportService.respondXlsx} — MOCKADO —, então assertá-los
+         * seria assertar o stub: o que se trava é a interação (bytes do PontoXlsxService + o nome
+         * fixo) e o pass-through da resposta que o ReportService devolveu.
          */
         @Test
-        @DisplayName("GET /api/admin/ponto/retificacoes/grade/xlsx — bytes do PontoXlsxService e nome ponto_{categoria}_{AAMM} ao ReportService")
-        void gradeXlsx_repassaBytesENomeCalculado() throws Exception {
+        @DisplayName("GET /api/admin/ponto/retificacoes/grade/xlsx — bytes do PontoXlsxService e nome fixo Ponto NUSP ao ReportService")
+        void gradeXlsx_repassaBytesENomeFixo() throws Exception {
             byte[] xlsx = "PK planilha".getBytes(StandardCharsets.UTF_8);
-            // Categoria com espaços: o controller repassa a string CRUA ao gerador e só limpa o NOME do
-            // arquivo (strip + toLowerCase) — as duas metades ficam travadas de uma vez.
-            when(pontoXlsxService.gerar(" Operadores ", 2026, 7)).thenReturn(xlsx);
+            when(pontoXlsxService.gerar(2026, 7)).thenReturn(xlsx);
             when(reportService.respondXlsx(any(), anyString()))
                     .thenReturn(ResponseEntity.ok(RESPOSTA_REPORT_SERVICE));
 
             mockMvc.perform(Requests.get("/api/admin/ponto/retificacoes/grade/xlsx")
-                            .param("categoria", " Operadores ").param("ano", "2026").param("mes", "7")
+                            .param("ano", "2026").param("mes", "7")
                             .header("Authorization", admin))
                     .andExpect(status().isOk())
                     .andExpect(content().bytes(RESPOSTA_REPORT_SERVICE));
 
-            // " Operadores " + 2026/07 → ponto_operadores_2607 (strip + toLowerCase + AAMM no controller).
-            verify(reportService).respondXlsx(same(xlsx), eq("ponto_operadores_2607"));
+            verify(reportService).respondXlsx(same(xlsx), eq("Ponto NUSP"));
         }
     }
 

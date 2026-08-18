@@ -306,15 +306,11 @@ public class PontoController {
         return ResponseEntity.ok(Map.of("ok", true, "data", gradeRetificacaoService.montar(categoria, ano, mes)));
     }
 
-    /** Exportação XLSX da grade (E11, B-5): mesmo conteúdo, formato de ponto_nusp.xlsx. Nome ponto_{categoria}_{AAMM}.xlsx (Q31). */
+    /** Exportação XLSX da grade: as três categorias de funcionários numa tabela única, em ordem alfabética. */
     @AdminOnly
     @GetMapping("/api/admin/ponto/retificacoes/grade/xlsx")
-    public ResponseEntity<?> gradeRetificacoesXlsx(@RequestParam String categoria,
-                                                   @RequestParam int ano,
-                                                   @RequestParam int mes) {
-        byte[] xlsx = pontoXlsxService.gerar(categoria, ano, mes);
-        String nome = "ponto_" + categoria.strip().toLowerCase() + "_" + String.format("%02d%02d", ano % 100, mes);
-        return reportService.respondXlsx(xlsx, nome);
+    public ResponseEntity<?> gradeRetificacoesXlsx(@RequestParam int ano, @RequestParam int mes) {
+        return reportService.respondXlsx(pontoXlsxService.gerar(ano, mes), "Ponto NUSP");
     }
 
     // ══ Sumário de ocorrências das folhas ═══════════════════════

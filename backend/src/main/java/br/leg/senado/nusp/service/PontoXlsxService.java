@@ -26,15 +26,14 @@ import java.io.ByteArrayOutputStream;
 import java.util.Map;
 
 /**
- * Exportação XLSX da grade de retificações (E11, Bloco B-5) — geração do zero
- * com Apache POI (Q30), reproduzindo o formato de `assets/ponto_nusp.xlsx`
- * (Seção 7.2) SEM os bugs do arquivo manual: 1 aba `AAMM`, todos os
- * funcionários da categoria (sem paginação — F#7), cores estáticas (não
- * formatação condicional — 7.2.5), fórmula "Folgas" com o range correto do
- * mês (Q28), observações como comentários de célula (F#6) e arquivo limpo
- * (sem Tables/linhas fantasma — Q29). Mesma fonte de dados da grade
- * ({@link GradeRetificacaoService#montarGrade}); a precedência do §1 já vem
- * resolvida. O arquivo de referência é intocável (gotcha 8).
+ * Exportação XLSX da grade de retificações — geração do zero com Apache POI,
+ * reproduzindo o formato da planilha manual da equipe SEM os bugs do arquivo
+ * original: 1 aba `AAMM`, as três categorias de funcionários juntas em ordem
+ * alfabética (sem paginação), cores estáticas (não formatação condicional),
+ * fórmula "Folgas" com o range correto do mês, observações como comentários
+ * de célula e arquivo limpo (sem Tables/linhas fantasma). Mesma fonte de
+ * dados da grade ({@link GradeRetificacaoService#montarGradeGeral}); a
+ * precedência de exibição já vem resolvida.
  */
 @Service
 @RequiredArgsConstructor
@@ -42,9 +41,9 @@ public class PontoXlsxService {
 
     private final GradeRetificacaoService gradeService;
 
-    /** Gera o XLSX do mês/categoria. Retorna os bytes do workbook. */
-    public byte[] gerar(String categoria, int ano, int mes) {
-        Grade g = gradeService.montarGrade(categoria, ano, mes);
+    /** Gera o XLSX do mês — as três categorias de funcionários numa tabela única. */
+    public byte[] gerar(int ano, int mes) {
+        Grade g = gradeService.montarGradeGeral(ano, mes);
         int nFunc = g.funcionarios().size();
 
         try (XSSFWorkbook wb = new XSSFWorkbook()) {

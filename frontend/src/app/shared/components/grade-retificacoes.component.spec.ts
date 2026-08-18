@@ -405,24 +405,27 @@ describe('GradeRetificacoesComponent', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // baixarTabela — XLSX do mês/categoria (nome ponto_{categoria}_{AAMM}.xlsx)
+  // baixarTabela — XLSX do mês com as três categorias juntas (Ponto NUSP.xlsx)
   // ═══════════════════════════════════════════════════════════════════
   describe('baixarTabela', () => {
-    it('baixa o XLSX com ano/mês em STRING e nome ponto_{categoria}_{AAMM}.xlsx', () => {
+    it('baixa o XLSX com ano/mês em STRING, sem categoria, e nome fixo Ponto NUSP.xlsx', () => {
       const comp = criarCarregado();
       comp.baixarTabela();
 
       expect(apiGetBlob).toHaveBeenCalledWith('/api/admin/ponto/retificacoes/grade/xlsx', {
-        categoria: 'operadores', ano: '2026', mes: '7',
+        ano: '2026', mes: '7',
       });
-      expect(baixarBlob).toHaveBeenCalledWith(XLSX, 'ponto_operadores_2607.xlsx');
+      expect(baixarBlob).toHaveBeenCalledWith(XLSX, 'Ponto NUSP.xlsx');
     });
 
-    it('o mês entra com zero à esquerda no nome (março → 2603)', () => {
+    it('trocar a categoria exibida não muda o download: a tabela é sempre a geral', () => {
       const comp = criarCarregado('2026-03-05T12:00:00-03:00');
       comp.onCategoria(eventoSelect('administradores'));
       comp.baixarTabela();
-      expect(baixarBlob).toHaveBeenCalledWith(XLSX, 'ponto_administradores_2603.xlsx');
+      expect(apiGetBlob).toHaveBeenCalledWith('/api/admin/ponto/retificacoes/grade/xlsx', {
+        ano: '2026', mes: '3',
+      });
+      expect(baixarBlob).toHaveBeenCalledWith(XLSX, 'Ponto NUSP.xlsx');
     });
 
     it('o erro do DOWNLOAD vai para o TOAST: a grade não é apagada', () => {

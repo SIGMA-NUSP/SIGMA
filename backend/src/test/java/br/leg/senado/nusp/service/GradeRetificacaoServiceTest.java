@@ -19,7 +19,11 @@ import br.leg.senado.nusp.repository.PontoRetificacaoRepository;
 import br.leg.senado.nusp.repository.PontoSolicitacaoFolgaRepository;
 import br.leg.senado.nusp.repository.PontoTipoMarcacaoRepository;
 import br.leg.senado.nusp.repository.TecnicoRepository;
+import br.leg.senado.nusp.entity.Administrador;
+import br.leg.senado.nusp.entity.Tecnico;
 import br.leg.senado.nusp.service.GradeRetificacaoService.Celula;
+import br.leg.senado.nusp.service.GradeRetificacaoService.Funcionario;
+import br.leg.senado.nusp.service.GradeRetificacaoService.Grade;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -371,6 +375,60 @@ class GradeRetificacaoServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("Grade geral — as três categorias numa tabela única")
+    class GradeGeral {
+
+        @BeforeEach
+        void pessoasDasTresCategorias() {
+            when(operadorRepo.findAll()).thenReturn(List.of(
+                    operador("op-carla", "Carla Dias"),
+                    operador("op-ana", "Ana Souza")));
+            when(tecnicoRepo.findAll()).thenReturn(List.of(tecnico("tec-bruno", "Bruno Lima")));
+            when(administradorRepo.findAll()).thenReturn(List.of(
+                    administrador("adm-diego", "Diego Costa", false),
+                    administrador("adm-servidor", "Alberto Servidor", true)));
+        }
+
+        @Test
+        @DisplayName("funcionários das três categorias saem numa ordem alfabética única")
+        void ordemAlfabeticaUnica() {
+            Grade g = service.montarGradeGeral(2026, 7);
+
+            assertEquals("geral", g.categoria());
+            // Bruno (técnico) entre Ana e Carla (operadoras): a ordem é pelo nome, não por categoria.
+            assertEquals(List.of("Ana Souza", "Bruno Lima", "Carla Dias", "Diego Costa"),
+                    g.funcionarios().stream().map(Funcionario::nome).toList());
+        }
+
+        @Test
+        @DisplayName("servidor público fica de fora da grade geral, como na categoria isolada")
+        void servidorPublicoFora() {
+            assertTrue(service.montarGradeGeral(2026, 7).funcionarios().stream()
+                    .noneMatch(f -> "adm-servidor".equals(f.id())));
+        }
+
+        @Test
+        @DisplayName("cada célula continua com o dono: a ocorrência do técnico não vaza para os demais")
+        void celulasPorPessoa() {
+            when(tipoRepo.findAll()).thenReturn(List.of(ATESTADO));
+            PontoPessoaMarcacao doTecnico = pessoal("tec-bruno", DIA_UTIL, ATESTADO.getId());
+            doTecnico.setPessoaTipo("TECNICO");
+            // As três categorias são consultadas — stub explícito por causa do strict stubbing.
+            when(pessoaRepo.findByPessoaTipoAndDataGreaterThanEqualAndDataLessThan("OPERADOR", INI_JUL, INI_AGO))
+                    .thenReturn(List.of());
+            when(pessoaRepo.findByPessoaTipoAndDataGreaterThanEqualAndDataLessThan("TECNICO", INI_JUL, INI_AGO))
+                    .thenReturn(List.of(doTecnico));
+            when(pessoaRepo.findByPessoaTipoAndDataGreaterThanEqualAndDataLessThan("ADMINISTRADOR", INI_JUL, INI_AGO))
+                    .thenReturn(List.of());
+
+            Grade g = service.montarGradeGeral(2026, 7);
+
+            assertEquals("Atestado", g.celulas().get("tec-bruno").get(DIA_UTIL).texto());
+            assertNull(g.celulas().get("op-ana"));   // sem célula, a pessoa nem entra no mapa
+        }
+    }
+
     // ── helpers do cenário ──────────────────────────────────────
 
     private Celula celula(String pessoaId, int dia) {
@@ -428,6 +486,21 @@ class GradeRetificacaoServiceTest {
         o.setId(id);
         o.setNomeCompleto(nome);
         return o;
+    }
+
+    private static Tecnico tecnico(String id, String nome) {
+        Tecnico t = new Tecnico();
+        t.setId(id);
+        t.setNomeCompleto(nome);
+        return t;
+    }
+
+    private static Administrador administrador(String id, String nome, boolean servidorPublico) {
+        Administrador a = new Administrador();
+        a.setId(id);
+        a.setNomeCompleto(nome);
+        a.setServidorPublico(servidorPublico);
+        return a;
     }
 
     private static PontoTipoMarcacao tipo(String id, String nome, String escopo) {

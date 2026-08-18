@@ -95,7 +95,8 @@ interface OpcaoOcorrencia { id: string | null; rotulo: string; }
       @if (isMaster()) {
         <button type="button" class="btn-outline" (click)="abrirConfigurarTipos()">Configurar</button>
       }
-      <button type="button" class="btn-outline" (click)="baixarTabela()" [disabled]="funcionarios().length === 0">Baixar tabela</button>
+      <!-- O download é sempre a tabela geral, então não depende da categoria exibida ter gente. -->
+      <button type="button" class="btn-outline" (click)="baixarTabela()">Baixar tabela</button>
     </div>
 
     @if (erro()) {
@@ -410,22 +411,19 @@ export class GradeRetificacoesComponent implements OnInit {
   paginaSeguinte(): void { this.pagina.update(p => Math.min(this.totalPaginas() - 1, p + 1)); }
 
   /**
-   * Baixa o XLSX do mês/categoria (B-5.1) — nome ponto_{categoria}_{AAMM}.xlsx (Q31).
+   * Baixa o XLSX do mês — as três categorias de funcionários numa tabela única, em ordem
+   * alfabética, independente da categoria exibida na tela.
    *
-   * F38: a falha do DOWNLOAD vai para o toast, não para o signal `erro` — que é o do primeiro
+   * A falha do DOWNLOAD vai para o toast, não para o signal `erro` — que é o do primeiro
    * `@if` do template e responde pelas cargas da GRADE. Escrevendo nele, um 500 no XLSX trocava a
    * grade inteira (ainda carregada em memória) por uma caixa de erro, e só mudar de mês a trazia
    * de volta. Canais separados: o que falhou foi o arquivo, não a tela.
    */
   baixarTabela(): void {
     const { ano, mes } = this.anoMes();
-    const cat = this.categoria();
     this.api.getBlob('/api/admin/ponto/retificacoes/grade/xlsx',
-      { categoria: cat, ano: String(ano), mes: String(mes) }).subscribe({
-      next: blob => {
-        const aamm = String(ano % 100).padStart(2, '0') + String(mes).padStart(2, '0');
-        this.api.baixarBlob(blob, `ponto_${cat}_${aamm}.xlsx`);
-      },
+      { ano: String(ano), mes: String(mes) }).subscribe({
+      next: blob => this.api.baixarBlob(blob, 'Ponto NUSP.xlsx'),
       error: () => this.toast.error('Erro ao baixar a tabela.'),
     });
   }
