@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
-import { authGuard, roleGuard, matchByRole, masterGuard, featureFlagGuard } from './auth.guard';
+import { authGuard, roleGuard, matchByRole, masterGuard, featureFlagGuard, rootRedirect } from './auth.guard';
 import { AuthService } from '../services/auth.service';
 import { FeatureFlagService } from '../services/feature-flags.service';
 
@@ -39,6 +39,27 @@ describe('auth.guard', () => {
     TestBed.runInInjectionContext(() => guard(...args));
 
   const rota = (roles?: string[]) => ({ data: roles ? { roles } : {} }) as any;
+
+  describe('rootRedirect', () => {
+    it('deslogado — raiz vai para /login', () => {
+      auth.isLoggedIn.mockReturnValue(false);
+      expect(run(rootRedirect)).toBe('/login');
+    });
+
+    it('senha provisória — raiz vai para /alterar-senha', () => {
+      auth.isLoggedIn.mockReturnValue(true);
+      auth.senhaProvisoria.mockReturnValue(true);
+      expect(run(rootRedirect)).toBe('/alterar-senha');
+    });
+
+    it('logado — raiz vai direto à home do papel, sem passar pelo login', () => {
+      auth.isLoggedIn.mockReturnValue(true);
+      auth.senhaProvisoria.mockReturnValue(false);
+      auth.role.mockReturnValue('administrador');
+      expect(run(rootRedirect)).toBe('/admin');
+      expect(router.navigate).not.toHaveBeenCalled();
+    });
+  });
 
   describe('authGuard', () => {
     it('deslogado — redireciona para /login e nega', () => {

@@ -1,5 +1,5 @@
 import { Routes } from '@angular/router';
-import { authGuard, roleGuard, matchByRole, masterGuard, featureFlagGuard } from './core/guards/auth.guard';
+import { authGuard, roleGuard, matchByRole, masterGuard, featureFlagGuard, rootRedirect } from './core/guards/auth.guard';
 
 export const routes: Routes = [
   {
@@ -7,9 +7,9 @@ export const routes: Routes = [
     loadComponent: () => import('./layout/auth-layout.component').then(m => m.AuthLayoutComponent),
     children: [
       // A raiz cai aqui (path '' casa antes do layout autenticado): sem este redirect ela
-      // renderizaria o layout com o outlet VAZIO. Logado, o próprio LoginComponent segue
-      // para a home do papel.
-      { path: '', pathMatch: 'full', redirectTo: 'login' },
+      // renderizaria o layout com o outlet VAZIO. A função decide o destino no roteador,
+      // sem piscar o login para quem já está logado.
+      { path: '', pathMatch: 'full', redirectTo: rootRedirect },
       { path: 'login', title: 'Login | SIGMA', loadComponent: () => import('./pages/login/login.component').then(m => m.LoginComponent) },
       { path: 'forgot-password', title: 'Esqueci a Senha | SIGMA', loadComponent: () => import('./pages/login/forgot-password.component').then(m => m.ForgotPasswordComponent) },
       { path: 'reset-password', title: 'Redefinir Senha | SIGMA', loadComponent: () => import('./pages/login/reset-password.component').then(m => m.ResetPasswordComponent) },

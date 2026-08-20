@@ -4,6 +4,18 @@ import { AuthService } from '../services/auth.service';
 import { FeatureFlagService, FeatureFlag } from '../services/feature-flags.service';
 import { homeRouteForRole } from '../helpers/auth.helpers';
 
+/**
+ * Destino da URL raiz, decidido no ROTEADOR (redirectTo funcional) — antes de qualquer
+ * componente renderizar, para a tela de login não piscar para quem já está logado:
+ * deslogado vai ao login; senha provisória, à troca; logado, à home do papel.
+ */
+export const rootRedirect = () => {
+  const auth = inject(AuthService);
+  if (!auth.isLoggedIn()) return '/login';
+  if (auth.senhaProvisoria()) return '/alterar-senha';
+  return homeRouteForRole(auth.role());
+};
+
 /** Garante apenas que o usuário está logado. Bloqueia acesso ao app se senha for provisória. */
 export const authGuard: CanActivateFn = () => {
   const auth = inject(AuthService);
