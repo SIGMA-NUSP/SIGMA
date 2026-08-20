@@ -74,9 +74,9 @@ public class AjudaChatService {
     private static final String MSG_INDISPONIVEL =
             "O assistente de ajuda está indisponível no momento. Tente novamente em instantes.";
 
-    /** Guard-rails do system prompt (plano §3.4); o manual da página é anexado abaixo deles. */
+    /** Guard-rails do system prompt; o manual da página é anexado abaixo deles. */
     private static final String INSTRUCOES_SISTEMA = """
-            Você é o assistente de ajuda do SIGMA — Sistema Integrado de Gestão, Manutenção e Apoio, \
+            Você é o assistente de ajuda do SIGMA — Sistema de Gestão e Monitoramento de Atividades, \
             usado pela equipe de operação de áudio do Senado Federal. Sua única função é ajudar o \
             usuário a USAR o sistema, com base no manual da página fornecido ao final.
 

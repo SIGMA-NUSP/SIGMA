@@ -10,6 +10,7 @@ import { FOTO_ANONIMA, fotoErrorFallback, resolverFotoUrl } from '../core/helper
       <div class="site-header__inner">
         <div class="logo-container">
           <img class="site-logo" src="assets/imgs/header-senado.png" alt="Senado Federal">
+          <span class="site-title">SIGMA<span class="site-title__desc"> - Sistema de Gestão e Monitoramento de Atividades</span></span>
         </div>
         @if (auth.isLoggedIn()) {
           <div class="site-header__right">
@@ -34,7 +35,20 @@ import { FOTO_ANONIMA, fotoErrorFallback, resolverFotoUrl } from '../core/helper
       height: 47px;
       padding: 0 24px;
     }
-    .site-logo { width: 180px; height: 45px; }
+    .logo-container {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+    }
+    .site-logo { width: 180px; height: 45px; flex-shrink: 0; }
+    .site-title {
+      color: #fff;
+      font-size: 0.95rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .site-title__desc { font-weight: 400; }
     .site-header__right {
       display: flex;
       align-items: center;
@@ -63,9 +77,13 @@ import { FOTO_ANONIMA, fotoErrorFallback, resolverFotoUrl } from '../core/helper
       flex-shrink: 0;
       &:hover { background: #991b1b; }
     }
+    @media (max-width: 768px) {
+      .site-title__desc { display: none; }
+    }
     @media (max-width: 480px) {
       .site-header__inner { padding: 0 10px; }
       .site-logo { width: 140px; height: 35px; }
+      .site-title { font-size: 0.85rem; }
       .site-header__right { gap: 8px; }
       .user-greeting { max-width: 90px; font-size: .8rem; }
       .user-avatar { width: 28px; height: 28px; }

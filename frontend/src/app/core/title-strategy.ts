@@ -5,7 +5,7 @@ import { EnvService } from './services/env.service';
 
 /**
  * Prefixa o título da aba com [LABEL] quando o backend reporta um rótulo de
- * ambiente (ex: "[HOMOLOG] Home | Senado NUSP"). Em produção o rótulo vem
+ * ambiente (ex: "[HOMOLOG] Home | SIGMA"). Em produção o rótulo vem
  * vazio e o título original passa intacto.
  */
 @Injectable({ providedIn: 'root' })
@@ -14,7 +14,7 @@ export class PrefixedTitleStrategy extends TitleStrategy {
   private env = inject(EnvService);
 
   override updateTitle(snapshot: RouterStateSnapshot): void {
-    const routeTitle = this.buildTitle(snapshot) ?? 'Senado NUSP';
+    const routeTitle = this.buildTitle(snapshot) ?? 'SIGMA';
     const label = this.env.label();
     this.title.setTitle(label ? `[${label.toUpperCase()}] ${routeTitle}` : routeTitle);
   }

@@ -110,7 +110,7 @@ import { ApiService } from '../../core/services/api.service';
     .login-wrapper {
       display: grid;
       place-items: center;
-      min-height: 100vh;
+      min-height: calc(100vh - 86px); /* desconta header (54px) + footer fixo (32px) */
       padding: 16px;
     }
     .login-card {
