@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { ApiService } from './api.service';
 import { LookupService } from './lookup.service';
 
@@ -7,6 +7,8 @@ import { LookupService } from './lookup.service';
  * LookupService: 5 loaders + loadAll. Cada loader chama ApiService.get num
  * endpoint fixo e muta o SIGNAL certo com `res.data || []`. ApiService mockado
  * com `of({data:[...]})`; assertamos endpoint + signal, nunca o valor do mock em si.
+ * Canal de erro POR RECURSO: o loader zera a mensagem ao iniciar e a seta na falha,
+ * sem tocar no dado (cache anterior segue servindo); recarregar é rechamar o loader.
  */
 describe('LookupService', () => {
   let svc: LookupService;
@@ -75,5 +77,49 @@ describe('LookupService', () => {
       '/api/forms/lookup/operadores',
       '/api/forms/lookup/comissoes',
     ]);
+  });
+
+  describe('canal de erro por recurso', () => {
+    it('falha de carga → mensagem no canal do recurso, sem tocar no cache anterior', () => {
+      const dados = [{ id: 1, nome: 'Plenário' }];
+      get.mockReturnValueOnce(of({ data: dados }));
+      svc.loadSalas();
+      get.mockReturnValueOnce(throwError(() => new Error('500')));
+      svc.loadSalas();
+      expect(svc.erroSalas()).toBe('Não foi possível carregar a lista.');
+      expect(svc.salas()).toEqual(dados);
+    });
+
+    it('o canal é POR RECURSO: falha em operadores não suja o de salas', () => {
+      get.mockReturnValueOnce(of({ data: [] }));
+      svc.loadSalas();
+      get.mockReturnValueOnce(throwError(() => new Error('500')));
+      svc.loadOperadores();
+      expect(svc.erroSalas()).toBe('');
+      expect(svc.erroOperadores()).toBe('Não foi possível carregar a lista.');
+    });
+
+    it('recarga com sucesso limpa o erro e popula o signal', () => {
+      get.mockReturnValueOnce(throwError(() => new Error('500')));
+      svc.loadComissoes();
+      expect(svc.erroComissoes()).not.toBe('');
+      const dados = [{ id: 3, nome: 'CCJ' }];
+      get.mockReturnValueOnce(of({ data: dados }));
+      svc.loadComissoes();
+      expect(svc.erroComissoes()).toBe('');
+      expect(svc.comissoes()).toEqual(dados);
+    });
+
+    it('loadSalasOperador falho liga o MESMO canal de salas (as duas rotas alimentam o mesmo select)', () => {
+      get.mockReturnValue(throwError(() => new Error('500')));
+      svc.loadSalasOperador();
+      expect(svc.erroSalas()).toBe('Não foi possível carregar a lista.');
+    });
+
+    it('loadOperadoresPlenario falho liga o canal próprio', () => {
+      get.mockReturnValue(throwError(() => new Error('500')));
+      svc.loadOperadoresPlenario();
+      expect(svc.erroOperadoresPlenario()).toBe('Não foi possível carregar a lista.');
+    });
   });
 });

@@ -44,7 +44,7 @@ describe('AnormalidadeFormComponent', () => {
         { provide: ToastService, useValue: { success: toastSuccess, error: toastError } },
         { provide: Router, useValue: { navigate: routerNavigate } },
         { provide: ActivatedRoute, useValue: routeMock },
-        { provide: LookupService, useValue: { salas: salasSignal, loadAll } },
+        { provide: LookupService, useValue: { salas: salasSignal, erroSalas: signal(''), loadSalas: vi.fn(), loadAll } },
       ],
     }).compileComponents();
   });

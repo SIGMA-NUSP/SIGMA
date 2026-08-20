@@ -4,13 +4,14 @@ import { Router, RouterLink, ActivatedRoute } from '@angular/router';
 import { ApiService } from '../../core/services/api.service';
 import { LookupService } from '../../core/services/lookup.service';
 import { ToastService } from '../../shared/components/toast.component';
+import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
 import { SALA_DEMAIS_SALAS_ID, focusFirst } from '../../core/helpers/form.helpers';
 import { httpErrorMsg } from '../../core/helpers/http.helpers';
 
 @Component({
   selector: 'app-anormalidade-form',
   standalone: true,
-  imports: [FormsModule, RouterLink],
+  imports: [FormsModule, RouterLink, ErroCargaComponent],
   template: `
     <div class="card-custom" style="max-width:850px; margin:0 auto">
       <h1>Registro de Anormalidade</h1>
@@ -39,6 +40,9 @@ import { httpErrorMsg } from '../../core/helpers/http.helpers';
                   <option [value]="s.id">{{ s.nome }}</option>
                 }
               </select>
+              @if (lookup.erroSalas()) {
+                <app-erro-carga [mensagem]="lookup.erroSalas()" (tentarNovamente)="lookup.loadSalas()" />
+              }
             </div>
             <div class="form-row">
               <label>Nome do evento</label>

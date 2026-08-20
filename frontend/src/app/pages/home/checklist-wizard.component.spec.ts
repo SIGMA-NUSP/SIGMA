@@ -35,6 +35,7 @@ describe('ChecklistWizardComponent', () => {
   let loadOperadoresPlenario: ReturnType<typeof vi.fn>;
   let userSignal: WritableSignal<any>;
   let salasSignal: WritableSignal<LookupItem[]>;
+  let erroSalasSignal: WritableSignal<string>;
   let operadoresPlenarioSignal: WritableSignal<LookupItem[]>;
   let routeMock: any;
 
@@ -50,6 +51,7 @@ describe('ChecklistWizardComponent', () => {
     loadOperadoresPlenario = vi.fn();
     userSignal = signal<any>({ id: '9' });
     salasSignal = signal<LookupItem[]>([]);
+    erroSalasSignal = signal('');
     operadoresPlenarioSignal = signal<LookupItem[]>([]);
     routeMock = { queryParams: of({}) };
 
@@ -66,6 +68,8 @@ describe('ChecklistWizardComponent', () => {
           useValue: {
             salas: salasSignal,
             operadoresPlenario: operadoresPlenarioSignal,
+            erroSalas: erroSalasSignal,
+            erroOperadoresPlenario: signal(''),
             loadSalasOperador,
             loadOperadoresPlenario,
           },

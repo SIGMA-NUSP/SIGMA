@@ -60,7 +60,7 @@ describe('AdminEscalaComponent', () => {
         { provide: ToastService, useValue: { success: toastSuccess, error: toastError } },
         {
           provide: LookupService,
-          useValue: { salas: salasSignal, operadores: operadoresSignal, loadSalas, loadOperadores },
+          useValue: { salas: salasSignal, operadores: operadoresSignal, erroSalas: signal(''), erroOperadores: signal(''), loadSalas, loadOperadores },
         },
       ],
     }).compileComponents(); // com timers reais — só depois falsificamos

@@ -34,6 +34,7 @@ describe('OperacaoFormComponent', () => {
   let loadOperadoresPlenario: ReturnType<typeof vi.fn>;
   let userSignal: WritableSignal<any>;
   let salasSignal: WritableSignal<LookupItem[]>;
+  let erroSalasSignal: WritableSignal<string>;
   let comissoesSignal: WritableSignal<LookupItem[]>;
   let operadoresPlenarioSignal: WritableSignal<LookupItem[]>;
   let routeMock: any;
@@ -50,6 +51,7 @@ describe('OperacaoFormComponent', () => {
     loadOperadoresPlenario = vi.fn();
     userSignal = signal<any>({ id: '9' });
     salasSignal = signal<LookupItem[]>([]);
+    erroSalasSignal = signal('');
     comissoesSignal = signal<LookupItem[]>([]);
     operadoresPlenarioSignal = signal<LookupItem[]>([]);
     routeMock = { queryParams: of({}), snapshot: { routeConfig: { path: 'operacao' } } };
@@ -68,6 +70,9 @@ describe('OperacaoFormComponent', () => {
             salas: salasSignal,
             comissoes: comissoesSignal,
             operadoresPlenario: operadoresPlenarioSignal,
+            erroSalas: erroSalasSignal,
+            erroComissoes: signal(''),
+            erroOperadoresPlenario: signal(''),
             loadSalasOperador,
             loadOperadores: vi.fn(),
             loadComissoes: vi.fn(),

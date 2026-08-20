@@ -3,13 +3,14 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { ApiService } from '../../core/services/api.service';
 import { LookupService } from '../../core/services/lookup.service';
+import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
 
 interface EditItem { id?: number | null; nome: string; ativo: boolean; tipo_widget?: string; item_tipo_id?: number | null; _highlight?: boolean; }
 
 @Component({
   selector: 'app-admin-form-edit',
   standalone: true,
-  imports: [FormsModule, RouterLink],
+  imports: [FormsModule, RouterLink, ErroCargaComponent],
   template: `
     <h1>Edição de Formulários</h1>
     <a routerLink="/admin/operacao-audio" class="back-link">← Voltar</a>
@@ -38,6 +39,9 @@ interface EditItem { id?: number | null; nome: string; ativo: boolean; tipo_widg
               <option value="">Selecione um local...</option>
               @for (s of activeSalas(); track s.id) { <option [value]="s.id">{{ s.nome }}</option> }
             </select>
+            @if (lookup.erroSalas()) {
+              <app-erro-carga [mensagem]="lookup.erroSalas()" (tentarNovamente)="lookup.loadSalas()" />
+            }
           </div>
           @if (selectedSalaId) {
             <p class="info-msg">Configure quais itens de verificação aparecerão no formulário deste local. Você pode ativar/desativar itens, reordenar e adicionar novos.</p>

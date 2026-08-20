@@ -5,6 +5,7 @@ import { ApiService } from '../../core/services/api.service';
 import { AuthService } from '../../core/services/auth.service';
 import { LookupService } from '../../core/services/lookup.service';
 import { ToastService } from '../../shared/components/toast.component';
+import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
 import { FmtDatePipe } from '../../shared/pipes/fmt-date.pipe';
 import { MultiSelectDropdownComponent, MultiSelectOption } from '../../shared/components/multi-select-dropdown.component';
 import { extractDate, hhmmss, toISODate } from '../../core/helpers/date.helpers';
@@ -19,7 +20,7 @@ interface EditItem {
 @Component({
   selector: 'app-checklist-wizard',
   standalone: true,
-  imports: [FormsModule, RouterLink, FmtDatePipe, MultiSelectDropdownComponent],
+  imports: [FormsModule, RouterLink, FmtDatePipe, MultiSelectDropdownComponent, ErroCargaComponent],
   template: `
     <div class="card-custom" style="max-width:700px; margin:0 auto">
 
@@ -59,6 +60,9 @@ interface EditItem {
                     <option [value]="s.id">{{ s.nome }}</option>
                   }
                 </select>
+                @if (lookup.erroSalas()) {
+                  <app-erro-carga [mensagem]="lookup.erroSalas()" (tentarNovamente)="lookup.loadSalasOperador()" />
+                }
               }
             </div>
           </div>
@@ -91,6 +95,9 @@ interface EditItem {
                   placeholder="Selecione operadores..."
                   (selectionChange)="selectedPlenario = $event" />
               </div>
+              @if (lookup.erroOperadoresPlenario()) {
+                <app-erro-carga [mensagem]="lookup.erroOperadoresPlenario()" (tentarNovamente)="lookup.loadOperadoresPlenario()" />
+              }
               @if (!readOnly() && !usuarioNosOperadores()) {
                 <p style="color:var(--color-red); font-size:.85rem; margin-top:6px">Você deve estar em pelo menos um dos grupos (Cabine ou Plenário).</p>
               }
@@ -194,6 +201,9 @@ interface EditItem {
                   <option [value]="s.id">{{ s.nome }}</option>
                 }
               </select>
+              @if (lookup.erroSalas()) {
+                <app-erro-carga [mensagem]="lookup.erroSalas()" (tentarNovamente)="lookup.loadSalasOperador()" />
+              }
             </div>
           </div>
           <div style="display:flex; justify-content:space-between">

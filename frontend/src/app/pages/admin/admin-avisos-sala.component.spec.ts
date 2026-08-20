@@ -67,6 +67,7 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
   let respostaSalasOcupadas: () => Observable<any>;
   /** Cache de salas do lookup (o multi-select) — signal trocável por teste. */
   let salasLookup: ReturnType<typeof signal<any[]>>;
+  let erroSalasLookup: ReturnType<typeof signal<string>>;
 
   const ok = (...linhas: unknown[]) => () => of({ data: linhas, meta: { ...META, total: linhas.length } });
   const vazio = () => () => of({ data: [], meta: { ...META, total: 0, pages: 0 } });
@@ -86,6 +87,7 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
     toastSuccess = vi.fn();
     toastError = vi.fn();
     salasLookup = signal<any[]>([]);
+    erroSalasLookup = signal<string>('');
 
     await TestBed.configureTestingModule({
       imports: [AdminAvisosSalaComponent],
@@ -93,7 +95,7 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
         provideRouter([]),   // o template usa RouterLink ("← Voltar") — ver divergência no cabeçalho
         { provide: ApiService, useValue: { getList: apiGetList, get: apiGet, post: apiPost, patch: apiPatch } },
         // Cache de salas VAZIO por padrão: é o estado da carga fria da tela (e o que dispara `loadSalas()`).
-        { provide: LookupService, useValue: { salas: salasLookup, loadSalas } },
+        { provide: LookupService, useValue: { salas: salasLookup, erroSalas: erroSalasLookup, loadSalas } },
         { provide: ToastService, useValue: { success: toastSuccess, error: toastError } },
       ],
     }).compileComponents();
@@ -582,6 +584,29 @@ describe('AdminAvisosSalaComponent — canal de erro da listagem', () => {
       expect(toastSuccess).toHaveBeenCalledWith('Aviso desativado.');
       expect(chamadas(EP_LISTA)).toBe(2);           // ativas e inativas
       expect(chamadasContador()).toBe(1);
+    });
+  });
+
+  describe('canal de erro do lookup de locais (multi-select do cadastro)', () => {
+    it('falha do lookup de salas → caixa própria com a mensagem, listagem e formulário de pé', async () => {
+      erroSalasLookup.set('Não foi possível carregar a lista.');
+      const fixture = await renderizar();
+
+      const caixas = fixture.debugElement.queryAll(By.directive(ErroCargaComponent));
+      expect(caixas).toHaveLength(1);
+      expect((caixas[0].nativeElement as HTMLElement).textContent).toContain('Não foi possível carregar a lista.');
+      expect(textoDaTabela(fixture)).toContain('Ana Prado'); // a falha do lookup não derruba a listagem
+    });
+
+    it('"Tentar novamente" da caixa do lookup rechama loadSalas', async () => {
+      erroSalasLookup.set('Não foi possível carregar a lista.');
+      const fixture = await renderizar();
+      const antes = loadSalas.mock.calls.length;
+
+      clicarRetry(fixture);
+      await estabilizar(fixture);
+
+      expect(loadSalas.mock.calls.length).toBe(antes + 1);
     });
   });
 });

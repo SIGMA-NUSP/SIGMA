@@ -5,6 +5,7 @@ import { ApiService } from '../../core/services/api.service';
 import { AuthService } from '../../core/services/auth.service';
 import { LookupService } from '../../core/services/lookup.service';
 import { ToastService } from '../../shared/components/toast.component';
+import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
 import { MultiSelectDropdownComponent, MultiSelectOption } from '../../shared/components/multi-select-dropdown.component';
 import { extractDate, extractTime, toISODate } from '../../core/helpers/date.helpers';
 import { SALA_DEMAIS_SALAS_ID, focusFirst } from '../../core/helpers/form.helpers';
@@ -15,7 +16,7 @@ type Situacao = 'inicial' | 'sem_sessao' | 'sem_entrada' | 'uma_entrada' | 'duas
 @Component({
   selector: 'app-operacao-form',
   standalone: true,
-  imports: [FormsModule, RouterLink, MultiSelectDropdownComponent],
+  imports: [FormsModule, RouterLink, MultiSelectDropdownComponent, ErroCargaComponent],
   template: `
     <div class="card-custom" style="max-width:800px; margin:0 auto">
 
@@ -61,6 +62,9 @@ type Situacao = 'inicial' | 'sem_sessao' | 'sem_entrada' | 'uma_entrada' | 'duas
                   <option [value]="s.id">{{ s.nome }}</option>
                 }
               </select>
+              @if (lookup.erroSalas()) {
+                <app-erro-carga [mensagem]="lookup.erroSalas()" (tentarNovamente)="lookup.loadSalasOperador()" />
+              }
             }
           </div>
 
@@ -85,6 +89,9 @@ type Situacao = 'inicial' | 'sem_sessao' | 'sem_entrada' | 'uma_entrada' | 'duas
                 [lockedIds]="lockedOperadorIds"
                 placeholder="Selecione operadores..."
                 (selectionChange)="selectedOperadorIds = $event" />
+              @if (lookup.erroOperadoresPlenario()) {
+                <app-erro-carga [mensagem]="lookup.erroOperadoresPlenario()" (tentarNovamente)="lookup.loadOperadoresPlenario()" />
+              }
             </div>
           }
           @if (isMultiOperador && editMode()) {
@@ -99,6 +106,9 @@ type Situacao = 'inicial' | 'sem_sessao' | 'sem_entrada' | 'uma_entrada' | 'duas
                   [lockedIds]="lockedOperadorIds"
                   placeholder="Selecione operadores..."
                   (selectionChange)="selectedOperadorIds = $event" />
+                @if (lookup.erroOperadoresPlenario()) {
+                  <app-erro-carga [mensagem]="lookup.erroOperadoresPlenario()" (tentarNovamente)="lookup.loadOperadoresPlenario()" />
+                }
               }
             </div>
           }
@@ -116,6 +126,9 @@ type Situacao = 'inicial' | 'sem_sessao' | 'sem_entrada' | 'uma_entrada' | 'duas
                     <option [value]="c.id">{{ c.nome }}</option>
                   }
                 </select>
+                @if (lookup.erroComissoes()) {
+                  <app-erro-carga [mensagem]="lookup.erroComissoes()" (tentarNovamente)="lookup.loadComissoes()" />
+                }
               }
             </div>
           }

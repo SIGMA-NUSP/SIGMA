@@ -50,6 +50,9 @@ import { ToastService } from '../../shared/components/toast.component';
           [lockedIds]="lockedSalaIds()"
           placeholder="Selecione um ou mais locais..."
           (selectionChange)="selectedSalaIds = $event" />
+        @if (lookup.erroSalas()) {
+          <app-erro-carga [mensagem]="lookup.erroSalas()" (tentarNovamente)="lookup.loadSalas()" />
+        }
       </div>
 
       @if (erroSalasOcupadas()) {

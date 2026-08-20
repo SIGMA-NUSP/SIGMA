@@ -5,6 +5,7 @@ import { ApiService } from '../../core/services/api.service';
 import { LookupService, LookupItem } from '../../core/services/lookup.service';
 import { FmtDatePipe } from '../../shared/pipes/fmt-date.pipe';
 import { ToastService } from '../../shared/components/toast.component';
+import { ErroCargaComponent } from '../../shared/components/erro-carga.component';
 import { PaginationComponent } from '../../shared/components/pagination.component';
 import { PaginationMeta } from '../../core/models/user.model';
 import { httpErrorMsg } from '../../core/helpers/http.helpers';
@@ -13,7 +14,7 @@ import { asArray } from '../../core/helpers/format.helpers';
 @Component({
   selector: 'app-admin-escala',
   standalone: true,
-  imports: [FormsModule, RouterLink, FmtDatePipe, PaginationComponent],
+  imports: [FormsModule, RouterLink, FmtDatePipe, PaginationComponent, ErroCargaComponent],
   template: `
     <h1>Escala Semanal</h1>
     <a routerLink="/admin/gestao-pessoas" class="back-link">&larr; Voltar</a>
@@ -129,6 +130,12 @@ import { asArray } from '../../core/helpers/format.helpers';
       </div>
 
       <div id="escala-salas-editor" class="salas-editor" tabindex="-1">
+        @if (lookup.erroSalas()) {
+          <app-erro-carga [mensagem]="lookup.erroSalas()" (tentarNovamente)="lookup.loadSalas()" />
+        }
+        @if (lookup.erroOperadores()) {
+          <app-erro-carga [mensagem]="lookup.erroOperadores()" (tentarNovamente)="lookup.loadOperadores()" />
+        }
         @if (salaAtual(); as sala) {
           <div class="plenario-section">
             <div class="plenario-header">
@@ -294,7 +301,7 @@ import { asArray } from '../../core/helpers/format.helpers';
 })
 export class AdminEscalaComponent implements OnInit {
   private api = inject(ApiService);
-  private lookup = inject(LookupService);
+  lookup = inject(LookupService);
   private toast = inject(ToastService);
 
   // Formulário
