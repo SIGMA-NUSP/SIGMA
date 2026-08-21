@@ -23,6 +23,7 @@ import static br.leg.senado.nusp.controller.ControllerUtils.reqData;
  * Endpoints da Escala Semanal.
  * Admin: CRUD completo em /api/admin/escala/**
  * Operador: consulta da própria escala em /api/escala/minha
+ * Comum (qualquer autenticado): operadores escalados por sala em /api/escala/operadores
  */
 @RestController
 @RequiredArgsConstructor
@@ -103,12 +104,13 @@ public class EscalaSemanalController {
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("ok", true, "data", result));
     }
 
-    // ══ Admin — Operadores escalados hoje (por sala) ═════════════
+    // ══ Comum — Operadores escalados (por sala) ══════════════════
 
-    @AdminOnly
-    @GetMapping("/api/admin/escala/operadores-hoje")
-    public ResponseEntity<?> operadoresHoje() {
-        return ResponseEntity.ok(Map.of("ok", true, "data", escalaService.operadoresEscaladosHoje()));
+    /** Operadores escalados por sala na data (default: hoje), com a marca tem_escala. */
+    @GetMapping("/api/escala/operadores")
+    public ResponseEntity<?> operadoresEscalados(@RequestParam(required = false) String data) {
+        LocalDate dataAlvo = data != null && !data.isBlank() ? LocalDate.parse(data) : LocalDate.now();
+        return ResponseEntity.ok(Map.of("ok", true, "data", escalaService.operadoresEscalados(dataAlvo)));
     }
 
     // ══ Operador — Listar escalas (somente leitura) ══════════════

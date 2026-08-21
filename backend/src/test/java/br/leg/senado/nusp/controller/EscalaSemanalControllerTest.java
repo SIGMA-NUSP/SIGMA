@@ -26,6 +26,7 @@ import br.leg.senado.nusp.service.EscalaSemanalService;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -62,12 +63,14 @@ class EscalaSemanalControllerTest {
 
     private String admin;
     private String operador;
+    private String tecnico;
 
     @BeforeEach
     void setUp() {
         TokenFactory tokens = new TokenFactory(jwtTokenProvider);
         admin = "Bearer " + tokens.valido(TokenFactory.ADMIN);
         operador = "Bearer " + tokens.valido(TokenFactory.OPERADOR);
+        tecnico = "Bearer " + tokens.valido(TokenFactory.TECNICO);
         // Sessão viva; o default do Mockito (0) significaria sessão inválida → 401.
         when(authSessionRepository.touchSession(anyLong(), anyString(), anyInt())).thenReturn(1);
     }
@@ -151,6 +154,34 @@ class EscalaSemanalControllerTest {
                     .andExpect(jsonPath("$.ok").value(true))
                     .andExpect(jsonPath("$.data[0].sala").value("Plenário 1"))
                     .andExpect(jsonPath("$.plenario_principal").value(true));
+        }
+
+        @Test
+        @DisplayName("GET /api/escala/operadores (rota comum) — técnico: repassa a data ao service e envelopa {ok,data}")
+        void operadoresEscalados_tecnico_repassaData() throws Exception {
+            when(escalaService.operadoresEscalados(LocalDate.parse("2026-08-18")))
+                    .thenReturn(Map.of("tem_escala", true, "salas", Map.of(2, List.of("Ana"))));
+
+            mockMvc.perform(Requests.get("/api/escala/operadores?data=2026-08-18").header("Authorization", tecnico))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.ok").value(true))
+                    .andExpect(jsonPath("$.data.tem_escala").value(true))
+                    .andExpect(jsonPath("$.data.salas['2'][0]").value("Ana"));
+        }
+
+        @Test
+        @DisplayName("GET /api/escala/operadores sem data — usa hoje")
+        void operadoresEscalados_semData_usaHoje() throws Exception {
+            LocalDate antes = LocalDate.now();
+            when(escalaService.operadoresEscalados(any(LocalDate.class)))
+                    .thenReturn(Map.of("tem_escala", false, "salas", Map.of()));
+
+            mockMvc.perform(Requests.get("/api/escala/operadores").header("Authorization", operador))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.tem_escala").value(false));
+
+            // intervalo em vez de igualdade: vale mesmo se o teste cruzar a meia-noite
+            verify(escalaService).operadoresEscalados(argThat(d -> !d.isBefore(antes) && !d.isAfter(LocalDate.now())));
         }
     }
 

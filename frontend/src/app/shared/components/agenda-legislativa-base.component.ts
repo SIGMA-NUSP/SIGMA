@@ -47,6 +47,9 @@ interface SalaAgenda {
 
     <div class="info-data">
       <div class="data-atual">{{ rotuloDataSelecionada() }}</div>
+      @if (exibirOperadores && !temEscala()) {
+        <div class="sem-escala">Sem escala cadastrada.</div>
+      }
       @if (ehHoje()) {
         <div class="status-bar" [class.conectado]="sseConectado()" [class.desconectado]="!sseConectado()">
           <span class="status-dot"></span>
@@ -131,6 +134,7 @@ interface SalaAgenda {
       font-size:1rem; font-weight:600; margin-bottom:8px;
       text-transform:capitalize;
     }
+    .sem-escala { font-size:.85rem; color:var(--muted); margin-bottom:8px; }
     .calendario-wrapper {
       display:flex; justify-content:center; margin-bottom:24px;
     }
@@ -218,6 +222,7 @@ export class AgendaLegislativaBaseComponent implements OnInit, OnDestroy {
   reunioesComissoes = signal<Reuniao[]>([]);
   reunioesPlenario = signal<Reuniao[]>([]);
   operadoresPorSala = signal<Record<string, string[]>>({});
+  temEscala = signal(true);
   sseConectado = signal(false);
   ultimaAtualizacao = signal('');
 
@@ -239,11 +244,6 @@ export class AgendaLegislativaBaseComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.carregarDadosDaData(this.dataSelecionada());
-    if (this.exibirOperadores) {
-      this.api.get<any>('/api/admin/escala/operadores-hoje').subscribe({
-        next: (res: any) => this.operadoresPorSala.set(res.data || {}),
-      });
-    }
     this.conectarSSE(null, true);
     this.conectarSSE(null, false);
   }
@@ -266,12 +266,26 @@ export class AgendaLegislativaBaseComponent implements OnInit, OnDestroy {
 
   private carregarDadosDaData(d: Date): void {
     const param = toISODate(d);
+    // Descarta resposta que chegar depois de o usuário já ter trocado de data.
+    const aindaNaData = () => toISODate(this.dataSelecionada()) === param;
     this.api.get<any>(`/api/agenda/plenario?data=${param}`).subscribe({
-      next: (res: any) => this.reunioesPlenario.set(res.data || []),
+      next: (res: any) => { if (aindaNaData()) this.reunioesPlenario.set(res.data || []); },
     });
     this.api.get<any>(`/api/agenda/hoje?data=${param}`).subscribe({
-      next: (res: any) => this.reunioesComissoes.set(res.data || []),
+      next: (res: any) => { if (aindaNaData()) this.reunioesComissoes.set(res.data || []); },
     });
+    if (this.exibirOperadores) {
+      // Zera antes de buscar: em falha, nada de nomes nem aviso da data anterior.
+      this.operadoresPorSala.set({});
+      this.temEscala.set(true);
+      this.api.get<any>(`/api/escala/operadores?data=${param}`).subscribe({
+        next: (res: any) => {
+          if (!aindaNaData()) return;
+          this.operadoresPorSala.set(res.data?.salas || {});
+          this.temEscala.set(res.data?.tem_escala !== false);
+        },
+      });
+    }
   }
 
   getOperadoresSala(salaId: number): string {

@@ -455,17 +455,19 @@ public class EscalaSemanalService {
         return r;
     }
 
-    // ══ Operadores escalados hoje (por sala) ══════════════════
+    // ══ Operadores escalados (por sala) ═══════════════════════
 
     /**
-     * Retorna mapa sala_id → lista de nome_exibicao dos operadores escalados hoje.
+     * Operadores escalados na data, agrupados por sala. Retorna
+     * {@code tem_escala} (se alguma escala vigente cobre a data — distingue
+     * "sem escala cadastrada" de "escala sem vínculos") e {@code salas}
+     * (mapa sala_id → lista de nome_exibicao).
      */
-    public Map<Integer, List<String>> operadoresEscaladosHoje() {
-        var hoje = LocalDate.now();
-        var escalas = escalaRepo.findVigentesPorData(hoje);
-        Map<Integer, List<String>> resultado = new LinkedHashMap<>();
+    public Map<String, Object> operadoresEscalados(LocalDate data) {
+        var escalas = escalaRepo.findVigentesPorData(data);
+        Map<Integer, List<String>> salas = new LinkedHashMap<>();
         // Mapa de operadores carregado no máx. 1× (PES_OPERADOR ~22 linhas), lazy no 1º vínculo,
-        // no lugar de findById por vínculo (Q18). Lazy p/ não somar 1 query quando não há vínculos.
+        // no lugar de findById por vínculo. Lazy p/ não somar 1 query quando não há vínculos.
         Map<String, Operador> operadores = null;
         for (var escala : escalas) {
             var vinculos = escalaOpRepo.findByEscalaId(escala.getId());
@@ -474,10 +476,13 @@ public class EscalaSemanalService {
                     operadores = operadorRepo.findAll().stream().collect(Collectors.toMap(o -> o.getId(), o -> o));
                 var op = operadores.get(v.getOperadorId());
                 if (op != null)
-                    resultado.computeIfAbsent(v.getSalaId(), k -> new ArrayList<>())
+                    salas.computeIfAbsent(v.getSalaId(), k -> new ArrayList<>())
                             .add(op.getNomeExibicao());
             }
         }
+        Map<String, Object> resultado = new LinkedHashMap<>();
+        resultado.put("tem_escala", !escalas.isEmpty());
+        resultado.put("salas", salas);
         return resultado;
     }
 

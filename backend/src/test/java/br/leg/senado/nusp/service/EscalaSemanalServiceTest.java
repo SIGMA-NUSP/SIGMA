@@ -46,8 +46,9 @@ import static org.mockito.Mockito.*;
  * anterior por asserção exata (sem vaga órfã e sem entrante o sorteio não
  * participa — determinístico); rodízio SEM escala anterior (distribuição
  * inicial aleatória) apenas por propriedades invariantes, nunca igualdade
- * exata. minhaEscalaHoje/operadoresEscaladosHoje usam o relógio real →
- * fixtures relativas a hoje, válidas em qualquer dia.
+ * exata. minhaEscalaHoje usa o relógio real → fixtures relativas a hoje,
+ * válidas em qualquer dia; operadoresEscalados recebe a data por parâmetro →
+ * fixtures de datas fixas.
  */
 @ExtendWith(MockitoExtension.class)
 class EscalaSemanalServiceTest {
@@ -492,8 +493,8 @@ class EscalaSemanalServiceTest {
     }
 
     @Nested
-    @DisplayName("minhaEscalaHoje / operadoresEscaladosHoje — SUT usa o relógio real, fixtures relativas a hoje")
-    class EscaladosHoje {
+    @DisplayName("minhaEscalaHoje / operadoresEscalados")
+    class Escalados {
 
         @Test
         @DisplayName("minhaEscalaHoje — devolve as salas do operador na escala vigente (hoje-1 a hoje+1)")
@@ -528,9 +529,10 @@ class EscalaSemanalServiceTest {
         }
 
         @Test
-        @DisplayName("operadoresEscaladosHoje — agrupa nome_exibicao por sala na escala vigente")
-        void operadoresEscaladosHoje_agrupaPorSala() {
-            stubEscalaVigenteHoje(31L);
+        @DisplayName("operadoresEscalados — agrupa nome_exibicao por sala na escala vigente da data pedida")
+        void operadoresEscalados_agrupaPorSala() {
+            var escala = escalaDe(31L, LocalDate.of(2026, 8, 17), LocalDate.of(2026, 8, 19), null);
+            when(escalaRepo.findVigentesPorData(LocalDate.of(2026, 8, 18))).thenReturn(List.of(escala));
             when(escalaOpRepo.findByEscalaId(31L)).thenReturn(List.of(
                     vinculo(31L, 2, "a", "M"),
                     vinculo(31L, 2, "b", "V"),
@@ -538,9 +540,22 @@ class EscalaSemanalServiceTest {
             when(operadorRepo.findAll()).thenReturn(List.of(
                     operador("a", "Ana", "M"), operador("b", "Beto", "V"), operador("c", "Caio", "M")));
 
-            var out = service.operadoresEscaladosHoje();
+            var out = service.operadoresEscalados(LocalDate.of(2026, 8, 18));
 
-            assertEquals(Map.of(2, List.of("Ana", "Beto"), 5, List.of("Caio")), out);
+            assertEquals(true, out.get("tem_escala"));
+            assertEquals(Map.of(2, List.of("Ana", "Beto"), 5, List.of("Caio")), out.get("salas"));
+        }
+
+        @Test
+        @DisplayName("operadoresEscalados — data sem escala vigente marca tem_escala=false e salas vazio, sem consultar vínculos")
+        void operadoresEscalados_dataSemEscala() {
+            when(escalaRepo.findVigentesPorData(LocalDate.of(2026, 8, 22))).thenReturn(List.of());
+
+            var out = service.operadoresEscalados(LocalDate.of(2026, 8, 22));
+
+            assertEquals(false, out.get("tem_escala"));
+            assertEquals(Map.of(), out.get("salas"));
+            verifyNoInteractions(escalaOpRepo, operadorRepo);
         }
     }
 
